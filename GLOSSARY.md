@@ -8,6 +8,10 @@ A hub that takes pharmacy events from a hospital's source system and delivers th
 The hospital information system that produces pharmacy events. It is simulated in this project.
 _Avoid_: Client, upstream, HIS (when used generically)
 
+**Visit**:
+One patient encounter at the hospital as reported by the source system, identified by the source system's own visit number.
+_Avoid_: Encounter (that is the SATUSEHAT record of a visit), admission, registration
+
 **Source event**:
 One fact reported by the source system about a visit, such as a prescription being written or a drug being dispensed.
 _Avoid_: Message, request, payload
@@ -17,14 +21,18 @@ A value the source system attaches to a source event so that resending the event
 _Avoid_: Request ID, dedup key
 
 **Duplicate ingest**:
-A source event arriving again with an idempotency key the hub has already accepted from the same source system.
+A source event arriving again with an idempotency key the hub has already accepted from the same source system, while that key is still retained.
 _Avoid_: Retry (that is the sender's act, not the hub's observation)
 
 ## Hub side
 
 **Case**:
-The hub's record of one visit: exactly one prescription with exactly one drug item, and its dispense. A visit with more than one drug item is unsupported and is not a case.
+The hub's record of one visit, opened by the first source event the hub accepts for that visit. It supports exactly one prescription with exactly one drug item, and its dispense. A prescription with more than one drug item is rejected, so its case can never complete.
 _Avoid_: Job, transaction, workflow, order
+
+**Waiting case**:
+A case whose next step cannot start because the source event it needs has not arrived. It stays visible, never silently lost.
+_Avoid_: Stuck case, pending case
 
 **Step**:
 One ordered submission to SATUSEHAT within a case: create visit, submit prescription, submit dispense, update visit.
