@@ -34,12 +34,20 @@ _Avoid_: Job, transaction, workflow, order
 A case whose next step cannot start because the source event it needs has not arrived. It stays visible, never silently lost.
 _Avoid_: Stuck case, pending case
 
+**Stalled case**:
+A waiting case that has waited longer than a set threshold. It is flagged for an operator's attention; being stalled changes nothing about the case itself.
+_Avoid_: Stuck case, expired case, timed-out case
+
+**Abandoned case**:
+A case an operator has deliberately ended without completing it, because it can no longer be completed. It is final. Only an operator abandons a case; time alone never does.
+_Avoid_: Cancelled case, closed case, expired case
+
 **Step**:
 One ordered submission to SATUSEHAT within a case: create visit, submit prescription, submit dispense, update visit.
 _Avoid_: Task, job, stage
 
 **Dead-lettered case**:
-A case whose step failed permanently. Its downstream steps are held and it waits for an operator to replay it.
+A case whose step failed permanently. Its downstream steps are held and it waits for an operator to replay or abandon it.
 _Avoid_: Failed case, poisoned case
 
 **Replay**:
@@ -51,7 +59,7 @@ The guarantee that each step causes exactly one record at SATUSEHAT, however man
 _Avoid_: Exactly-once
 
 **Mapping**:
-A stored correspondence between a local identifier and its national counterpart, such as a local drug code to a KFA code, or a patient to an IHS number.
+A stored correspondence, kept by the operator, between a source system's local code and its national counterpart, such as a local drug code to a KFA code, or a local location code to a SATUSEHAT location. Patients and practitioners are not mapped: their IHS numbers are looked up for each visit.
 _Avoid_: Lookup table, translation
 
 **Divergence**:
@@ -79,5 +87,5 @@ A KFA code level that names a drug by ingredient, strength, and form, without a 
 A KFA code level that names a specific marketed product. Required on a dispense.
 
 **Substitution**:
-A dispense whose product differs in strength from what was prescribed while keeping the same active ingredient, flagged as such on the dispense.
+A dispense whose actual product is neither the prescribed actual product nor one derived from the prescribed virtual product, but has exactly the same active ingredients, such as a different strength or a different brand. It is flagged as such on the dispense. A dispense with different active ingredients (a therapeutic substitution) is not supported.
 _Avoid_: Replacement, swap
