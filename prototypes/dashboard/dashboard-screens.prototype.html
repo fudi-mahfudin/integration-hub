@@ -1,0 +1,652 @@
+<!doctype html>
+<!--
+  PROTOTYPE, THROWAWAY. Ticket: "Dashboard screens and actions" (integration-hub #21).
+  VERDICT: variant B chosen, plus per-case selection + "Replay selected" on its dead-letter screen.
+  Plan: three structurally different variants (A/B/C) of the three dashboard screens
+  (Cases, Integration status, Dead-letter), switchable via ?variant=A|B|C and the bottom bar.
+  Assumption: no dashboard app exists yet, so this is a standalone file (sub-shape B), not Next.js.
+  All data is synthetic and in memory; replay/abandon/mapping actions hit stubs, never a hub.
+  Toggle "data sources" in the bottom bar to see which hub endpoint / PromQL each panel would read.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PROTOTYPE · Integration Hub dashboard</title>
+<style>
+  :root { --bg:#f6f7f9; --fg:#1d2330; --mut:#6b7385; --line:#dde1e8; --card:#fff;
+    --waiting:#b7791f; --active:#2b6cb0; --dead:#c53030; --done:#2f855a; --aband:#4a5568; --stall:#d69e2e; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, sans-serif; color:var(--fg); background:var(--bg); padding-bottom:70px; }
+  button { font:inherit; cursor:pointer; border:1px solid var(--line); background:#fff; border-radius:6px; padding:4px 10px; }
+  button.primary { background:var(--active); color:#fff; border-color:var(--active); }
+  button.danger { background:#fff; color:var(--dead); border-color:var(--dead); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  input, select, textarea { font:inherit; border:1px solid var(--line); border-radius:6px; padding:4px 8px; background:#fff; }
+  table { border-collapse:collapse; width:100%; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:12px; color:var(--mut); font-weight:600; text-transform:uppercase; letter-spacing:.03em; }
+  code, .mono { font-family:ui-monospace, Menlo, monospace; font-size:12.5px; }
+  .mut { color:var(--mut); } .small { font-size:12px; }
+  .badge { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; font-weight:600; color:#fff; white-space:nowrap; }
+  .s-waiting{background:var(--waiting)} .s-active{background:var(--active)} .s-dead_lettered{background:var(--dead)}
+  .s-completed{background:var(--done)} .s-abandoned{background:var(--aband)}
+  .stalled { background:#fefcbf; color:#744210; border:1px solid var(--stall); }
+  .cls-replayable { background:#ebf8ff; color:#2c5282; border:1px solid #90cdf4; }
+  .cls-source_data { background:#fff5f5; color:#9b2c2c; border:1px solid #feb2b2; }
+  .src { display:none; margin:4px 0; padding:3px 8px; border-left:3px solid #805ad5; background:#faf5ff; color:#553c9a; font:12px ui-monospace, Menlo, monospace; white-space:pre-wrap; }
+  body.showsrc .src { display:block; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .grow { flex:1; }
+  h2 { margin:0 0 10px; font-size:18px; } h3 { margin:14px 0 6px; font-size:14px; }
+  .warn { background:#fffaf0; border:1px solid #fbd38d; border-radius:6px; padding:8px 10px; }
+  .err { background:#fff5f5; border:1px solid #feb2b2; border-radius:6px; padding:8px 10px; }
+  .ok { color:var(--done); } .bad { color:var(--dead); } .amber { color:var(--waiting); }
+  .clickable { cursor:pointer; } .clickable:hover { background:#f0f4fa; }
+  .sel { background:#e6efff !important; }
+  /* switcher */
+  #switcher { position:fixed; bottom:14px; left:50%; transform:translateX(-50%); z-index:100;
+    background:#111; color:#fff; border-radius:999px; padding:6px 10px; display:flex; gap:10px; align-items:center;
+    box-shadow:0 6px 24px rgba(0,0,0,.35); font-size:13px; }
+  #switcher button { background:#333; color:#fff; border:none; border-radius:999px; padding:3px 10px; }
+  #switcher label { display:flex; gap:4px; align-items:center; color:#ccc; }
+  #toast { position:fixed; top:14px; right:14px; z-index:200; display:flex; flex-direction:column; gap:6px; }
+  #toast div { background:#111; color:#fff; padding:8px 12px; border-radius:6px; max-width:420px; box-shadow:0 4px 14px rgba(0,0,0,.3); }
+  .modal-back { position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:150; display:flex; align-items:center; justify-content:center; }
+  .modal { background:#fff; border-radius:10px; padding:18px; width:520px; max-width:92vw; }
+  /* ---------- Variant A ---------- */
+  .A-top { background:#1d2330; color:#fff; display:flex; gap:4px; padding:0 18px; align-items:stretch; }
+  .A-top .brand { padding:12px 16px 12px 0; font-weight:700; }
+  .A-top a { color:#cbd2e0; padding:12px 14px; text-decoration:none; cursor:pointer; border-bottom:3px solid transparent; }
+  .A-top a.on { color:#fff; border-bottom-color:#63b3ed; }
+  .A-main { padding:18px; }
+  .A-drawer { position:fixed; top:0; right:0; bottom:0; width:620px; max-width:96vw; background:#fff; border-left:1px solid var(--line);
+    box-shadow:-8px 0 24px rgba(0,0,0,.12); overflow:auto; padding:16px 18px 90px; z-index:50; }
+  .A-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; }
+  .chip { border-radius:999px; padding:2px 10px; }
+  .chip.on { background:#1d2330; color:#fff; border-color:#1d2330; }
+  /* ---------- Variant B ---------- */
+  .B-shell { display:grid; grid-template-columns:210px 1fr; min-height:100vh; }
+  .B-nav { background:#fff; border-right:1px solid var(--line); padding:14px 0; }
+  .B-nav .brand { padding:0 16px 12px; font-weight:700; }
+  .B-nav a { display:flex; justify-content:space-between; padding:8px 16px; cursor:pointer; color:var(--fg); text-decoration:none; }
+  .B-nav a.on { background:#edf2f7; font-weight:600; border-left:3px solid var(--active); }
+  .B-nav .cnt { background:var(--dead); color:#fff; border-radius:10px; padding:0 7px; font-size:12px; }
+  .B-nav .cnt.y { background:var(--stall); }
+  .B-split { display:grid; grid-template-columns:360px 1fr; height:calc(100vh - 0px); }
+  .B-list { border-right:1px solid var(--line); overflow:auto; background:#fff; }
+  .B-item { padding:9px 14px; border-bottom:1px solid var(--line); }
+  .B-detail { overflow:auto; padding:18px 22px 90px; }
+  .tl { border-left:2px solid var(--line); margin-left:8px; padding-left:16px; }
+  .tl .ev { position:relative; margin-bottom:10px; }
+  .tl .ev::before { content:""; position:absolute; left:-23px; top:5px; width:10px; height:10px; border-radius:50%; background:var(--mut); }
+  .tl .ev.k-ok::before{background:var(--done)} .tl .ev.k-bad::before{background:var(--dead)} .tl .ev.k-warn::before{background:var(--waiting)} .tl .ev.k-op::before{background:#805ad5}
+  .B-actions { position:sticky; top:0; background:var(--bg); padding:8px 0; z-index:5; border-bottom:1px solid var(--line); margin-bottom:12px; }
+  /* ---------- Variant C ---------- */
+  .C-top { display:flex; align-items:center; gap:18px; padding:10px 18px; background:#fff; border-bottom:1px solid var(--line); }
+  .C-top .brand { font-weight:800; letter-spacing:-.02em; }
+  .C-seg { display:flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .C-seg a { padding:6px 14px; cursor:pointer; } .C-seg a.on { background:#1d2330; color:#fff; }
+  .C-main { padding:16px 18px; }
+  .C-board { display:grid; grid-template-columns:repeat(4, 1fr) 170px; gap:10px; align-items:start; }
+  .C-col { background:#eef1f5; border-radius:8px; padding:8px; min-height:200px; }
+  .C-col h4 { margin:2px 4px 8px; font-size:13px; display:flex; justify-content:space-between; }
+  .C-card { background:#fff; border-radius:6px; padding:7px 9px; margin-bottom:6px; border-left:4px solid var(--mut); cursor:pointer; box-shadow:0 1px 2px rgba(0,0,0,.06); }
+  .C-card.st-waiting { border-left-color:var(--waiting); } .C-card.st-active { border-left-color:var(--active); } .C-card.st-dead_lettered { border-left-color:var(--dead); }
+  .C-lanes { display:grid; grid-template-columns:repeat(4,1fr); gap:0; margin:12px 0; }
+  .C-lane { border:1px solid var(--line); background:#fff; padding:10px; position:relative; }
+  .C-lane + .C-lane { border-left:none; }
+  .C-lane.cur { outline:3px solid var(--active); outline-offset:-3px; z-index:1; }
+  .dots span { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:2px; }
+  .d-success{background:var(--done)} .d-transient{background:var(--stall)} .d-permanent{background:var(--dead)} .d-lease_expired{background:#805ad5}
+  .C-foot { position:sticky; bottom:60px; background:#fff; border:1px solid var(--line); border-radius:8px; padding:10px 14px; box-shadow:0 -2px 12px rgba(0,0,0,.06); }
+  .C-flow { display:grid; grid-template-columns:repeat(5, 1fr); gap:0; align-items:center; }
+  .C-node { background:#fff; border:2px solid var(--line); border-radius:10px; padding:10px; min-height:150px; }
+  .C-edge { text-align:center; color:var(--mut); font-size:12px; }
+  .C-matrix td, .C-matrix th { text-align:center; }
+  .C-matrix td.hit { cursor:pointer; font-weight:700; }
+  .C-matrix td.hit:hover { outline:2px solid var(--active); }
+  .light { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast"></div>
+<div id="modal"></div>
+<div id="switcher"></div>
+
+<script>
+/* ================= synthetic world ================= */
+const NOW = Date.parse('2026-11-24T03:00:00Z'); // 10:00 WIB
+let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const pick = a => a[Math.floor(rnd() * a.length)];
+const STEPS = ['create_visit', 'submit_prescription', 'submit_dispense', 'update_visit'];
+const STEP_LABEL = { create_visit:'Create visit', submit_prescription:'Submit prescription', submit_dispense:'Submit dispense', update_visit:'Update visit' };
+const EVENT_OF = { create_visit:'visit.started', submit_prescription:'prescription.written', submit_dispense:'drug.dispensed', update_visit:'visit.finished' };
+const REMOTE_TYPE = { create_visit:'Encounter', submit_prescription:'MedicationRequest', submit_dispense:'MedicationDispense', update_visit:'Encounter' };
+const CLASS = { MAPPING_MISSING:'replayable', KFA_LEVEL_INVALID:'replayable', RETRIES_EXHAUSTED:'replayable', PATIENT_NOT_FOUND:'replayable',
+  PRACTITIONER_NOT_FOUND:'replayable', PLATFORM_FORBIDDEN:'replayable', PAYLOAD_INVALID:'replayable', REMOTE_RECORD_MISSING:'replayable',
+  UNSUPPORTED_THERAPEUTIC_SUBSTITUTION:'source_data', SUBSTITUTION_MISMATCH:'source_data' };
+const SOURCES = ['sim-rs-a', 'sim-rs-b'];
+const STALL_H = 24;
+const uuid = () => 'xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx'.replace(/x/g, () => Math.floor(rnd() * 16).toString(16));
+const hrs = h => NOW - h * 3600e3;
+const trace = () => Array.from({ length: 32 }, () => Math.floor(rnd() * 16).toString(16)).join('');
+const ihs = () => 'P' + String(Math.floor(rnd() * 1e10)).padStart(11, '0');
+const mask = v => v.slice(0, 3) + '•••••' + v.slice(-2);
+
+const mappings = { drugs: { 'sim-rs-a': { 'OBT-0012':'93000123', 'OBT-0040':'92001877' }, 'sim-rs-b': { 'B-AMX500':'93004410' } },
+                   locations: { 'sim-rs-a': { 'POLI-UM':'b017aa54-…-loc1' }, 'sim-rs-b': { 'IGD':'7c11e0d2-…-loc2' } } };
+
+function mkAttempts(n, lastOutcome, lastCode, startH) {
+  const out = []; let t = startH;
+  for (let i = 1; i <= n; i++) {
+    const last = i === n;
+    const outcome = last ? lastOutcome : pick(['transient', 'transient', 'transient', 'lease_expired']);
+    const code = last ? lastCode : (outcome === 'lease_expired' ? 'lease_expired' : pick(['http_503', 'timeout', 'http_429', 'connection_reset']));
+    out.push({ n: i, at: hrs(t), ms: Math.floor(200 + rnd() * 2400), outcome, code, http: { http_503:503, http_429:429, timeout:null, connection_reset:null }[code] ?? (outcome === 'success' ? 201 : outcome === 'permanent' ? 400 : null) });
+    t -= rnd() * 0.05;
+  }
+  return out;
+}
+
+function mkCase(i, kind) {
+  const src = SOURCES[i % 2];
+  const c = { id: 'c_' + (1000 + i), source: src, visitId: (src === 'sim-rs-a' ? 'RJ-' : 'VB/') + (240000 + i * 37), status: null,
+    steps: STEPS.map(k => ({ key: k, state: 'awaiting_event', attempts: [], remote: null, pins: null, deadReason: null, deadSince: null, deadHistory: [] })),
+    events: [], rejections: [], divergences: [], replays: [], abandonment: null, waitingFor: null, waitingSince: null, mappingNeed: null };
+  const openedH = kind.openedH ?? (1 + rnd() * 70);
+  const pinsFor = k => ({ patientIhs: ihs(), practitionerIhs: ihs(), locationId: 'b017aa54-…-loc1',
+    ...(k !== 'create_visit' && k !== 'update_visit' ? { kfa: pick(['93000123', '92001877', '93004410']), level: pick(['92', '93']), parent92: '92001877', set91: ['91000330'] } : {}),
+    lookup: pick(['nik', 'nik', 'nik', 'motherNik', 'name+birthDate+gender']) });
+  let t = openedH;
+  for (let s = 0; s < 4; s++) {
+    const st = c.steps[s];
+    if (s < kind.done) {
+      c.events.push({ type: EVENT_OF[st.key], at: hrs(t), traceId: trace(), dup: rnd() < .2 });
+      st.attempts = mkAttempts(rnd() < .7 ? 1 : 1 + Math.floor(rnd() * 4), 'success', null, t);
+      st.state = 'completed'; st.remote = { type: REMOTE_TYPE[st.key], id: uuid(), version: st.key === 'update_visit' ? 2 : 1 }; st.pins = pinsFor(st.key);
+      t -= rnd() * 0.5;
+    }
+  }
+  const cur = c.steps[kind.done];
+  if (kind.status === 'completed') { c.status = 'completed'; }
+  if (kind.status === 'waiting') {
+    c.status = 'waiting'; c.waitingFor = EVENT_OF[cur.key]; c.waitingSince = hrs(kind.waitH);
+    if (kind.lateEvents) kind.lateEvents.forEach(k => { c.events.push({ type: EVENT_OF[k], at: hrs(kind.waitH - 1), traceId: trace() }); c.steps[STEPS.indexOf(k)].state = 'blocked'; });
+    if (kind.rejected) c.rejections.push({ code: kind.rejected, eventType: EVENT_OF[cur.key], at: hrs(kind.waitH - 0.1) });
+  }
+  if (kind.status === 'active') {
+    c.status = 'active'; c.events.push({ type: EVENT_OF[cur.key], at: hrs(0.2), traceId: trace() });
+    cur.state = kind.stepState; cur.attempts = kind.stepState === 'ready' ? [] : mkAttempts(kind.n || 1, kind.stepState === 'in_flight' ? 'running' : 'transient', kind.stepState === 'in_flight' ? null : 'http_503', 0.2);
+    if (kind.stepState === 'retry_wait') cur.availableAt = NOW + 40e3;
+  }
+  if (kind.status === 'dead_lettered') {
+    c.status = 'dead_lettered'; c.events.push({ type: EVENT_OF[cur.key], at: hrs(kind.dlH + 0.1), traceId: trace() });
+    const n = kind.reason === 'RETRIES_EXHAUSTED' ? 15 : 1 + Math.floor(rnd() * 2);
+    cur.attempts = mkAttempts(n, kind.reason === 'RETRIES_EXHAUSTED' ? 'transient' : 'permanent', kind.reason === 'RETRIES_EXHAUSTED' ? 'http_503' : kind.reason, kind.dlH + 0.1);
+    cur.state = 'dead_lettered'; cur.deadReason = kind.reason; cur.deadSince = hrs(kind.dlH); cur.deadHistory = [{ code: kind.reason, at: hrs(kind.dlH) }];
+    if (kind.mapping) c.mappingNeed = { ...kind.mapping, source: src };
+    if (kind.downstream) kind.downstream.forEach(k => { c.events.push({ type: EVENT_OF[k], at: hrs(kind.dlH - 1), traceId: trace() }); c.steps[STEPS.indexOf(k)].state = 'blocked'; });
+    if (kind.unexpected) c.divergences.push({ kind: 'REMOTE_UNEXPECTED', step: cur.key, field: null, note: 'apply-then-fail leftover; a replay will adopt it via search-then-create' });
+  }
+  if (kind.status === 'abandoned') {
+    c.status = 'abandoned';
+    c.steps.forEach(s => { if (s.state !== 'completed') s.state = 'abandoned'; });
+    c.abandonment = { at: hrs(kind.abH), note: kind.note, previousStatus: kind.prev, reason: kind.prevReason,
+      leftAtSatusehat: c.steps.filter(s => s.remote).map(s => s.remote.type + '/' + s.remote.id.slice(0, 8) + '…') };
+  }
+  if (kind.diverge) c.divergences.push(kind.diverge);
+  c.updatedAt = Math.max(...c.events.map(e => e.at), ...c.steps.flatMap(s => s.attempts.map(a => a.at)), c.abandonment?.at ?? 0, hrs(openedH));
+  c.openedAt = hrs(openedH);
+  return c;
+}
+
+const KINDS = [];
+for (let i = 0; i < 18; i++) KINDS.push({ status: 'completed', done: 4, diverge: i === 3 ? { kind: 'FIELD_MISMATCH', step: 'create_visit', field: 'meta.versionId', expected: '2', actual: '3' } : i === 9 ? { kind: 'REMOTE_DUPLICATE', step: 'submit_dispense', field: null } : null });
+KINDS.push({ status: 'active', done: 0, stepState: 'in_flight' }, { status: 'active', done: 1, stepState: 'retry_wait', n: 3 }, { status: 'active', done: 2, stepState: 'ready' },
+  { status: 'active', done: 3, stepState: 'in_flight' }, { status: 'active', done: 1, stepState: 'retry_wait', n: 7 }, { status: 'active', done: 2, stepState: 'in_flight' },
+  { status: 'active', done: 0, stepState: 'retry_wait', n: 2 }, { status: 'active', done: 3, stepState: 'ready' });
+KINDS.push({ status: 'waiting', done: 1, waitH: 2 }, { status: 'waiting', done: 1, waitH: 31, rejected: 'UNSUPPORTED_MULTI_ITEM' }, { status: 'waiting', done: 2, waitH: 5 },
+  { status: 'waiting', done: 3, waitH: 49 }, { status: 'waiting', done: 0, waitH: 26, lateEvents: ['submit_dispense'] }, { status: 'waiting', done: 3, waitH: 0.5 },
+  { status: 'waiting', done: 1, waitH: 72, rejected: 'PRESCRIPTION_MISMATCH' }, { status: 'waiting', done: 2, waitH: 11 });
+KINDS.push(
+  { status: 'dead_lettered', done: 1, dlH: 3, reason: 'MAPPING_MISSING', mapping: { kind: 'drug', localCode: 'OBT-0077' }, downstream: ['submit_dispense'] },
+  { status: 'dead_lettered', done: 1, dlH: 2.5, reason: 'MAPPING_MISSING', mapping: { kind: 'drug', localCode: 'OBT-0077' } },
+  { status: 'dead_lettered', done: 0, dlH: 20, reason: 'MAPPING_MISSING', mapping: { kind: 'location', localCode: 'FARM-RI-2' } },
+  { status: 'dead_lettered', done: 2, dlH: 6, reason: 'RETRIES_EXHAUSTED', unexpected: true },
+  { status: 'dead_lettered', done: 0, dlH: 6.2, reason: 'RETRIES_EXHAUSTED' },
+  { status: 'dead_lettered', done: 2, dlH: 40, reason: 'UNSUPPORTED_THERAPEUTIC_SUBSTITUTION', downstream: ['update_visit'] },
+  { status: 'dead_lettered', done: 2, dlH: 9, reason: 'SUBSTITUTION_MISMATCH' },
+  { status: 'dead_lettered', done: 0, dlH: 1.2, reason: 'PATIENT_NOT_FOUND' },
+  { status: 'dead_lettered', done: 1, dlH: 0.7, reason: 'PLATFORM_FORBIDDEN' },
+  { status: 'dead_lettered', done: 1, dlH: 0.6, reason: 'PLATFORM_FORBIDDEN' });
+KINDS.push({ status: 'abandoned', done: 2, abH: 30, note: 'Therapeutic substitution, pharmacy re-issued under new visit RJ-251990', prev: 'dead_lettered', prevReason: 'UNSUPPORTED_THERAPEUTIC_SUBSTITUTION' },
+  { status: 'abandoned', done: 1, abH: 50, note: 'Visit cancelled at registration; no prescription will come', prev: 'waiting', prevReason: 'prescription.written' });
+
+const CASES = KINDS.map((k, i) => mkCase(i, k));
+
+const curStep = c => c.steps.find(s => s.state !== 'completed') || null;
+const isStalled = c => c.status === 'waiting' && (NOW - c.waitingSince) > STALL_H * 3600e3;
+const reasonOf = c => curStep(c)?.deadReason;
+const age = ms => { const m = Math.round((NOW - ms) / 60e3); return m < 60 ? m + 'm' : m < 60 * 48 ? Math.round(m / 60) + 'h' : Math.round(m / 1440) + 'd'; };
+const clock = ms => new Date(ms).toISOString().slice(5, 16).replace('T', ' ') + 'Z';
+const badge = s => `<span class="badge s-${s}">${s.replace('_', '-')}</span>`;
+const stallB = c => isStalled(c) ? ` <span class="badge stalled">stalled ${age(c.waitingSince)}</span>` : '';
+const clsB = code => code && CLASS[code] ? `<span class="badge cls-${CLASS[code]}">${CLASS[code]}</span>` : '';
+const src = txt => `<div class="src">${txt}</div>`;
+const jaeger = c => `<a href="http://localhost:16686/search?service=hub&tags=%7B%22case.id%22%3A%22${c.id}%22%7D" target="_blank">Jaeger: all traces for case.id=${c.id}</a>`;
+const whatNext = c => c.status === 'waiting' ? 'waiting for <code>' + c.waitingFor + '</code>' : c.status === 'dead_lettered' ? '<code>' + reasonOf(c) + '</code>' : c.status === 'active' ? curStep(c).state : c.status === 'abandoned' ? 'abandoned' : '—';
+
+/* metrics (Prometheus-shaped, synthetic) */
+const series = (base, jitter, n = 40) => Array.from({ length: n }, () => Math.max(0, base + (rnd() - .5) * jitter));
+const METRICS = {
+  ingestRate: series(4.2, 2), ingestP95: series(38, 20), rejections: series(.15, .2), duplicates: series(.8, .5),
+  success: Object.fromEntries(STEPS.map(s => [s, series(98.5, 3).map(v => Math.min(100, v))])),
+  lag: Object.fromEntries(STEPS.map((s, i) => [s, series(i === 1 ? 14 : 3, i === 1 ? 20 : 4)])),
+  claimable: { create_visit: 1, submit_prescription: 3, submit_dispense: 1, update_visit: 1 },
+  up: { fhir: { p95: 640, err: 4.1, s429: 0.3 }, kfa: { p95: 210, err: 0.4, s429: 0 }, auth: { p95: 380, err: 0, s429: 0 } },
+  breaker: { fhir: { 'worker-1': 0, 'worker-2': 2 }, kfa: { 'worker-1': 0, 'worker-2': 0 }, auth: { 'worker-1': 0, 'worker-2': 1 } },
+  breakerOpens24h: { fhir: 3, kfa: 0, auth: 1 },
+  limiterMode: 'redis',
+  recon: { status: 'completed_with_errors', finished: NOW - 9 * 60e3, checked: 412, skipped: 3, unchecked: 2,
+    classes: { REMOTE_MISSING: 0, REMOTE_UNEXPECTED: 1, REMOTE_DUPLICATE: 1, REMOTE_ID_MISMATCH: 0, FIELD_MISMATCH: 1 } }
+};
+const spark = (arr, color = '#2b6cb0', w = 260, h = 42) => {
+  const max = Math.max(...arr) || 1; const pts = arr.map((v, i) => `${(i / (arr.length - 1)) * w},${h - (v / max) * (h - 4) - 2}`).join(' ');
+  return `<svg width="${w}" height="${h}"><polyline fill="none" stroke="${color}" stroke-width="1.6" points="${pts}"/></svg>`;
+};
+const last = a => a[a.length - 1];
+const lightColor = v => ['#2f855a', '#d69e2e', '#c53030'][v];
+const lightName = v => ['closed', 'half-open', 'open'][v];
+
+/* ================= stub actions ================= */
+function toast(msg) { const d = document.createElement('div'); d.innerHTML = msg; document.getElementById('toast').appendChild(d); setTimeout(() => d.remove(), 4200); }
+function replay(id, note = '') {
+  const c = CASES.find(x => x.id === id);
+  if (c.status !== 'dead_lettered') { toast(`POST /v1/cases/${id}/replay → <b>409 CASE_NOT_DEAD_LETTERED</b> (harmless)`); return false; }
+  const s = curStep(c); s.state = 'ready'; c.status = 'active'; c.replays.push({ at: Date.now(), note }); s.capReset = true;
+  c.events.push({ type: 'operator.replay', at: Date.now(), traceId: trace(), op: true });
+  toast(`POST /v1/cases/${id}/replay → <b>202</b>, ${STEP_LABEL[s.key]} → ready`);
+  setTimeout(() => {
+    s.state = 'in_flight'; render();
+    setTimeout(() => {
+      const fixed = c.mappingNeed ? !!mappings[c.mappingNeed.kind === 'drug' ? 'drugs' : 'locations'][c.source][c.mappingNeed.localCode] : true;
+      const bad = CLASS[s.deadReason] === 'source_data' || s.deadReason === 'PATIENT_NOT_FOUND' || s.deadReason === 'PLATFORM_FORBIDDEN' || !fixed;
+      s.attempts.push({ n: s.attempts.length + 1, at: Date.now(), ms: 820, outcome: bad ? 'permanent' : 'success', code: bad ? s.deadReason : null, http: bad ? 400 : 201 });
+      if (bad) { s.state = 'dead_lettered'; c.status = 'dead_lettered'; s.deadHistory.push({ code: s.deadReason, at: Date.now() }); toast(`${id}: dead-lettered again with <code>${s.deadReason}</code>`); }
+      else {
+        s.state = 'completed'; s.remote = { type: REMOTE_TYPE[s.key], id: uuid(), version: 1 }; s.deadReason = null; c.mappingNeed = null;
+        const nx = curStep(c);
+        if (!nx) c.status = 'completed';
+        else if (nx.state === 'blocked') { nx.state = 'ready'; c.status = 'active'; }
+        else { c.status = 'waiting'; c.waitingFor = EVENT_OF[nx.key]; c.waitingSince = Date.now(); }
+        toast(`${id}: ${STEP_LABEL[s.key]} completed after replay`);
+      }
+      c.updatedAt = Date.now(); render();
+    }, 1300);
+  }, 700);
+  render(); return true;
+}
+function abandonModal(id) {
+  const c = CASES.find(x => x.id === id);
+  const left = c.steps.filter(s => s.remote).map(s => `${s.remote.type}/${s.remote.id.slice(0, 8)}…`);
+  document.getElementById('modal').innerHTML = `<div class="modal-back"><div class="modal">
+    <h2>Abandon ${c.id}?</h2>
+    <p>Final. No un-abandon. Nothing is sent to SATUSEHAT. Late events for this visit will get <code>409 CASE_ABANDONED</code>.</p>
+    <p class="small mut">Was: ${badge(c.status)} ${c.status === 'waiting' ? 'waiting for <code>' + c.waitingFor + '</code>' : '<code>' + reasonOf(c) + '</code>'}</p>
+    ${left.length ? `<div class="warn small"><b>Records left at SATUSEHAT:</b> ${left.join(', ')}</div>` : '<p class="small mut">No records at SATUSEHAT.</p>'}
+    <h3>Note (required)</h3>
+    <textarea id="abNote" rows="3" style="width:100%" placeholder="Why can this case never complete?"></textarea>
+    ${src(`POST /v1/cases/${c.id}/abandon {"note": "..."}  → 422 if empty, 409 CASE_NOT_ABANDONABLE if active/completed/abandoned`)}
+    <div class="row" style="justify-content:flex-end;margin-top:10px"><button onclick="closeModal()">Cancel</button>
+    <button class="danger" id="abGo" disabled onclick="doAbandon('${c.id}')">Abandon case</button></div></div></div>`;
+  const ta = document.getElementById('abNote'); ta.focus(); ta.oninput = () => document.getElementById('abGo').disabled = !ta.value.trim();
+}
+function closeModal() { document.getElementById('modal').innerHTML = ''; }
+function doAbandon(id) {
+  const c = CASES.find(x => x.id === id); const note = document.getElementById('abNote').value.trim();
+  if (!['waiting', 'dead_lettered'].includes(c.status)) { toast('409 CASE_NOT_ABANDONABLE'); closeModal(); return; }
+  c.abandonment = { at: Date.now(), note, previousStatus: c.status, reason: c.status === 'waiting' ? c.waitingFor : reasonOf(c), leftAtSatusehat: c.steps.filter(s => s.remote).map(s => s.remote.type + '/' + s.remote.id.slice(0, 8) + '…') };
+  c.steps.forEach(s => { if (s.state !== 'completed') s.state = 'abandoned'; }); c.status = 'abandoned'; c.updatedAt = Date.now();
+  closeModal(); toast(`POST /v1/cases/${id}/abandon → <b>200</b>`); render();
+}
+function saveMapping(id, andReplay) {
+  const c = CASES.find(x => x.id === id); const v = document.getElementById('mapVal_' + id).value.trim();
+  if (!v) { toast('Enter a value first'); return; }
+  const m = c.mappingNeed; mappings[m.kind === 'drug' ? 'drugs' : 'locations'][m.source][m.localCode] = v;
+  toast(`PUT /v1/admin/mappings/${m.kind === 'drug' ? 'drugs' : 'locations'}/${m.localCode} → <b>200</b>`);
+  const others = CASES.filter(x => x.id !== id && x.status === 'dead_lettered' && x.mappingNeed && x.mappingNeed.localCode === m.localCode && x.mappingNeed.source === m.source);
+  if (andReplay) replay(id, 'mapping ' + m.localCode + ' → ' + v);
+  if (others.length) toast(`${others.length} other case(s) dead-lettered on the same mapping: ${others.map(o => o.id).join(', ')}. Replay them from the dead-letter screen.`);
+  render();
+}
+function mappingForm(c) {
+  if (!c.mappingNeed || c.status !== 'dead_lettered') return '';
+  const m = c.mappingNeed; const same = CASES.filter(x => x.status === 'dead_lettered' && x.mappingNeed && x.mappingNeed.localCode === m.localCode && x.mappingNeed.source === m.source).length;
+  return `<div class="err" style="margin:10px 0"><b>Missing ${m.kind} mapping</b> · source <code>${m.source}</code> · local code <code>${m.localCode}</code>
+    ${same > 1 ? `<div class="small">${same} dead-lettered cases share this missing mapping.</div>` : ''}
+    <div class="row" style="margin-top:6px"><label>${m.kind === 'drug' ? 'KFA code (92/93)' : 'SATUSEHAT Location ID'}</label>
+    <input id="mapVal_${c.id}" placeholder="${m.kind === 'drug' ? '93xxxxxx' : 'uuid'}" style="width:200px">
+    <button onclick="saveMapping('${c.id}', false)">Save</button><button class="primary" onclick="saveMapping('${c.id}', true)">Save &amp; replay</button></div>
+    ${src(`PUT /v1/admin/mappings/${m.kind === 'drug' ? 'drugs' : 'locations'}/${m.localCode}  (admin key held server-side by the Next.js app)\nthen POST /v1/cases/${c.id}/replay`)}</div>`;
+}
+function caseActions(c, style = 'row') {
+  const r = c.status === 'dead_lettered'; const a = ['waiting', 'dead_lettered'].includes(c.status);
+  const suggest = r && CLASS[reasonOf(c)] === 'source_data';
+  return `<div class="${style}">
+    ${r ? `<button class="${suggest ? '' : 'primary'}" onclick="replay('${c.id}')">Replay ${STEP_LABEL[curStep(c).key].toLowerCase()}</button>` : ''}
+    ${a ? `<button class="${suggest ? 'danger primary' : 'danger'}" style="${suggest ? 'background:var(--dead);color:#fff' : ''}" onclick="abandonModal('${c.id}')">Abandon…</button>` : ''}
+    ${suggest ? `<span class="small bad">Suggested: abandon. <code>${reasonOf(c)}</code> is classed <b>source_data</b>; only new source data fixes it (replay still allowed, e.g. after a wrong drug mapping is corrected).</span>` : ''}
+    ${!r && !a ? `<span class="small mut">No operator action for a${c.status === 'active' ? 'n' : ''} ${c.status} case.</span>` : ''}
+  </div>`;
+}
+
+/* ================= shared fragments (content, not layout) ================= */
+const stepsTable = c => `<table><tr><th>Step</th><th>State</th><th>Attempts</th><th>Remote id</th><th>Pinned values</th></tr>
+  ${c.steps.map(s => `<tr><td>${STEP_LABEL[s.key]}</td><td><code>${s.state}</code>${s.deadReason && s.state === 'dead_lettered' ? `<br><code class="bad">${s.deadReason}</code>` : ''}${s.availableAt ? `<br><span class="small mut">next try in ${Math.round((s.availableAt - NOW) / 1e3)}s</span>` : ''}</td>
+  <td>${s.attempts.length}${s.attempts.length ? '/15' : ''}</td><td class="mono small">${s.remote ? s.remote.type + '<br>' + s.remote.id.slice(0, 13) + '… v' + s.remote.version : '—'}</td>
+  <td class="small">${s.pins ? pinsHtml(s.pins) : '—'}</td></tr>`).join('')}</table>`;
+const pinsHtml = p => `patient <span class="mono">${mask(p.patientIhs)}</span> (${p.lookup})<br>practitioner <span class="mono">${mask(p.practitionerIhs)}</span><br>location <span class="mono">${p.locationId}</span>${p.kfa ? `<br>KFA <span class="mono">${p.kfa}</span> (${p.level})` : ''}`;
+const attemptRows = s => s.attempts.map(a => `<tr><td>#${a.n}</td><td class="small">${clock(a.at)}</td><td><code>${a.outcome}</code></td><td><code>${a.code || ''}</code></td><td>${a.http ?? ''}</td><td class="small">${a.ms}ms</td></tr>`).join('');
+const rejHtml = c => c.rejections.length ? c.rejections.map(r => `<div class="small"><code>${r.code}</code> on <code>${r.eventType}</code> at ${clock(r.at)}</div>`).join('') : '<span class="small mut">none</span>';
+const divHtml = c => c.divergences.length ? c.divergences.map(d => `<div class="warn small"><b>${d.kind}</b> on ${STEP_LABEL[d.step]}${d.field ? ` · field <code>${d.field}</code> expected <code>${d.expected}</code> actual <code>${d.actual}</code>` : ''}${d.note ? ' · ' + d.note : ''}</div>`).join('') + `<div class="small mut">from reconciliation run finished ${age(METRICS.recon.finished)} ago</div>` : '<span class="small mut">none in latest run</span>';
+const abandonHtml = c => c.abandonment ? `<div class="card" style="background:#f7fafc"><b>Abandoned</b> ${age(c.abandonment.at)} ago · was ${c.abandonment.previousStatus} (<code>${c.abandonment.reason}</code>)<br>“${c.abandonment.note}”<br><span class="small">Left at SATUSEHAT: ${c.abandonment.leftAtSatusehat.join(', ') || 'nothing'}</span></div>` : '';
+const replaysHtml = c => c.replays.length ? `<div class="small">Replayed ${c.replays.length}×: ${c.replays.map(r => clock(r.at) + (r.note ? ' (' + r.note + ')' : '')).join(', ')}</div>` : '';
+
+/* filtering (shared logic) */
+const F = { status: 'all', stalled: false, step: 'all', source: 'all', q: '' };
+const filtered = () => CASES.filter(c => (F.status === 'all' || c.status === F.status) && (!F.stalled || isStalled(c)) &&
+  (F.step === 'all' || curStep(c)?.key === F.step) && (F.source === 'all' || c.source === F.source) &&
+  (!F.q || c.visitId.toLowerCase().includes(F.q.toLowerCase()) || c.id.includes(F.q))).sort((a, b) => b.updatedAt - a.updatedAt);
+const casesSrc = () => src(`GET /v1/cases?status=${F.status}&stalled=${F.stalled}&step=${F.step}&source=${F.source}&visitId=${F.q}&limit=50&cursor=…\n→ [{ caseId, source, visitId, status, currentStep, waitingFor, waitingSince, stalled, deadLetterReason, reasonClass, deadLetteredSince, attempts, updatedAt }]`);
+const caseSrc = c => src(`GET /v1/cases/${c.id}\n→ { …summary, steps[{ state, attempts[], remote, pins }], events[{ type, receivedAt, traceId }], rejections[], replays[], abandonment, divergences[] }`);
+const setF = (k, v) => { F[k] = v; render(); };
+const dlCases = () => CASES.filter(c => c.status === 'dead_lettered');
+const dlGroups = () => { const g = {}; dlCases().forEach(c => { const r = reasonOf(c); (g[r] ||= []).push(c); }); return g; };
+
+/* ================= VARIANT A: tabs + tables + drawer ================= */
+const A = { name: 'Tabs, tables & drawer', screen: 'cases', open: null, win: '1h', sel: new Set(), openGroups: new Set(Object.keys(dlGroups())) };
+function VariantA() {
+  const tab = (k, l) => `<a class="${A.screen === k ? 'on' : ''}" onclick="A.screen='${k}';A.open=null;render()">${l}</a>`;
+  return `<div class="A-top"><div class="brand">Integration Hub</div>${tab('cases', 'Cases')}${tab('status', 'Integration status')}${tab('dl', `Dead-letter (${dlCases().length})`)}</div>
+  <div class="A-main">${A.screen === 'cases' ? A_cases() : A.screen === 'status' ? A_status() : A_dl()}</div>${A.open ? A_drawer() : ''}`;
+}
+function A_cases() {
+  const chip = s => `<button class="chip ${F.status === s ? 'on' : ''}" onclick="setF('status','${s}')">${s} <span class="mut">${s === 'all' ? CASES.length : CASES.filter(c => c.status === s).length}</span></button>`;
+  const rows = filtered();
+  return `<div class="row" style="margin-bottom:10px">${['all', 'waiting', 'active', 'dead_lettered', 'completed', 'abandoned'].map(chip).join('')}
+    <label class="row" style="gap:4px"><input type="checkbox" ${F.stalled ? 'checked' : ''} onchange="setF('stalled',this.checked)"> stalled only (${CASES.filter(isStalled).length})</label>
+    <select onchange="setF('step',this.value)"><option value="all">any current step</option>${STEPS.map(s => `<option ${F.step === s ? 'selected' : ''} value="${s}">${STEP_LABEL[s]}</option>`).join('')}</select>
+    <select onchange="setF('source',this.value)"><option value="all">any source</option>${SOURCES.map(s => `<option ${F.source === s ? 'selected' : ''}>${s}</option>`).join('')}</select>
+    <input placeholder="visit number / case id" value="${F.q}" onchange="setF('q',this.value)"></div>
+  ${casesSrc()}
+  <div class="card" style="padding:0"><table><tr><th>Case</th><th>Visit</th><th>Source</th><th>Status</th><th>Current step</th><th>Waiting for / reason</th><th>Age</th><th>Attempts</th><th>Updated</th></tr>
+  ${rows.map(c => { const s = curStep(c); return `<tr class="clickable ${A.open === c.id ? 'sel' : ''}" onclick="A.open='${c.id}';render()">
+    <td class="mono">${c.id}</td><td class="mono">${c.visitId}</td><td>${c.source}</td><td>${badge(c.status)}${stallB(c)}</td>
+    <td>${s ? STEP_LABEL[s.key] : '—'}</td><td>${whatNext(c)} ${c.status === 'dead_lettered' ? clsB(reasonOf(c)) : ''}</td>
+    <td>${c.status === 'waiting' ? age(c.waitingSince) : c.status === 'dead_lettered' ? age(s.deadSince) : age(c.openedAt)}</td>
+    <td>${s ? s.attempts.length : ''}</td><td class="small mut">${age(c.updatedAt)} ago</td></tr>`; }).join('')}</table></div>`;
+}
+function A_drawer() {
+  const c = CASES.find(x => x.id === A.open);
+  return `<div class="A-drawer"><div class="row"><h2 class="grow">${c.id} · <span class="mono">${c.visitId}</span></h2><button onclick="A.open=null;render()">✕</button></div>
+    <div class="row">${badge(c.status)}${stallB(c)} <span class="mut">${c.source} · opened ${age(c.openedAt)} ago</span></div>
+    ${caseSrc(c)}
+    ${c.status === 'waiting' ? `<p>Waiting for <code>${c.waitingFor}</code> since ${clock(c.waitingSince)}${c.rejections.length ? `; last rejected <code>${last(c.rejections).code}</code> at ${clock(last(c.rejections).at)}` : ''}.</p>` : ''}
+    ${mappingForm(c)}
+    <div style="margin:10px 0">${caseActions(c)}</div>${abandonHtml(c)}${replaysHtml(c)}
+    <h3>Steps</h3>${stepsTable(c)}
+    <h3>Attempt log</h3>${c.steps.filter(s => s.attempts.length).map(s => `<details ${s.state !== 'completed' ? 'open' : ''}><summary>${STEP_LABEL[s.key]} · ${s.attempts.length} attempt(s)</summary><table>${attemptRows(s)}</table></details>`).join('') || '<span class="mut small">none</span>'}
+    <h3>Rejection log</h3>${rejHtml(c)}
+    <h3>Divergences</h3>${divHtml(c)}
+    <h3>Traces</h3><div class="small">${jaeger(c)}</div>${c.events.filter(e => !e.op).map(e => `<div class="small mono">${e.type} · trace ${e.traceId.slice(0, 12)}…</div>`).join('')}</div>`;
+}
+function A_status() {
+  const win = w => `<button class="chip ${A.win === w ? 'on' : ''}" onclick="A.win='${w}';render()">${w}</button>`;
+  const card = (title, val, arr, promql, color) => `<div class="card"><div class="row"><b class="grow">${title}</b><span style="font-size:20px">${val}</span></div>${spark(arr, color)}${src('Prometheus: ' + promql)}</div>`;
+  const r = METRICS.recon;
+  return `<div class="row" style="margin-bottom:12px"><h2 class="grow" style="margin:0">Integration status</h2><span class="mut">window</span>${['15m', '1h', '6h', '24h'].map(win).join('')}</div>
+  ${src('All panels: Next.js server → Prometheus HTTP API /api/v1/query_range (no hub endpoint). Breaker state lives only in worker memory, so Prometheus is the only place it exists.')}
+  <h3>Ingest</h3><div class="A-grid">
+    ${card('Accepted events / s', last(METRICS.ingestRate).toFixed(1), METRICS.ingestRate, `sum(rate(ingest_request_duration_seconds_count{status="202"}[${A.win}]))`)}
+    ${card('Ingest p95', Math.round(last(METRICS.ingestP95)) + ' ms', METRICS.ingestP95, `histogram_quantile(0.95, sum by (le)(rate(ingest_request_duration_seconds_bucket[${A.win}])))`)}
+    ${card('Rejections / s', last(METRICS.rejections).toFixed(2), METRICS.rejections, `sum by (code)(rate(ingest_rejections_total[${A.win}]))`, '#c53030')}
+    ${card('Duplicate ingests / s', last(METRICS.duplicates).toFixed(2), METRICS.duplicates, `sum(rate(ingest_duplicates_total[${A.win}]))`, '#805ad5')}</div>
+  <h3>Steps: success rate & outbox lag</h3><div class="A-grid">
+    ${STEPS.map(s => card(STEP_LABEL[s] + ' success', last(METRICS.success[s]).toFixed(1) + '%', METRICS.success[s], `increase(steps_completed_total{step="${s}"}[${A.win}]) / (increase(steps_completed_total{step="${s}"}[${A.win}]) + increase(steps_dead_lettered_total{step="${s}"}[${A.win}]))`, '#2f855a')).join('')}
+    ${STEPS.map(s => card(STEP_LABEL[s] + ' lag', Math.round(last(METRICS.lag[s])) + ' s', METRICS.lag[s], `outbox_lag_seconds{step="${s}"}`, '#b7791f')).join('')}</div>
+  <h3>Upstreams & breakers</h3><div class="A-grid">${Object.entries(METRICS.up).map(([u, m]) => `<div class="card"><b>${u.toUpperCase()}</b>
+    <div>p95 ${m.p95} ms · errors ${m.err}% · 429 ${m.s429}%</div>
+    <div style="margin-top:6px">${Object.entries(METRICS.breaker[u]).map(([w, v]) => `<span class="light" style="background:${lightColor(v)}"></span>${w} ${lightName(v)} &nbsp;`).join('')}</div>
+    <div class="small mut">opens in ${A.win}: ${METRICS.breakerOpens24h[u]}</div>${src(`circuit_breaker_state{upstream="${u}"} by (instance)\nhistogram_quantile(0.95, …upstream_request_duration_seconds_bucket{upstream="${u}"}…)`)}</div>`).join('')}</div>
+  <h3>Reconciliation (latest run)</h3><div class="card">${r.status} · finished ${age(r.finished)} ago · ${r.checked} checked · ${r.skipped} skipped · ${r.unchecked} unchecked<br>
+    ${Object.entries(r.classes).map(([k, v]) => `<span class="${v ? 'bad' : 'mut'}">${k} ${v}</span>`).join(' · ')}
+    ${src('GET /v1/admin/reconciliation/runs?limit=1 (hub API; not in Prometheus as a run summary)')}</div>`;
+}
+function A_dl() {
+  const g = dlGroups();
+  const selN = A.sel.size;
+  return `<div class="row" style="margin-bottom:10px"><h2 class="grow" style="margin:0">Dead-lettered cases (${dlCases().length})</h2>
+    <button class="primary" ${selN ? '' : 'disabled'} onclick="A_bulkConfirm()">Replay selected (${selN})</button></div>
+  ${src('GET /v1/cases?status=dead_lettered&limit=200  (grouped client-side by deadLetterReason)')}
+  ${Object.entries(g).sort((a, b) => b[1].length - a[1].length).map(([code, cs]) => `<div class="card" style="margin-bottom:10px;padding:0">
+    <div class="row clickable" style="padding:10px 12px" onclick="A.openGroups.has('${code}')?A.openGroups.delete('${code}'):A.openGroups.add('${code}');render()">
+      <input type="checkbox" onclick="event.stopPropagation();A_toggleGroup('${code}',this.checked)" ${cs.every(c => A.sel.has(c.id)) ? 'checked' : ''}>
+      <b class="mono">${code}</b> ${clsB(code)} <span class="grow mut">${cs.length} case(s) · oldest ${age(Math.min(...cs.map(c => curStep(c).deadSince)))}</span><span>${A.openGroups.has(code) ? '▾' : '▸'}</span></div>
+    ${A.openGroups.has(code) ? `<table>${cs.map(c => `<tr><td style="width:30px"><input type="checkbox" ${A.sel.has(c.id) ? 'checked' : ''} onchange="this.checked?A.sel.add('${c.id}'):A.sel.delete('${c.id}');render()"></td>
+      <td class="mono clickable" onclick="A.open='${c.id}';render()">${c.id}</td><td class="mono">${c.visitId}</td><td>${c.source}</td><td>${STEP_LABEL[curStep(c).key]}</td><td>${age(curStep(c).deadSince)}</td>
+      <td>${c.mappingNeed ? `<span class="small">needs ${c.mappingNeed.kind} <code>${c.mappingNeed.localCode}</code></span>` : ''}</td>
+      <td><button onclick="replay('${c.id}')">Replay</button> <button class="danger" onclick="abandonModal('${c.id}')">Abandon…</button></td></tr>`).join('')}</table>` : ''}</div>`).join('') || '<p class="mut">Nothing dead-lettered.</p>'}`;
+}
+function A_toggleGroup(code, on) { dlGroups()[code].forEach(c => on ? A.sel.add(c.id) : A.sel.delete(c.id)); render(); }
+function A_bulkConfirm() {
+  const cs = [...A.sel].map(id => CASES.find(c => c.id === id)); const by = {}; cs.forEach(c => by[reasonOf(c)] = (by[reasonOf(c)] || 0) + 1);
+  const sd = cs.filter(c => CLASS[reasonOf(c)] === 'source_data').length;
+  document.getElementById('modal').innerHTML = `<div class="modal-back"><div class="modal"><h2>Replay ${cs.length} case(s)?</h2>
+    <ul>${Object.entries(by).map(([k, v]) => `<li><code>${k}</code> × ${v} ${clsB(k)}</li>`).join('')}</ul>
+    ${sd ? `<div class="warn">${sd} selected case(s) are classed <b>source_data</b>; they will most likely dead-letter again.</div>` : ''}
+    ${src(`N × POST /v1/cases/{id}/replay  (sequential from the Next.js server; each is a conditional update)`)}
+    <div class="row" style="justify-content:flex-end;margin-top:10px"><button onclick="closeModal()">Cancel</button>
+    <button class="primary" onclick="closeModal();[...A.sel].forEach(id=>replay(id,'bulk'));A.sel.clear();render()">Replay ${cs.length}</button></div></div></div>`;
+}
+
+/* ================= VARIANT B: triage sidebar + split pane + timeline ================= */
+const B = { name: 'Triage split-pane & timeline', screen: 'cases', open: null, confirm: null, queue: 'all', sel: new Set() };
+function VariantB() {
+  const nav = (k, l, cnt, cls = '') => `<a class="${B.screen === k ? 'on' : ''}" onclick="B.screen='${k}';render()"><span>${l}</span>${cnt ? `<span class="cnt ${cls}">${cnt}</span>` : ''}</a>`;
+  return `<div class="B-shell"><div class="B-nav"><div class="brand">Integration Hub</div>
+    ${nav('dl', 'Dead-letter', dlCases().length)}${nav('cases', 'Cases', CASES.filter(isStalled).length, 'y')}${nav('status', 'Integration status', Object.values(METRICS.breaker).some(o => Object.values(o).some(v => v)) ? '!' : '', 'y')}
+    <div class="small mut" style="padding:16px">Red = dead-lettered (always needs action).<br>Yellow = stalled waiting cases.<br>! = a breaker is not closed.</div></div>
+    <div>${B.screen === 'cases' ? B_cases() : B.screen === 'status' ? B_status() : B_dl()}</div></div>`;
+}
+function B_cases() {
+  const qs = { all: 'All', needs: 'Needs action', stalled: 'Stalled', waiting: 'Waiting', active: 'Active', completed: 'Completed', abandoned: 'Abandoned' };
+  const list = filtered().filter(c => B.queue === 'all' || (B.queue === 'needs' ? (c.status === 'dead_lettered' || isStalled(c)) : B.queue === 'stalled' ? isStalled(c) : c.status === B.queue));
+  if (!B.open && list.length) B.open = list[0].id;
+  return `<div class="B-split"><div class="B-list">
+    <div style="padding:10px 14px;border-bottom:1px solid var(--line)"><select onchange="B.queue=this.value;B.open=null;render()" style="width:100%">${Object.entries(qs).map(([k, v]) => `<option value="${k}" ${B.queue === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+    <div class="row" style="margin-top:6px"><select onchange="setF('step',this.value)" style="flex:1"><option value="all">any step</option>${STEPS.map(s => `<option ${F.step === s ? 'selected' : ''} value="${s}">${STEP_LABEL[s]}</option>`).join('')}</select>
+    <select onchange="setF('source',this.value)" style="flex:1"><option value="all">any source</option>${SOURCES.map(s => `<option ${F.source === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
+    <input placeholder="search visit number" style="width:100%;margin-top:6px" value="${F.q}" onchange="setF('q',this.value)">${casesSrc()}</div>
+    ${list.map(c => `<div class="B-item clickable ${B.open === c.id ? 'sel' : ''}" onclick="B.open='${c.id}';render()">
+      <div class="row"><b class="mono grow">${c.visitId}</b>${badge(c.status)}</div>
+      <div class="small mut">${c.source} · ${whatNext(c)}${isStalled(c) ? ` · <b class="amber">stalled ${age(c.waitingSince)}</b>` : ''} · ${age(c.updatedAt)} ago</div></div>`).join('')}</div>
+    <div class="B-detail">${B.open ? B_detail(CASES.find(c => c.id === B.open)) : '<p class="mut">Select a case.</p>'}</div></div>`;
+}
+function B_timeline(c) {
+  const ev = [];
+  ev.push({ at: c.openedAt, k: '', t: `Case opened` });
+  c.events.filter(e => !e.op).forEach(e => ev.push({ at: e.at, k: '', t: `Received <code>${e.type}</code>${e.dup ? ' <span class="mut">(+1 duplicate ingest, replayed 202)</span>' : ''} <span class="small mut mono">trace ${e.traceId.slice(0, 10)}…</span>` }));
+  c.rejections.forEach(r => ev.push({ at: r.at, k: 'warn', t: `Rejected <code>${r.eventType}</code>: <code>${r.code}</code> <span class="small mut">(nothing recorded against the key)</span>` }));
+  c.steps.forEach(s => s.attempts.forEach(a => ev.push({ at: a.at, k: a.outcome === 'success' ? 'ok' : a.outcome === 'permanent' ? 'bad' : 'warn',
+    t: `${STEP_LABEL[s.key]} attempt #${a.n}: <code>${a.outcome}</code> ${a.code ? `<code>${a.code}</code>` : ''} ${a.http ? a.http : ''} <span class="small mut">${a.ms}ms</span>${a.outcome === 'success' && s.remote ? ` → <span class="mono small">${s.remote.type}/${s.remote.id.slice(0, 8)}…</span>` : ''}` })));
+  c.steps.forEach(s => s.deadHistory.forEach(d => ev.push({ at: d.at, k: 'bad', t: `<b>Dead-lettered</b> at ${STEP_LABEL[s.key]}: <code>${d.code}</code> ${clsB(d.code)}` })));
+  c.replays.forEach(r => ev.push({ at: r.at, k: 'op', t: `<b>Operator replay</b>${r.note ? ' · ' + r.note : ''}` }));
+  if (c.abandonment) ev.push({ at: c.abandonment.at, k: 'op', t: `<b>Operator abandoned</b> · “${c.abandonment.note}”` });
+  if (c.status === 'waiting') ev.push({ at: NOW, k: 'warn', t: `Now: waiting for <code>${c.waitingFor}</code> for ${age(c.waitingSince)}${isStalled(c) ? ' (<b>stalled</b>)' : ''}` });
+  ev.sort((a, b) => b.at - a.at);
+  // collapse long transient runs
+  const out = []; let run = [];
+  const flush = () => { if (run.length > 3) out.push({ ...run[0], t: `… ${run.length} transient attempts collapsed (${clock(last(run).at)} – ${clock(run[0].at)})`, k: 'warn' }); else out.push(...run); run = []; };
+  ev.forEach(e => { if (e.k === 'warn' && /attempt #/.test(e.t)) run.push(e); else { flush(); out.push(e); } }); flush();
+  return `<div class="tl">${out.map(e => `<div class="ev k-${e.k}"><span class="small mut">${clock(e.at)}</span><br>${e.t}</div>`).join('')}</div>`;
+}
+function B_detail(c) {
+  return `<div class="B-actions"><div class="row"><h2 class="grow" style="margin:0">Visit <span class="mono">${c.visitId}</span> <span class="mut small">${c.id} · ${c.source}</span></h2>${badge(c.status)}${stallB(c)}</div>
+    <div style="margin-top:8px">${caseActions(c)}</div></div>
+    ${caseSrc(c)}${mappingForm(c)}${abandonHtml(c)}
+    <div class="row" style="gap:6px;margin-bottom:10px">${c.steps.map(s => `<span class="badge" style="background:${{ completed: 'var(--done)', dead_lettered: 'var(--dead)', awaiting_event: '#a0aec0', blocked: '#718096', abandoned: 'var(--aband)' }[s.state] || 'var(--active)'}">${STEP_LABEL[s.key]}: ${s.state}</span>`).join(' → ')}</div>
+    ${c.divergences.length ? `<h3>Divergences</h3>${divHtml(c)}` : ''}
+    <h3>Timeline (newest first)</h3>${B_timeline(c)}
+    <details><summary><b>What was sent</b> (pinned values per completed step)</summary>${stepsTable(c)}</details>
+    <p class="small">${jaeger(c)}</p>`;
+}
+function B_status() {
+  const r = METRICS.recon;
+  const row = (l, now, h1, h24, cls = '') => `<tr><td>${l}</td><td class="${cls}"><b>${now}</b></td><td>${h1}</td><td>${h24}</td></tr>`;
+  return `<div style="padding:18px 22px"><h2>Integration status</h2>
+  ${src('Next.js server calls Prometheus /api/v1/query (instant queries at three ranges). The hub API is NOT used for metrics: breaker state exists only per worker, in memory.')}
+  <div class="row" style="align-items:flex-start;gap:16px">
+  <div class="card grow"><h3 style="margin-top:0">Ingest</h3><table><tr><th></th><th>now</th><th>1h</th><th>24h</th></tr>
+    ${row('accepted / s', last(METRICS.ingestRate).toFixed(1), '4.0', '3.1')}${row('p95 latency', Math.round(last(METRICS.ingestP95)) + 'ms', '41ms', '36ms')}
+    ${row('rejections', last(METRICS.rejections).toFixed(2) + '/s', '9', '212')}${row('duplicates', last(METRICS.duplicates).toFixed(2) + '/s', '51', '1,204')}</table></div>
+  <div class="card grow"><h3 style="margin-top:0">Steps</h3><table><tr><th>step</th><th>success 1h</th><th>lag now</th><th>claimable</th><th>dead-letters 24h</th></tr>
+    ${STEPS.map(s => `<tr><td>${STEP_LABEL[s]}</td><td class="${last(METRICS.success[s]) < 97 ? 'bad' : 'ok'}">${last(METRICS.success[s]).toFixed(1)}%</td><td class="${last(METRICS.lag[s]) > 20 ? 'amber' : ''}">${Math.round(last(METRICS.lag[s]))}s</td><td>${METRICS.claimable[s]}</td><td>${dlCases().filter(c => curStep(c).key === s).length}</td></tr>`).join('')}</table></div></div>
+  <div class="card" style="margin-top:14px"><h3 style="margin-top:0">Upstreams</h3><table><tr><th>upstream</th><th>p95</th><th>errors</th><th>429</th><th>breaker per worker</th><th>opens 24h</th><th>limiter</th></tr>
+    ${Object.entries(METRICS.up).map(([u, m]) => `<tr><td><b>${u}</b></td><td>${m.p95}ms</td><td>${m.err}%</td><td>${m.s429}%</td><td>${Object.entries(METRICS.breaker[u]).map(([w, v]) => `<span class="light" style="background:${lightColor(v)}"></span>${w}: ${lightName(v)}`).join('<br>')}</td><td>${METRICS.breakerOpens24h[u]}</td><td>${METRICS.limiterMode}</td></tr>`).join('')}</table></div>
+  <div class="card" style="margin-top:14px"><h3 style="margin-top:0">Cases right now</h3>${['waiting', 'active', 'dead_lettered', 'completed', 'abandoned'].map(s => `${badge(s)} ${CASES.filter(c => c.status === s).length}`).join(' &nbsp; ')} &nbsp; <span class="badge stalled">stalled ${CASES.filter(isStalled).length}</span>
+    ${src('cases{status}, cases_stalled, cases_dead_lettered_oldest_age_seconds (Prometheus, emitted by hub service)')}</div>
+  <div class="card" style="margin-top:14px"><h3 style="margin-top:0">Reconciliation</h3>Latest run <code>${r.status}</code>, ${age(r.finished)} ago: ${r.checked} checked, ${r.skipped} skipped, ${r.unchecked} unchecked.
+    <table style="margin-top:6px"><tr>${Object.keys(r.classes).map(k => `<th>${k}</th>`).join('')}</tr><tr>${Object.values(r.classes).map(v => `<td class="${v ? 'bad' : ''}">${v}</td>`).join('')}</tr></table>
+    ${src('GET /v1/admin/reconciliation/runs?limit=1')}</div>
+  <p class="small"><a href="http://localhost:3000" target="_blank">Open Grafana (Hub overview · Worker & outbox · Upstreams & cache)</a> for history beyond 24h.</p></div>`;
+}
+function B_dl() {
+  const g = dlGroups(); const byClass = { replayable: [], source_data: [] };
+  Object.entries(g).forEach(([code, cs]) => byClass[CLASS[code]].push([code, cs]));
+  const grp = ([code, cs]) => { const k = 'g_' + code; const confirming = B.confirm === k;
+    return `<div class="card" style="margin-bottom:10px"><div class="row"><input type="checkbox" title="select group" ${cs.every(c => B.sel.has(c.id)) ? 'checked' : ''} onchange="${JSON.stringify(cs.map(c => c.id)).replace(/"/g, "'")}.forEach(id=>this.checked?B.sel.add(id):B.sel.delete(id));B.confirm=null;render()"><b class="mono grow">${code}</b><span class="mut">${cs.length} · oldest ${age(Math.min(...cs.map(c => curStep(c).deadSince)))}</span>
+      ${CLASS[code] === 'replayable' ? (confirming ? `<button class="primary" onclick="B.confirm=null;${JSON.stringify(cs.map(c => c.id)).replace(/"/g, "'")}.forEach(id=>replay(id,'group replay ${code}'))">Confirm: replay ${cs.length}</button><button onclick="B.confirm=null;render()">cancel</button>`
+        : `<button onclick="B.confirm='${k}';render();setTimeout(()=>{if(B.confirm==='${k}'){B.confirm=null;render()}},5000)">Replay all ${cs.length}</button>`) : '<span class="small bad">no group replay for source_data</span>'}</div>
+      ${cs.map(c => `<div class="row small" style="border-top:1px solid var(--line);padding-top:6px;margin-top:6px"><input type="checkbox" ${B.sel.has(c.id) ? 'checked' : ''} onchange="this.checked?B.sel.add('${c.id}'):B.sel.delete('${c.id}');B.confirm=null;render()"><span class="mono clickable" onclick="B.screen='cases';B.queue='all';B.open='${c.id}';render()">${c.visitId}</span>
+        <span class="mut">${c.source} · ${STEP_LABEL[curStep(c).key]} · ${age(curStep(c).deadSince)}</span>${c.mappingNeed ? `<span>needs ${c.mappingNeed.kind} <code>${c.mappingNeed.localCode}</code></span>` : ''}<span class="grow"></span>
+        <button onclick="replay('${c.id}')">Replay</button><button class="danger" onclick="abandonModal('${c.id}')">Abandon…</button></div>`).join('')}</div>`; };
+  const sel = [...B.sel].map(id => CASES.find(c => c.id === id)).filter(c => c.status === 'dead_lettered');
+  const sd = sel.filter(c => CLASS[reasonOf(c)] === 'source_data').length;
+  const bar = `<div class="B-actions"><div class="row"><b class="grow">${sel.length} selected</b>
+    ${sd ? `<span class="small bad">${sd} classed source_data, likely to dead-letter again</span>` : ''}
+    ${B.confirm === 'sel' ? `<button class="primary" onclick="B.confirm=null;[...B.sel].forEach(id=>replay(id,'selection replay'));B.sel.clear();render()">Confirm: replay ${sel.length}</button><button onclick="B.confirm=null;render()">cancel</button>`
+      : `<button class="primary" ${sel.length ? '' : 'disabled'} onclick="B.confirm='sel';render();setTimeout(()=>{if(B.confirm==='sel'){B.confirm=null;render()}},5000)">Replay selected (${sel.length})</button>`}
+    <button ${sel.length ? '' : 'disabled'} onclick="B.sel.clear();B.confirm=null;render()">Clear</button></div></div>`;
+  return `<div style="padding:18px 22px;max-width:1000px"><h2>Dead-letter</h2>${bar}
+    ${src('GET /v1/dead-letters/summary → [{ reason, class, count, oldestSince }]\nGET /v1/cases?status=dead_lettered&reason=…  (per group)\ngroup replay = N × POST /v1/cases/{id}/replay')}
+    <h3>Replayable: fix the cause outside the case, then replay</h3>${byClass.replayable.sort((a, b) => b[1].length - a[1].length).map(grp).join('') || '<p class="mut">none</p>'}
+    <h3>Source data: only new source data fixes these, so abandon is suggested</h3>${byClass.source_data.map(grp).join('') || '<p class="mut">none</p>'}</div>`;
+}
+
+/* ================= VARIANT C: pipeline board + lanes + flow + matrix ================= */
+const C = { name: 'Pipeline board, flow & matrix', screen: 'cases', open: null, cell: null, typed: '', win: '1h' };
+function VariantC() {
+  const seg = (k, l) => `<a class="${C.screen === k ? 'on' : ''}" onclick="C.screen='${k}';C.open=null;render()">${l}</a>`;
+  return `<div class="C-top"><span class="brand">INTEGRATION HUB</span><div class="C-seg">${seg('cases', 'Cases')}${seg('status', 'Integration status')}${seg('dl', 'Dead-letter')}</div>
+    <span class="grow"></span><span class="small">${['waiting', 'active', 'dead_lettered'].map(s => `${badge(s)} ${CASES.filter(c => c.status === s).length}`).join(' ')}</span></div>
+    <div class="C-main">${C.screen === 'cases' ? (C.open ? C_case(CASES.find(c => c.id === C.open)) : C_board()) : C.screen === 'status' ? C_status() : C_dl()}</div>`;
+}
+function C_board() {
+  const live = filtered().filter(c => ['waiting', 'active', 'dead_lettered'].includes(c.status));
+  const done = CASES.filter(c => c.status === 'completed').length, ab = CASES.filter(c => c.status === 'abandoned');
+  return `<div class="row" style="margin-bottom:10px"><b>Open cases by current step</b>
+    <label class="row" style="gap:4px"><input type="checkbox" ${F.stalled ? 'checked' : ''} onchange="setF('stalled',this.checked)"> stalled only</label>
+    <select onchange="setF('status',this.value)">${['all', 'waiting', 'active', 'dead_lettered'].map(s => `<option ${F.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select>
+    <select onchange="setF('source',this.value)"><option value="all">any source</option>${SOURCES.map(s => `<option ${F.source === s ? 'selected' : ''}>${s}</option>`).join('')}</select>
+    <input placeholder="jump to visit number" onchange="const c=CASES.find(x=>x.visitId===this.value);if(c){C.open=c.id;render()}else toast('no such visit')"></div>
+  ${casesSrc()}
+  <div class="C-board">${STEPS.map(s => { const cs = live.filter(c => curStep(c).key === s);
+    return `<div class="C-col"><h4><span>${STEP_LABEL[s]}</span><span class="mut">${cs.length}</span></h4>
+    ${cs.sort((a, b) => ({ dead_lettered: 0, waiting: 1, active: 2 }[a.status] - { dead_lettered: 0, waiting: 1, active: 2 }[b.status])).map(c => `<div class="C-card st-${c.status}" onclick="C.open='${c.id}';render()">
+      <div class="row"><b class="mono grow small">${c.visitId}</b><span class="small mut">${c.source.slice(-1).toUpperCase()}</span></div>
+      <div class="small">${c.status === 'waiting' ? `⏳ ${c.waitingFor} · ${age(c.waitingSince)}` : c.status === 'dead_lettered' ? `✖ ${reasonOf(c)}` : `↻ ${curStep(c).state} · ${curStep(c).attempts.length} att.`}</div>
+      ${isStalled(c) ? '<span class="badge stalled">stalled</span>' : ''}</div>`).join('')}</div>`; }).join('')}
+    <div class="C-col" style="background:#f0fff4"><h4>Ended</h4><div class="C-card" onclick="setF('status','all')">✔ completed <b>${done}</b></div>
+      ${ab.map(c => `<div class="C-card" onclick="C.open='${c.id}';render()">⊘ <span class="mono small">${c.visitId}</span><div class="small mut">abandoned</div></div>`).join('')}
+      <div class="small mut">Ended cases are searched by visit number, not browsed.</div></div></div>`;
+}
+function C_case(c) {
+  const cur = curStep(c);
+  return `<div class="row"><button onclick="C.open=null;render()">← board</button><h2 class="grow" style="margin:0">Visit <span class="mono">${c.visitId}</span> <span class="mut small">${c.id} · ${c.source}</span></h2>${badge(c.status)}${stallB(c)}</div>
+  ${caseSrc(c)}
+  <div class="C-lanes">${c.steps.map(s => `<div class="C-lane ${cur && cur.key === s.key ? 'cur' : ''}">
+    <div class="small mut">${EVENT_OF[s.key]} ${c.events.some(e => e.type === EVENT_OF[s.key]) ? '✔ received' : '— not received'}</div>
+    <b>${STEP_LABEL[s.key]}</b><div><code>${s.state}</code>${s.deadReason && s.state === 'dead_lettered' ? ` <code class="bad">${s.deadReason}</code> ${clsB(s.deadReason)}` : ''}</div>
+    <div class="dots" title="attempts">${s.attempts.map(a => `<span class="d-${a.outcome}" title="#${a.n} ${a.outcome} ${a.code || ''}"></span>`).join('')}${s.attempts.length ? ` <span class="small mut">${s.attempts.length}</span>` : ''}</div>
+    ${s.remote ? `<div class="small mono">${s.remote.type}/${s.remote.id.slice(0, 8)}… v${s.remote.version}</div>` : ''}
+    ${s.pins ? `<details class="small"><summary>pinned</summary>${pinsHtml(s.pins)}</details>` : ''}
+    ${s.attempts.length ? `<details class="small"><summary>attempt log</summary><table>${attemptRows(s)}</table></details>` : ''}</div>`).join('')}</div>
+  ${c.status === 'waiting' ? `<div class="warn">Waiting for <code>${c.waitingFor}</code> since ${clock(c.waitingSince)} (${age(c.waitingSince)}).</div>` : ''}
+  ${mappingForm(c)}${abandonHtml(c)}
+  <div class="row" style="align-items:flex-start;margin-top:10px"><div class="card grow"><b>Rejection log</b><br>${rejHtml(c)}</div><div class="card grow"><b>Divergences</b><br>${divHtml(c)}</div><div class="card grow"><b>Traces</b><br><span class="small">${jaeger(c)}</span><br>${replaysHtml(c)}</div></div>
+  <div class="C-foot" style="margin-top:14px">${caseActions(c)}</div>`;
+}
+function C_status() {
+  const win = w => `<a class="${C.win === w ? 'on' : ''}" onclick="C.win='${w}';render()">${w}</a>`;
+  const node = (title, body, border = 'var(--line)') => `<div class="C-node" style="border-color:${border}"><b>${title}</b><div class="small" style="margin-top:6px">${body}</div></div>`;
+  const anyOpen = u => Object.values(METRICS.breaker[u]).some(v => v === 2);
+  const r = METRICS.recon;
+  return `<div class="row" style="margin-bottom:12px"><h2 class="grow" style="margin:0">Where is it slow or failing?</h2><div class="C-seg">${['15m', '1h', '24h'].map(win).join('')}</div></div>
+  ${src('One PromQL instant query per number, range = window, Next.js server → Prometheus. Boxes turn red/amber on fixed thresholds (no alerting; display only).')}
+  <div class="C-flow">
+    ${node('Source systems', `${SOURCES.map(s => `${s}`).join('<br>')}<br><br>${last(METRICS.ingestRate).toFixed(1)} ev/s sent`)}
+    ${node('Ingest (hub)', `p95 <b>${Math.round(last(METRICS.ingestP95))}ms</b><br>rejected ${last(METRICS.rejections).toFixed(2)}/s<br>duplicates ${last(METRICS.duplicates).toFixed(2)}/s`)}
+    ${node('Outbox', STEPS.map(s => `${STEP_LABEL[s]}: lag <b class="${last(METRICS.lag[s]) > 20 ? 'amber' : ''}">${Math.round(last(METRICS.lag[s]))}s</b>, ${METRICS.claimable[s]} claimable`).join('<br>'), STEPS.some(s => last(METRICS.lag[s]) > 20) ? 'var(--waiting)' : 'var(--line)')}
+    ${node('Workers', STEPS.map(s => `${STEP_LABEL[s]} <b class="${last(METRICS.success[s]) < 97 ? 'bad' : 'ok'}">${last(METRICS.success[s]).toFixed(1)}%</b>`).join('<br>') + '<br><span class="mut">success = completed ÷ (completed + dead-lettered)</span>')}
+    ${node('Upstreams', Object.entries(METRICS.up).map(([u, m]) => `<b>${u}</b> ${m.p95}ms · ${m.err}% err<br>${Object.entries(METRICS.breaker[u]).map(([w, v]) => `<span class="light" style="background:${lightColor(v)}" title="${w} ${lightName(v)}"></span>`).join('')} <span class="mut">${Object.entries(METRICS.breaker[u]).filter(([, v]) => v).map(([w, v]) => w + ' ' + lightName(v)).join(', ')}</span>`).join('<br>'), Object.keys(METRICS.up).some(anyOpen) ? 'var(--dead)' : 'var(--line)')}
+  </div>
+  <div class="row" style="margin-top:14px;align-items:flex-start">
+    <div class="card grow"><b>Cases</b><br>${['waiting', 'active', 'dead_lettered', 'completed', 'abandoned'].map(s => `${badge(s)} ${CASES.filter(c => c.status === s).length}`).join(' ')} <span class="badge stalled">stalled ${CASES.filter(isStalled).length}</span><br><span class="small">oldest dead-letter ${age(Math.min(...dlCases().map(c => curStep(c).deadSince)))}</span></div>
+    <div class="card grow"><b>Reconciliation</b> · <code>${r.status}</code> ${age(r.finished)} ago<br><span class="small">${Object.entries(r.classes).filter(([, v]) => v).map(([k, v]) => `<span class="bad">${k} ${v}</span>`).join(' · ') || 'no divergences'} · ${r.unchecked} unchecked</span>${src('GET /v1/admin/reconciliation/runs?limit=1')}</div></div>`;
+}
+function C_dl() {
+  const g = dlGroups(); const codes = Object.keys(g);
+  const cellCases = (code, s) => (g[code] || []).filter(c => curStep(c).key === s);
+  let list = '';
+  if (C.cell) { const [code, s] = C.cell.split('|'); const cs = s === '*' ? g[code] || [] : cellCases(code, s);
+    list = `<div class="card" style="margin-top:14px"><div class="row"><b class="grow"><code>${code}</code> ${s === '*' ? '' : 'at ' + STEP_LABEL[s]} · ${cs.length} case(s)</b> ${clsB(code)}
+      ${cs.length > 1 ? `<span class="small">type <b>${cs.length}</b> to replay all:</span><input style="width:60px" value="${C.typed}" oninput="C.typed=this.value;document.getElementById('cBulk').disabled=this.value!=='${cs.length}'">
+      <button class="primary" id="cBulk" ${C.typed === String(cs.length) ? '' : 'disabled'} onclick="${JSON.stringify(cs.map(c => c.id)).replace(/"/g, "'")}.forEach(id=>replay(id,'bulk ${code}'));C.cell=null;C.typed='';render()">Replay ${cs.length}</button>` : ''}</div>
+      <table>${cs.map(c => `<tr><td class="mono clickable" onclick="C.screen='cases';C.open='${c.id}';render()">${c.visitId}</td><td>${c.source}</td><td>${age(curStep(c).deadSince)}</td><td>${c.mappingNeed ? `needs ${c.mappingNeed.kind} <code>${c.mappingNeed.localCode}</code>` : ''}</td>
+        <td><button onclick="replay('${c.id}')">Replay</button> <button class="danger" onclick="abandonModal('${c.id}')">Abandon…</button></td></tr>`).join('')}</table>
+      ${src('Single replay fires immediately (replay is a conditional update; a double-click is a harmless 409). Bulk needs the typed count.')}</div>`; }
+  return `<h2>Dead-letter: reason × step</h2>${src('GET /v1/dead-letters/summary?by=reason,step → [{ reason, class, step, count, oldestSince }]')}
+  <div class="card" style="padding:0"><table class="C-matrix"><tr><th style="text-align:left">reason</th><th>class</th>${STEPS.map(s => `<th>${STEP_LABEL[s]}</th>`).join('')}<th>total</th><th>oldest</th></tr>
+  ${codes.map(code => `<tr><td style="text-align:left"><code>${code}</code></td><td>${clsB(code)}</td>${STEPS.map(s => { const n = cellCases(code, s).length;
+    return `<td class="${n ? 'hit' : 'mut'}" ${n ? `onclick="C.cell='${code}|${s}';C.typed='';render()" style="background:rgba(197,48,48,${0.08 + n * 0.12})"` : ''}>${n || '·'}</td>`; }).join('')}
+    <td class="hit" onclick="C.cell='${code}|*';C.typed='';render()">${g[code].length}</td><td>${age(Math.min(...g[code].map(c => curStep(c).deadSince)))}</td></tr>`).join('') || '<tr><td colspan="8" class="mut">Nothing dead-lettered.</td></tr>'}</table></div>${list}`;
+}
+
+/* ================= switcher + render ================= */
+const VARIANTS = { A: { fn: VariantA, st: A }, B: { fn: VariantB, st: B }, C: { fn: VariantC, st: C } };
+const KEYS = Object.keys(VARIANTS);
+const params = new URLSearchParams(location.search);
+let current = KEYS.includes(params.get('variant')) ? params.get('variant') : 'A';
+if (params.get('src') === '1') document.body.classList.add('showsrc');
+function go(delta) {
+  current = KEYS[(KEYS.indexOf(current) + delta + KEYS.length) % KEYS.length];
+  const p = new URLSearchParams(location.search); p.set('variant', current); history.replaceState(null, '', '?' + p); render();
+}
+function toggleSrc(on) { document.body.classList.toggle('showsrc', on); const p = new URLSearchParams(location.search); on ? p.set('src', '1') : p.delete('src'); history.replaceState(null, '', '?' + p); }
+function render() {
+  const y = window.scrollY;
+  document.getElementById('app').innerHTML = VARIANTS[current].fn();
+  document.getElementById('switcher').innerHTML = `<button onclick="go(-1)">←</button><b>${current}</b><span>(${VARIANTS[current].st.name})</span><button onclick="go(1)">→</button>
+    <label><input type="checkbox" ${document.body.classList.contains('showsrc') ? 'checked' : ''} onchange="toggleSrc(this.checked)"> data sources</label><span style="color:#888">PROTOTYPE</span>`;
+  window.scrollTo(0, y);
+}
+document.addEventListener('keydown', e => {
+  if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+  if (e.key === 'ArrowLeft') go(-1); if (e.key === 'ArrowRight') go(1); if (e.key === 'Escape') closeModal();
+});
+render();
+</script>
+</body>
+</html>
