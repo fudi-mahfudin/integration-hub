@@ -270,6 +270,58 @@ themselves have changed at least once. So treat the IHS numbers as
 - Changelog: KFA v1 product search was removed in v7.20 (27 Sep 2025)
   [NEW]. Use v2.
 
+## Addendum: official Postman collections (exported, read 2026-11-24)
+
+The repo owner exported three official collections from the SATUSEHAT public
+Postman workspace, and these were read offline. They are not in the repo.
+- [PM-00] "00. FHIR Resource - Contoh Penggunaan" (changelog ends 16 Dec 2024)
+- [PM-RJ] "01. Pelayanan - Rawat Jalan" (changelog ends 29 Aug 2026, "Versi Kedelapan")
+- [PM-MD] "Master Data API - APIGEE (v2.0) (PUBLIC)" (undated)
+
+What they add:
+
+- **The sandbox is one shared Google Cloud Healthcare FHIR store (strong
+  evidence of shared storage, not proof of shared reads).** POST responses
+  saved in [PM-RJ] carry `Location` headers of the form
+  `https://healthcare.googleapis.com/v1/projects/dto-ihs-stg/locations/asia-southeast2/datasets/stg/fhirStores/fhir-r4-staging/fhir/<Resource>/<id>/_history/<v>`.
+  So every sandbox client writes into one store, `fhir-r4-staging`. Whether
+  the API gateway filters searches by organisation is still unstated. Treat
+  searches as potentially returning other users' records. The leaked
+  `Location` header also means the hub must not parse the `Location` host.
+  Take ids from the response body.
+- **No DELETE anywhere.** Across all three collections the methods are GET,
+  POST, PUT and PATCH only (PM-00: 89/57/24/23; PM-RJ: 8/197/4/2). This
+  supports §2: test records are permanent.
+- **Dummy identities match the docs.** [PM-RJ] searches with the documented
+  dummy NIKs (for example patient `9271060312000001`, practitioner
+  `7209061211900001`). Its saved responses resolve to documented IHS numbers
+  (`P02478375538`, `10009880728`, pharmacist `10001915884`). [PM-00] also uses
+  some sample identities that are not in the docs' dummy table. They are not
+  recorded here. Use only the documented table.
+- **Org and Location still come from the user.** [PM-RJ]'s description says
+  "Please make sure that you have inserted Org_id in your environment before
+  testing". Every collection variable (`Patient_id`, `Location_id`,
+  `Practitioner_Apt_Id`, `Org_Farmasi`, ...) is empty in the export. No dummy
+  Organization or Location is shipped.
+- **Third host confirmed.** Saved responses in [PM-00] and [PM-RJ] mix
+  `api-satusehat-stg.dto` and `api-satusehat-dev.dto` hosts (conflict 1
+  below). They are examples recorded on different days. Don't validate hosts.
+- **KFA v2: the same token works, but the host differs from the docs.**
+  [PM-MD] has one collection-level bearer `{{token}}`. The STAGING folder
+  gets it from `{{auth_url_staging}}/accesstoken` =
+  `https://api-satusehat-stg.dto.kemkes.go.id/oauth2/v1` (the normal sandbox
+  OAuth). It then calls `{{base_url_staging}}/kfa-v2/products?identifier=kfa&code=...`
+  and `/kfa-v2/products/all?page=&size=&product_type=farmasi`, with saved
+  200 responses (`total: 17885` products). This is the clearest evidence so
+  far that **the ordinary sandbox credential is accepted by KFA v2**, with no
+  separate KFA credential. **New conflict:** `base_url_staging` is
+  `https://api-satusehat-stg.kemkes.go.id` (no `.dto`), while [KFA] gives
+  `https://api-satusehat-stg.dto.kemkes.go.id/kfa-v2`. Make the KFA base URL
+  configurable separately from the FHIR base. The 422 examples in [PM-MD]
+  are Postman lorem-ipsum placeholders, not real error shapes.
+- **No quotas.** No collection mentions a quota, reset or "limited" sandbox
+  data. The only "limit" hits are pagination parameters.
+
 ## Conflicts found
 
 1. **Response examples use a third host.** [PAT]'s sample responses use
@@ -283,7 +335,10 @@ themselves have changed at least once. So treat the IHS numbers as
 3. **KFA credential prerequisites** (verified EMR system, by email) vs
    [SBX] (any account) (see §4).
 4. **Farmasi vs Fasyankes DELETE:** [HAK] grants DELETE to Farmasi, but no
-   DELETE API is documented anywhere.
+   DELETE API is documented anywhere, and no official Postman collection
+   uses one.
+5. **KFA staging host:** [KFA] uses `api-satusehat-stg.dto.kemkes.go.id`,
+   while [PM-MD]'s `base_url_staging` is `api-satusehat-stg.kemkes.go.id`.
 
 ## Unstated / unverified
 
@@ -294,7 +349,9 @@ themselves have changed at least once. So treat the IHS numbers as
   sandbox data is "limited" or must not be exhausted. None found.
 - Whether DELETE actually works for a Farmasi-type credential, and how.
 - Whether the sandbox FHIR credential is accepted by KFA v2 without extra
-  approval. This needs one live check by the account owner.
+  approval. [PM-MD] now strongly suggests yes (same token, saved 200s). One
+  live check by the account owner would settle it, along with which KFA
+  staging host is current.
 - Whether real (non-dummy) NIKs resolve in the sandbox MPI. The docs only say
   the dummies are sandbox-only. They do not say that real NIKs fail there.
   Do not test with real NIKs.
@@ -302,8 +359,9 @@ themselves have changed at least once. So treat the IHS numbers as
   referenceable from another organisation's credential.
 - The "Template Registrasi Organization & Location" linked from [R-ORG] was
   not opened.
-- Postman: only the "04. Pelayanan - Farmasi" collection's metadata and
-  variables were read. The workspace list, the Sandbox **environment** file
+- Postman: the "04. Pelayanan - Farmasi" collection's metadata and
+  variables, plus the three exported collections in the addendum, were read.
+  The workspace list, the Sandbox **environment** file
   (`s.kemkes.go.id/EnvironmentPostmanSATUSEHAT`, JS-only) and the
   "Prerequisites" collection were not read. They may hold more dummy values.
 - The SATUSEHAT FAQ (https://faq.kemkes.go.id/category/satusehat-platform)
