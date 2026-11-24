@@ -46,6 +46,14 @@ _Avoid_: Cancelled case, closed case, expired case
 One ordered submission to SATUSEHAT within a case: create visit, submit prescription, submit dispense, update visit.
 _Avoid_: Task, job, stage
 
+**Attempt**:
+One try at carrying out a step. A step may take several attempts; a worker crashing mid-attempt still counts as one.
+_Avoid_: Try, run, execution
+
+**Retry**:
+A further attempt the hub makes on its own after a transient failure, up to a fixed limit. When the limit is reached, the case is dead-lettered.
+_Avoid_: Replay (that is an operator's deliberate action), resend (that is the source system's act)
+
 **Dead-lettered case**:
 A case whose step failed permanently. Its downstream steps are held and it waits for an operator to replay or abandon it.
 _Avoid_: Failed case, poisoned case
@@ -58,9 +66,17 @@ _Avoid_: Retry (retries are automatic, replay is deliberate), rerun
 The guarantee that each step causes exactly one record at SATUSEHAT, however many times it is delivered or attempted.
 _Avoid_: Exactly-once
 
+**Duplicate submission**:
+More than one record at SATUSEHAT caused by a single step (for the update visit step: more than one applied change). It breaks effect-once.
+_Avoid_: Duplicate ingest (that is the same source event arriving twice at the hub), double post
+
 **Mapping**:
 A stored correspondence, kept by the operator, between a source system's local code and its national counterpart, such as a local drug code to a KFA code, or a local location code to a SATUSEHAT location. Patients and practitioners are not mapped: their IHS numbers are looked up for each visit.
 _Avoid_: Lookup table, translation
+
+**Reconciliation**:
+A periodic or on-request check that compares cases at rest with their records at SATUSEHAT and reports every divergence. It only reports; it never changes a case.
+_Avoid_: Sync, audit, repair
 
 **Divergence**:
 A disagreement between a case's local state and the matching record at SATUSEHAT, found by reconciliation.
@@ -89,3 +105,29 @@ A KFA code level that names a specific marketed product. Required on a dispense.
 **Substitution**:
 A dispense whose actual product is neither the prescribed actual product nor one derived from the prescribed virtual product, but has exactly the same active ingredients, such as a different strength or a different brand. It is flagged as such on the dispense. A dispense with different active ingredients (a therapeutic substitution) is not supported.
 _Avoid_: Replacement, swap
+
+## Test side
+
+**Fixture**:
+A synthetic response that the mock SATUSEHAT sends in place of the real platform, success or error, filled with fake values. Each fixture records where its shape came from and whether that shape has been confirmed against the sandbox.
+_Avoid_: Replay fixture (replay is an operator action on a dead-lettered case), recording (that is a real sandbox response, which is never committed)
+
+**Contract check**:
+A manual comparison of how the real SATUSEHAT sandbox and the mock SATUSEHAT answer the same requests, by shape only (status, headers, fields and their types), never by value. It is how a change in the real platform is noticed.
+_Avoid_: Drift check (drift is avoided for divergence), integration test
+
+**Live check**:
+A manual run of a fixed set of fictional cases through the whole hub against the real SATUSEHAT sandbox, confirming that each case's effects land there as expected. Where a contract check asks whether the answers have the right shape, a live check asks whether a visit actually gets delivered.
+_Avoid_: Smoke test, integration test, sandbox run
+
+**Big run**:
+The fixed, published run of 10,000 source events, a fifth of them duplicates, with platform failures injected, whose commitments are fixed before any result. It passes only if no event is lost, nothing is submitted twice, and every case keeps its order.
+_Avoid_: Load test, stress test, benchmark
+
+**Load test**:
+A run that measures how fast the hub accepts source events under a fixed arrival rate, with no injected failures, against thresholds fixed beforehand.
+_Avoid_: Big run, benchmark
+
+**Cache run**:
+A fixed set of paired runs, with no injected failures, that compares the hub with and without a cache to decide whether that cache stays. Its commitments are fixed before any result, and a cache that doesn't clear the agreed bar is removed.
+_Avoid_: Big run, load test, benchmark
