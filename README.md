@@ -100,6 +100,7 @@ The payload scope is one non-compounded, single-dose scenario and one substituti
 | The outpatient-pharmacy (pharmacy-side) visit flow | Only the hospital-side flow is in scope; the hub never sends the pharmacy service type |
 | Multi-item prescriptions | One step in flight per case assumes one item per prescription; rejected at ingest with `UNSUPPORTED_MULTI_ITEM` (ADR 0004) |
 | Therapeutic substitution | Only same-ingredient substitution (a strength change or brand swap) is supported; a different ingredient set dead-letters the case with `UNSUPPORTED_THERAPEUTIC_SUBSTITUTION` |
+| Diagnosis on the closing Encounter | Conditions are out of scope; the update visit PUT sends no `Encounter.diagnosis`. Known risk: only SATUSEHAT's Encounter resource page stars it, so the real platform may require it on a `finished` Encounter (#9) |
 | Patient creation | Registration is not part of the pharmacy flow; an unknown patient dead-letters the case with `PATIENT_NOT_FOUND` for an operator fix and replay |
 
 ## Commitments

@@ -21,7 +21,7 @@ export interface FhirResource {
 }
 
 /**
- * The SATUSEHAT Adapter's FHIR surface: search and create, each call with
+ * The SATUSEHAT Adapter's FHIR surface: search, create, read and update, each call with
  * the process's bearer token. One instance per process.
  */
 export interface FhirClient {
@@ -29,6 +29,10 @@ export interface FhirClient {
   search(type: string, params: Record<string, string>): Promise<FhirResource[]>;
   /** `POST {fhir}/{type}`; resolves to the created resource as the platform returns it. */
   create(type: string, body: Record<string, unknown>): Promise<FhirResource>;
+  /** `GET {fhir}/{type}/{id}`; a 404 throws `PlatformError` like any non-2xx. */
+  read(type: string, id: string): Promise<FhirResource>;
+  /** `PUT {fhir}/{type}/{id}`; resolves to the stored resource (with its new `meta.versionId`). */
+  update(type: string, id: string, body: Record<string, unknown>): Promise<FhirResource>;
   /**
    * The same client (same token), reporting every FHIR answer's HTTP status to
    * `onStatus`: how an attempt learns its status for the attempt log.
@@ -101,6 +105,12 @@ export function createFhirClient(config: SatusehatConfig, clock: Clock, token: T
     },
     async create(type, body) {
       return (await fhirCall(onStatus, 'POST', `/${type}`, body)) as FhirResource;
+    },
+    async read(type, id) {
+      return (await fhirCall(onStatus, 'GET', `/${type}/${encodeURIComponent(id)}`)) as FhirResource;
+    },
+    async update(type, id, body) {
+      return (await fhirCall(onStatus, 'PUT', `/${type}/${encodeURIComponent(id)}`, body)) as FhirResource;
     },
     observe: (next) =>
       view((status) => {
