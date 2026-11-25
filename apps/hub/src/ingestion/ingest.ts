@@ -12,7 +12,7 @@ import { fingerprint } from './fingerprint.js';
 import { createNaiveRedisStore } from './naive-redis-store.js';
 import { createPostgresStore } from './postgres-store.js';
 
-/** A stored, replayable ingest answer. `body` is kept as sent, so a replay is byte-for-byte. */
+/** An ingest answer, stored with its key. `body` is kept as sent, so a duplicate ingest gets it byte for byte. */
 export interface IngestResponse {
   status: number;
   headers: Record<string, string>;
@@ -34,7 +34,7 @@ export interface IdempotencyStore {
   lookup(source: SourceSystem, key: string): Promise<StoredKey | undefined>;
   /**
    * Resolves to the new answer, or to `{ raced }` when a concurrent request
-   * with the same key committed first (the caller then replays its answer).
+   * with the same key committed first (the caller then returns its stored answer).
    */
   record(
     source: SourceSystem,
@@ -69,12 +69,12 @@ export function createIngest(deps: IngestDeps): Ingest {
       const print = fingerprint(rawBody, parsed);
 
       const known = await store.lookup(source, key);
-      if (known) return replay(known, print);
+      if (known) return storedAnswer(known, print);
 
       try {
         const event = validateEvent(parsed);
         const result = await store.record(source, key, print, (trx) => acceptEvent(trx, source, event, deps.clock()));
-        return 'raced' in result ? replay(result.raced, print) : result;
+        return 'raced' in result ? storedAnswer(result.raced, print) : result;
       } catch (err) {
         // A key reused for another body is about the key, not the visit: not logged.
         if (err instanceof Problem && err.status < 500 && err.code !== 'IDEMPOTENCY_KEY_REUSED') await logRejection(deps.db, source, parsed, err.code, deps.clock());
@@ -106,8 +106,12 @@ async function logRejection(db: Kysely<Database>, source: SourceSystem, parsed: 
     .execute();
 }
 
-/** Same key and fingerprint: the original answer verbatim. Same key, other body: 422 (#7). */
-function replay(known: StoredKey, print: string): IngestResponse {
+/**
+ * A duplicate ingest: same key and fingerprint gets the stored answer verbatim
+ * (flagged by the `Idempotent-Replayed` header of the API contract). Same key,
+ * other body: 422 (#7).
+ */
+function storedAnswer(known: StoredKey, print: string): IngestResponse {
   if (known.fingerprint !== print) throw new Problem(422, 'IDEMPOTENCY_KEY_REUSED');
   return { ...known.response, headers: { ...known.response.headers, 'idempotent-replayed': 'true' } };
 }

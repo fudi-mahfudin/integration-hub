@@ -77,9 +77,9 @@ Source systems deliver at least once; the hub deduplicates on ingest and preserv
 
 ### Naive versus real idempotency
 
-`IDEMPOTENCY_STORE=naive-redis` switches ingest to a deliberately broken, clearly labelled store (`apps/hub/src/ingestion/naive-redis-store.ts`) kept next to the real one to show why ADR 0003 exists. It does what looks obvious: GET the idempotency key from Redis, and if it is missing, accept the event and SET the key. Every sequential test passes. Under concurrent duplicates, though, all requests GET "missing" before the first one SETs, so all of them try to accept; one wins and the rest answer `409 EVENT_ALREADY_RECORDED` instead of replaying the original `202`. (Redis may also drop any key at any time, which produces the same wrong answer.)
+`IDEMPOTENCY_STORE=naive-redis` switches ingest to a deliberately broken, clearly labelled store (`apps/hub/src/ingestion/naive-redis-store.ts`) kept next to the real one to show why ADR 0003 exists. It does what looks obvious: GET the idempotency key from Redis, and if it is missing, accept the event and SET the key. Every sequential test passes. Under concurrent duplicates, though, all requests GET "missing" before the first one SETs, so all of them try to accept; one wins and the rest answer `409 EVENT_ALREADY_RECORDED` instead of returning the stored `202`. (Redis may also drop any key at any time, which produces the same wrong answer.)
 
-The real store (`IDEMPOTENCY_STORE=postgres`, the default) inserts the key row first, inside the same short transaction that opens the case. A concurrent duplicate blocks on that row's unique index until the first request commits, then finds it and replays its answer. The same race test (`apps/hub/test/ingest-race.test.ts`) runs against both stores, with the naive run marked `test.fails`. To watch it:
+The real store (`IDEMPOTENCY_STORE=postgres`, the default) inserts the key row first, inside the same short transaction that opens the case. A concurrent duplicate blocks on that row's unique index until the first request commits, then finds it and returns its stored answer. The same race test (`apps/hub/test/ingest-race.test.ts`) runs against both stores, with the naive run marked `test.fails`. To watch it:
 
 ```sh
 pnpm deps:up

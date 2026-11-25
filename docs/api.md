@@ -91,7 +91,7 @@ Only a `202` consumes the key: after any `4xx`/`5xx` nothing is recorded against
 
 ### Idempotency key retention
 
-**An accepted key is kept for at least 24 hours** (`IDEMPOTENCY_RETENTION_HOURS`, never below 24), then deleted by an hourly purge. Until it is purged it keeps replaying. After that, an identical resend of an event that was recorded gets `409 EVENT_ALREADY_RECORDED` instead of the replay: the event is still recorded exactly once, only the answer differs. Resend within 24 hours to be sure of a replay.
+**An accepted key is kept for at least 24 hours** (`IDEMPOTENCY_RETENTION_HOURS`, never below 24), then deleted by an hourly purge. Until it is purged a duplicate ingest gets the stored answer. After that, an identical resend of an event that was recorded gets `409 EVENT_ALREADY_RECORDED` instead of the stored answer: the event is still recorded exactly once, only the answer differs. Resend within 24 hours to be sure of the stored answer.
 
 ## `GET /v1/cases/{id}`
 

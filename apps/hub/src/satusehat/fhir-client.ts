@@ -192,10 +192,10 @@ function createTokenProvider(config: SatusehatConfig, clock: Clock): TokenProvid
 /** A KFA product as KFA v2 describes it (#10): what the drug rules and the MedicationRequest need. */
 export interface KfaDetails {
   code: string;
-  /** 91 ingredient, 92 product template, 93 product: the code's first two digits (KFA's numbering). */
+  /** 91 ingredient, 92 virtual product, 93 actual product (GLOSSARY): the code's first two digits (KFA's numbering). */
   level: number;
   display: string;
-  /** For a 93: its 92 (`product_template.kfa_code`). */
+  /** For an actual product (93): its virtual product (92), KFA's `product_template.kfa_code`. */
   parent92: string | null;
   /** The set of active-ingredient (91) codes (`active_ingredients[].kfa_code`), sorted. */
   ingredients: string[];

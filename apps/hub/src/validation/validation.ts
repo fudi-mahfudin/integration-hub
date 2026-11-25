@@ -45,9 +45,9 @@ export interface MappingUse {
 /** A KFA product as the drug mapping and KFA details provide it (#9, #10). */
 export interface KfaProduct {
   code: string;
-  /** 91 ingredient, 92 product template, 93 product. */
+  /** 91 ingredient, 92 virtual product, 93 actual product (GLOSSARY). */
   level: number;
-  /** For a 93: its 92. */
+  /** For an actual product (93): its virtual product (92). */
   parent92: string | null;
   /** The set of active-ingredient (91) codes. */
   ingredients: readonly string[];

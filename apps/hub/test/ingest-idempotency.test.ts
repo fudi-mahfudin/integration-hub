@@ -55,7 +55,7 @@ describe('ingest: duplicate ingest and key reuse', () => {
     expect(otherWithFreshKey.status).toBe(202);
   });
 
-  it('a duplicate is replayed, never re-validated: key lookup comes before the event schema', async () => {
+  it('a duplicate gets the stored answer, never re-validated: key lookup comes before the event schema', async () => {
     const key = randomUUID();
     await postEvent(hub.baseUrl, { idempotencyKey: key });
 
@@ -65,7 +65,7 @@ describe('ingest: duplicate ingest and key reuse', () => {
     expect(await res.json()).toMatchObject({ code: 'IDEMPOTENCY_KEY_REUSED' });
   });
 
-  it('the replay keeps the caseStatus snapshot taken at first acceptance', async () => {
+  it('the stored answer keeps the caseStatus snapshot taken at first acceptance', async () => {
     const key = randomUUID();
     const event = visitStarted();
     const first = await postEvent(hub.baseUrl, { idempotencyKey: key, body: event });

@@ -65,7 +65,7 @@ describe('naive-redis store, sequentially', () => {
     await hub?.close();
   });
 
-  it('looks correct: a sequential resend is replayed and key reuse is rejected', async () => {
+  it('looks correct: a sequential resend gets the stored answer and key reuse is rejected', async () => {
     const idempotencyKey = randomUUID();
     const body = visitStarted();
     const first = await postEvent(hub.baseUrl, { idempotencyKey, body });
