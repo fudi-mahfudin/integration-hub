@@ -13,6 +13,10 @@
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
-    "demo:naive-race": "pnpm --filter @integration-hub/hub demo:naive-race"
+    "demo:naive-race": "pnpm --filter @integration-hub/hub demo:naive-race",
+    "lint:boundaries": "depcruise apps packages --config .dependency-cruiser.cjs"
+  },
+  "devDependencies": {
+    "dependency-cruiser": "^18.9.0"
   }
 }
