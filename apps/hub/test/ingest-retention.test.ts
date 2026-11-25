@@ -34,7 +34,7 @@ describe('ingest: idempotency key retention', () => {
     expect(await resend.json()).toMatchObject({ code: 'EVENT_ALREADY_RECORDED' });
   });
 
-  it('keeps a key younger than 24h: it still replays after a purge', async () => {
+  it('keeps a key younger than 24h: its stored answer is still returned after a purge', async () => {
     const idempotencyKey = randomUUID();
     const body = visitStarted();
     await postEvent(hub.baseUrl, { idempotencyKey, body });
@@ -47,7 +47,7 @@ describe('ingest: idempotency key retention', () => {
     expect(resend.headers.get('idempotent-replayed')).toBe('true');
   });
 
-  it('a key is only kept until purged: unpurged, an old key still replays', async () => {
+  it('a key is only kept until purged: unpurged, an old key still gets its stored answer', async () => {
     const idempotencyKey = randomUUID();
     const body = visitStarted();
     await postEvent(hub.baseUrl, { idempotencyKey, body });

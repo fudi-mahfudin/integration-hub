@@ -106,4 +106,40 @@ describe('worker and outbox', () => {
     expect(view.steps[0]?.remote).toBeNull();
     expectAtMostOneStepInMotion(view);
   });
+  it('a platform 4xx with an OperationOutcome is permanent: the step dead-letters at once, no retry', async () => {
+    // The validator rejects the Encounter create (400 OperationOutcome).
+    await mockClient.setFaults({
+      seed: 1,
+      rules: [{ id: 'reject-create', match: { method: 'POST', resourceType: 'Encounter' }, kind: 'http_400', rate: 1 }],
+    });
+    const env = { ...satusehatEnv(mock.baseUrl, database.url), WORKER_RETRY_DELAY_MS: '10' };
+    const hub = await start(bootHub(env));
+    await start(bootWorker(env));
+
+    const view = await waitFor(hub, await send(hub, worldVisitStarted()), (v) => v.status !== 'active');
+
+    expect(view.status).toBe('dead_lettered');
+    expect(view.steps[0]).toMatchObject({ state: 'dead_lettered', deadLetterReason: 'PAYLOAD_INVALID', attempts: 1, remote: null });
+    expect(view.steps[0]?.attemptLog).toMatchObject([{ attempt: 1, outcome: 'dead_lettered', errorCode: 'PAYLOAD_INVALID', httpStatus: 400 }]);
+    expect((await mockClient.log({ resourceType: 'Encounter' })).filter((e) => e.method === 'POST')).toHaveLength(1);
+    expectAtMostOneStepInMotion(view);
+  });
+
+  for (const kind of ['http_401', 'http_429', 'http_500'] as const) {
+    it(`a platform ${kind.slice(5)} stays transient: the step is retried`, async () => {
+      await mockClient.setFaults({
+        seed: 1,
+        rules: [{ id: 'fail-create', match: { method: 'POST', resourceType: 'Encounter' }, kind, firstN: 2 }],
+      });
+      const env = { ...satusehatEnv(mock.baseUrl, database.url), WORKER_RETRY_DELAY_MS: '10' };
+      const hub = await start(bootHub(env));
+      await start(bootWorker(env));
+
+      const view = await waitFor(hub, await send(hub, worldVisitStarted()), createVisitDone);
+
+      expect(view.steps[0]?.deadLetterReason).toBeNull();
+      expect(view.steps[0]?.attemptLog.map((a) => a.outcome)).toContain('retry_wait');
+      expectAtMostOneStepInMotion(view);
+    });
+  }
 });

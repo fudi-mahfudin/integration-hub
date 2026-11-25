@@ -1,3 +1,4 @@
+import { sysIdSystem } from '../satusehat/systems.js';
 import { checkTime, isObject, reference, text } from './payload-checks.js';
 import type { Violation } from './validation.js';
 
@@ -11,7 +12,7 @@ const ENCOUNTER_CLASSES = ['AMB', 'IMP', 'EMER'];
 export function encounterRules(e: Record<string, any>, organizationId: string): Violation[] {
   const out: Violation[] = [];
   const fail = (rule: string, path: string, message: string) => out.push({ code: 'PAYLOAD_INVALID', rule, path, message });
-  const system = `http://sys-ids.kemkes.go.id/encounter/${organizationId}`;
+  const system = sysIdSystem('encounter', organizationId);
 
   const identifiers: any[] = Array.isArray(e.identifier) ? e.identifier : [];
   const own = identifiers.findIndex((i) => i?.system === system);

@@ -1,6 +1,7 @@
 import { findIhsNumber, type SourcePerson } from '../lookup/people.js';
 import { findLocationId } from '../mapping/mappings.js';
 import { sourceToPlatformTime } from '../time.js';
+import { sysIdSystem } from '../satusehat/systems.js';
 import { checkStep, searchThenCreate, sourceEvent, type DeadLettered, type StepRunner } from './step-runner.js';
 
 const ENCOUNTER_CLASS_DISPLAY: Record<string, string> = {
@@ -9,8 +10,6 @@ const ENCOUNTER_CLASS_DISPLAY: Record<string, string> = {
   EMER: 'emergency',
 };
 
-/** `http://sys-ids.kemkes.go.id/encounter/{org}`: the visit's identifier system (#6, #9). */
-export const encounterSystem = (organizationId: string) => `http://sys-ids.kemkes.go.id/encounter/${organizationId}`;
 
 /** What create visit pins on completion (#10); later steps read these, never the live mappings. */
 export interface CreateVisitPins {
@@ -49,7 +48,7 @@ export const createVisit: StepRunner = async (step, { db, fhir }, { used }) => {
   used.practitioner = practitioner ?? null;
   if (practitioner === undefined) return { outcome: 'dead_lettered', reason: 'PRACTITIONER_NOT_FOUND' };
 
-  const identifier = { system: encounterSystem(organizationId), value: step.visitId };
+  const identifier = { system: sysIdSystem('encounter', organizationId), value: step.visitId };
   const pins: CreateVisitPins = { patientIhs: patient.ihsNumber, practitionerIhs: practitioner.ihsNumber, locationId };
   const encounter = visitEncounter({
     organizationId,
@@ -83,7 +82,7 @@ export function visitEncounter(v: {
   const finished = v.end !== undefined;
   return {
     resourceType: 'Encounter',
-    identifier: [{ system: encounterSystem(v.organizationId), value: v.visitId }],
+    identifier: [{ system: sysIdSystem('encounter', v.organizationId), value: v.visitId }],
     status: finished ? 'finished' : 'arrived',
     class: {
       system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode',

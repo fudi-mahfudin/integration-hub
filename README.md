@@ -34,10 +34,13 @@ The hub never migrates itself: always run `pnpm migrate` before starting it. The
 | Path | What |
 |---|---|
 | `apps/hub` | The hub: one NestJS + Fastify codebase, deployed as the hub service (`src/main.ts`) and the worker process (`src/worker-main.ts`) (ADR 0001) |
+| `apps/hub/seed/mappings.json` | The operator mapping seed (locations and drugs), upserted at hub boot |
+| `packages/mock-satusehat` | The mock SATUSEHAT: platform surface, its own validation (ADR 0006), faults and holds, the world dataset; see its [README](packages/mock-satusehat/README.md) |
+| `bigrun.commitments.json` | Every number an evidence run is judged by (see Commitments) |
 | `compose.yaml` | Local infrastructure; only components from the closed list |
-| `.github/workflows/ci.yml` | CI: the same `pnpm test` against Postgres and Redis service containers |
+| `.github/workflows/ci.yml` | CI: boundary lint, typecheck and the same `pnpm test` against Postgres and Redis service containers |
 
-Later: `packages/mock-satusehat`, `packages/simulator`, `apps/dashboard`.
+Later: `packages/simulator`, `apps/dashboard`.
 
 ## Decisions
 
@@ -77,9 +80,9 @@ Source systems deliver at least once; the hub deduplicates on ingest and preserv
 
 ### Naive versus real idempotency
 
-`IDEMPOTENCY_STORE=naive-redis` switches ingest to a deliberately broken, clearly labelled store (`apps/hub/src/ingestion/naive-redis-store.ts`) kept next to the real one to show why ADR 0003 exists. It does what looks obvious: GET the idempotency key from Redis, and if it is missing, accept the event and SET the key. Every sequential test passes. Under concurrent duplicates, though, all requests GET "missing" before the first one SETs, so all of them try to accept; one wins and the rest answer `409 EVENT_ALREADY_RECORDED` instead of replaying the original `202`. (Redis may also drop any key at any time, which produces the same wrong answer.)
+`IDEMPOTENCY_STORE=naive-redis` switches ingest to a deliberately broken, clearly labelled store (`apps/hub/src/ingestion/naive-redis-store.ts`) kept next to the real one to show why ADR 0003 exists. It does what looks obvious: GET the idempotency key from Redis, and if it is missing, accept the event and SET the key. Every sequential test passes. Under concurrent duplicates, though, all requests GET "missing" before the first one SETs, so all of them try to accept; one wins and the rest answer `409 EVENT_ALREADY_RECORDED` instead of returning the stored `202`. (Redis may also drop any key at any time, which produces the same wrong answer.)
 
-The real store (`IDEMPOTENCY_STORE=postgres`, the default) inserts the key row first, inside the same short transaction that opens the case. A concurrent duplicate blocks on that row's unique index until the first request commits, then finds it and replays its answer. The same race test (`apps/hub/test/ingest-race.test.ts`) runs against both stores, with the naive run marked `test.fails`. To watch it:
+The real store (`IDEMPOTENCY_STORE=postgres`, the default) inserts the key row first, inside the same short transaction that opens the case. A concurrent duplicate blocks on that row's unique index until the first request commits, then finds it and returns its stored answer. The same race test (`apps/hub/test/ingest-race.test.ts`) runs against both stores, with the naive run marked `test.fails`. To watch it:
 
 ```sh
 pnpm deps:up
@@ -102,6 +105,7 @@ The payload scope is one non-compounded, single-dose scenario and one substituti
 | Therapeutic substitution | Only same-ingredient substitution (a strength change or brand swap) is supported; a different ingredient set dead-letters the case with `UNSUPPORTED_THERAPEUTIC_SUBSTITUTION` |
 | Diagnosis on the closing Encounter | Conditions are out of scope; the update visit PUT sends no `Encounter.diagnosis`. Known risk: only SATUSEHAT's Encounter resource page stars it, so the real platform may require it on a `finished` Encounter (#9) |
 | Patient creation | Registration is not part of the pharmacy flow; an unknown patient dead-letters the case with `PATIENT_NOT_FOUND` for an operator fix and replay |
+| Person lookup other than by NIK (for now) | Patients and practitioners are looked up by NIK only until the fallbacks of #32 (mother's NIK, name + birth date + gender) land; a visit whose patient has no NIK, or a NIK SATUSEHAT does not match to exactly one person, dead-letters with `PATIENT_NOT_FOUND` (`PRACTITIONER_NOT_FOUND` for a practitioner) |
 
 ## Commitments
 

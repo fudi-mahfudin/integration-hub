@@ -116,7 +116,10 @@ describe('submit prescription', () => {
     expect(view.steps[1]).toMatchObject({
       state: 'completed',
       remote: { type: 'MedicationRequest', id: created.id, version: created.meta.versionId },
-      pins: { kfaCode: drug.code, kfaLevel: 93, parent92: drug.parentCode, ingredients: [...drug.ingredientCodes].sort(), requesterIhs: worldPhysician.ihs },
+      pins: {
+        product: { code: drug.code, level: 93, parent92: drug.parentCode, ingredients: [...drug.ingredientCodes].sort() },
+        requesterIhs: worldPhysician.ihs,
+      },
     });
     expect(view.steps[1]!.attemptLog).toMatchObject([
       { attempt: 1, outcome: 'completed', httpStatus: 201, used: { drug: { localCode: worldDrug(93).code, kfaCode: drug.code } } },
@@ -130,7 +133,7 @@ describe('submit prescription', () => {
 
     const view = await visit(worldPrescriptionWritten(newVisit(), { drugCode: drug.code }), prescriptionDone);
 
-    expect(view.steps[1]!.pins).toMatchObject({ kfaCode: drug.product.code, kfaLevel: 92, parent92: null });
+    expect(view.steps[1]!.pins).toMatchObject({ product: { code: drug.product.code, level: 92, parent92: null } });
   });
 
   it('an unmapped drugCode dead-letters with MAPPING_MISSING before any KFA or MedicationRequest call', async () => {

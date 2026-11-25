@@ -8,7 +8,7 @@ class KeyTaken extends Error {}
  * The real store (ADR 0003): the key row is inserted first in the same short
  * transaction as the case writes. A concurrent request with the same key
  * blocks on the primary key until the first commits, then sees the row and
- * replays it; if the first rolls back, the waiter proceeds as if alone.
+ * returns its stored answer; if the first rolls back, the waiter proceeds as if alone.
  */
 export function createPostgresStore({ db, clock, config }: IngestDeps): IdempotencyStore {
   const lookup = async (source: SourceSystem, key: string): Promise<StoredKey | undefined> => {

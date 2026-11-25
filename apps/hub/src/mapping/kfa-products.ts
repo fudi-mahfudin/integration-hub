@@ -1,6 +1,6 @@
 import type { Kysely } from 'kysely';
 import type { Database } from '../db/database.js';
-import type { KfaClient, KfaDetails } from '../satusehat/fhir-client.js';
+import { kfaLevel, type KfaClient, type KfaDetails } from '../satusehat/fhir-client.js';
 import type { Clock } from '../tokens.js';
 
 /**
@@ -11,10 +11,12 @@ import type { Clock } from '../tokens.js';
  */
 export async function kfaProduct(db: Kysely<Database>, kfa: KfaClient, code: string, clock: Clock): Promise<KfaDetails | undefined> {
   const row = await db.selectFrom('kfa_product').selectAll().where('kfa_code', '=', code).executeTakeFirst();
-  if (row) {
+  // Only 91/92/93 rows are ever stored (`kfa.product` returns nothing else).
+  const level = row ? kfaLevel(row.kfa_code) : undefined;
+  if (row && level !== undefined) {
     return {
       code: row.kfa_code,
-      level: row.level,
+      level,
       display: row.display,
       parent92: row.parent_92,
       ingredients: row.ingredients,

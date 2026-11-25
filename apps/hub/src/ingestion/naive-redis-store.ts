@@ -10,7 +10,7 @@ import type { IdempotencyStore, IngestDeps, StoredKey } from './ingest.js';
  * concurrent duplicates, several requests all GET "missing" before any of
  * them SETs, so all of them try to accept; the first wins and the rest hit
  * the case's own uniqueness and answer `409 EVENT_ALREADY_RECORDED` instead
- * of replaying the original `202`. Redis may also lose keys at any time,
+ * of returning the stored `202`. Redis may also lose keys at any time,
  * which turns a duplicate ingest into the same wrong answer. The race test in
  * `test/ingest-race.test.ts` (marked `test.fails` for this store) and
  * `pnpm demo:naive-race` show it.

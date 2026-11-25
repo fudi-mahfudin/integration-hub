@@ -139,7 +139,11 @@ describe('submit dispense', () => {
     expect(view.steps[2]).toMatchObject({
       state: 'completed',
       remote: { type: 'MedicationDispense', id: created.id, version: created.meta.versionId },
-      pins: { kfaCode: PCT500_A, kfaLevel: 93, parent92: PCT500, ingredients: dispensed.ingredientCodes, pharmacistIhs: worldPharmacist.ihs, wasSubstituted: false },
+      pins: {
+        product: { code: PCT500_A, level: 93, parent92: PCT500, ingredients: dispensed.ingredientCodes },
+        pharmacistIhs: worldPharmacist.ihs,
+        wasSubstituted: false,
+      },
     });
     expect(view.steps[2]!.attemptLog).toMatchObject([
       { attempt: 1, outcome: 'completed', httpStatus: 201, used: { drug: { localCode: drugCode(PCT500_A), kfaCode: PCT500_A }, pharmacist: { ihsNumber: worldPharmacist.ihs } } },
@@ -153,7 +157,7 @@ describe('submit dispense', () => {
     // `undefined` drops the field from the JSON body.
     const { view } = await visit(PCT500, { drugCode: drugCode(PCT500_B), batch: undefined });
 
-    expect(view.steps[2]).toMatchObject({ state: 'completed', pins: { kfaCode: PCT500_B, wasSubstituted: false } });
+    expect(view.steps[2]).toMatchObject({ state: 'completed', pins: { product: { code: PCT500_B }, wasSubstituted: false } });
     const sent = await mdSent();
     expect(sent.substitution).toEqual({ wasSubstituted: false });
     expect(sent.contained[0].batch).toBeUndefined();
@@ -164,7 +168,7 @@ describe('submit dispense', () => {
 
     const { view } = await visit(PCT500_A, { drugCode: drugCode(PCT650_A), substitution: { reasonCode: 'OS' } });
 
-    expect(view.steps[2]).toMatchObject({ state: 'completed', pins: { kfaCode: PCT650_A, parent92: '92000002', wasSubstituted: true } });
+    expect(view.steps[2]).toMatchObject({ state: 'completed', pins: { product: { code: PCT650_A, parent92: '92000002' }, wasSubstituted: true } });
     expect((await mdSent()).substitution).toEqual({
       wasSubstituted: true,
       type: { coding: [expect.objectContaining(SUBSTITUTION_TYPE)] },
@@ -183,7 +187,7 @@ describe('submit dispense', () => {
 
     const { view } = await visit(PCT500_A, { drugCode: drugCode(PCT500_B), substitution: { reasonCode } });
 
-    expect(view.steps[2]).toMatchObject({ state: 'completed', pins: { kfaCode: PCT500_B, wasSubstituted: true } });
+    expect(view.steps[2]).toMatchObject({ state: 'completed', pins: { product: { code: PCT500_B }, wasSubstituted: true } });
     const sent = await mdSent();
     expect(sent.substitution).toMatchObject({ wasSubstituted: true, type: { coding: [SUBSTITUTION_TYPE] }, reason: [{ coding: [{ system, code }] }] });
   });
@@ -270,7 +274,7 @@ describe('submit dispense', () => {
     await second.send(worldDrugDispensed(visitId, { drugCode: drugCode(PCT500_A) }));
     const view = await second.wait(location, dispenseSettled);
 
-    expect(view.steps[2]).toMatchObject({ state: 'completed', pins: { kfaCode: PCT500_A, wasSubstituted: false } });
+    expect(view.steps[2]).toMatchObject({ state: 'completed', pins: { product: { code: PCT500_A }, wasSubstituted: false } });
   });
 
   it('search-then-create: a MedicationDispense already at the platform under prescription/{org} is adopted, not created again', async () => {

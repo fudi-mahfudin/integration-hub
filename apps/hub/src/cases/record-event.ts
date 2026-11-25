@@ -4,7 +4,7 @@ import type { Database } from '../db/database.js';
 import { Problem, type FieldError } from '../http/problem.js';
 import { parseSourceTime } from '../time.js';
 import type { ValidatedEvent } from '../ingestion/event-schema.js';
-import { applyEventArrival, openingSteps, stepBySeq, stepForEvent, type DerivedStatus, type StepState } from './case-model.js';
+import { applyEventArrival, openingSteps, stepBySeq, stepForEvent, type DerivedStatus, type EventType, type StepState } from './case-model.js';
 import { readSteps, writeDerivedStatus } from './case-status.js';
 
 export interface RecordedEvent {
@@ -82,8 +82,7 @@ export async function recordEvent(
     .returning('id')
     .executeTakeFirst();
   if (!stored) throw await alreadyRecorded(trx, kase.id, event);
-  await checkPrescriptionPair(trx, kase.id, event);
-  await checkVisitTimes(trx, kase.id, event);
+  await checkPairs(trx, kase.id, event);
 
   const seq = stepForEvent(event.type).seq;
   const after = applyEventArrival(await readSteps(trx, kase.id), seq);
@@ -121,67 +120,69 @@ async function alreadyRecorded(trx: Transaction<Database>, caseId: string, event
   return new Problem(409, 'EVENT_ALREADY_RECORDED');
 }
 
-const PAIRED: Partial<Record<string, string>> = { 'prescription.written': 'drug.dispensed', 'drug.dispensed': 'prescription.written' };
-
 /**
- * The pair check (#9), run when the second of `prescription.written` and
- * `drug.dispensed` arrives (either order): the dispense must name the case
- * prescription's `prescriptionId` and `itemId`. The case row is locked.
+ * A cross-check between two event types of a case (#9), run when the second
+ * of the pair arrives, in either order. `check` gets both events' `data`
+ * and which one arrived second, and throws the `Problem` that rejects it.
  */
-async function checkPrescriptionPair(trx: Transaction<Database>, caseId: string, event: ValidatedEvent): Promise<void> {
-  const other = PAIRED[event.type];
-  if (other === undefined) return;
-  const row = await trx
-    .selectFrom('source_event')
-    .select('envelope')
-    .where('case_id', '=', caseId)
-    .where('type', '=', other)
-    .executeTakeFirst();
-  if (!row) return;
-  const dispenseSecond = event.type === 'drug.dispensed';
-  const prescribed = ((dispenseSecond ? row.envelope : event.envelope) as { data: { prescriptionId: string; items: { itemId: string }[] } }).data;
-  const dispensed = ((dispenseSecond ? event.envelope : row.envelope) as { data: { prescriptionId: string; itemId: string } }).data;
-  const errors: FieldError[] = [];
-  if (prescribed.prescriptionId !== dispensed.prescriptionId) {
-    errors.push({ path: '/data/prescriptionId', code: 'PRESCRIPTION_MISMATCH', message: 'the prescription and the dispense name different prescriptionIds' });
-  }
-  if (prescribed.items[0]?.itemId !== dispensed.itemId) {
-    const path = dispenseSecond ? '/data/itemId' : '/data/items/0/itemId';
-    errors.push({ path, code: 'PRESCRIPTION_MISMATCH', message: 'the prescription and the dispense name different itemIds' });
-  }
-  if (errors.length > 0) throw new Problem(422, 'PRESCRIPTION_MISMATCH', errors);
+interface PairCheck {
+  first: EventType;
+  second: EventType;
+  check(first: any, second: any, secondArrived: boolean): void;
 }
 
-const VISIT_PAIR: Partial<Record<string, string>> = { 'visit.started': 'visit.finished', 'visit.finished': 'visit.started' };
-
-/**
- * The time pair check (#9, dictionary rule 10121), run when the second of
- * `visit.started` and `visit.finished` arrives (either order): `finishedAt`
- * must be after `startedAt`. Compared on the whole seconds the platform will
- * receive (times are truncated on the way out), so a sub-second difference
- * that would arrive as equal is rejected here. The case row is locked.
- */
-async function checkVisitTimes(trx: Transaction<Database>, caseId: string, event: ValidatedEvent): Promise<void> {
-  const other = VISIT_PAIR[event.type];
-  if (other === undefined) return;
-  const row = await trx
-    .selectFrom('source_event')
-    .select('envelope')
-    .where('case_id', '=', caseId)
-    .where('type', '=', other)
-    .executeTakeFirst();
-  if (!row) return;
-  const finishedSecond = event.type === 'visit.finished';
-  const started = ((finishedSecond ? row.envelope : event.envelope) as { data: { startedAt: string } }).data.startedAt;
-  const finished = ((finishedSecond ? event.envelope : row.envelope) as { data: { finishedAt: string } }).data.finishedAt;
-  if (wholeSeconds(finished) > wholeSeconds(started)) return;
-  throw new Problem(422, 'FINISHED_BEFORE_STARTED', [
-    {
-      path: finishedSecond ? '/data/finishedAt' : '/data/startedAt',
-      code: 'FINISHED_BEFORE_STARTED',
-      message: 'finishedAt must be after startedAt',
+const PAIR_CHECKS: PairCheck[] = [
+  {
+    // The dispense must name the case prescription's `prescriptionId` and `itemId`.
+    first: 'prescription.written',
+    second: 'drug.dispensed',
+    check(prescribed: { prescriptionId: string; items: { itemId: string }[] }, dispensed: { prescriptionId: string; itemId: string }, dispenseSecond) {
+      const errors: FieldError[] = [];
+      if (prescribed.prescriptionId !== dispensed.prescriptionId) {
+        errors.push({ path: '/data/prescriptionId', code: 'PRESCRIPTION_MISMATCH', message: 'the prescription and the dispense name different prescriptionIds' });
+      }
+      if (prescribed.items[0]?.itemId !== dispensed.itemId) {
+        const path = dispenseSecond ? '/data/itemId' : '/data/items/0/itemId';
+        errors.push({ path, code: 'PRESCRIPTION_MISMATCH', message: 'the prescription and the dispense name different itemIds' });
+      }
+      if (errors.length > 0) throw new Problem(422, 'PRESCRIPTION_MISMATCH', errors);
     },
-  ]);
+  },
+  {
+    // Dictionary rule 10121: `finishedAt` must be after `startedAt`. Compared on
+    // the whole seconds the platform will receive (times are truncated on the
+    // way out), so a sub-second difference that would arrive as equal is rejected.
+    first: 'visit.started',
+    second: 'visit.finished',
+    check(started: { startedAt: string }, finished: { finishedAt: string }, finishedSecond) {
+      if (wholeSeconds(finished.finishedAt) > wholeSeconds(started.startedAt)) return;
+      throw new Problem(422, 'FINISHED_BEFORE_STARTED', [
+        {
+          path: finishedSecond ? '/data/finishedAt' : '/data/startedAt',
+          code: 'FINISHED_BEFORE_STARTED',
+          message: 'finishedAt must be after startedAt',
+        },
+      ]);
+    },
+  },
+];
+
+/** Runs the pair check `event` belongs to, if the case already has the other event of the pair. The case row is locked. */
+async function checkPairs(trx: Transaction<Database>, caseId: string, event: ValidatedEvent): Promise<void> {
+  for (const pair of PAIR_CHECKS) {
+    const secondArrived = event.type === pair.second;
+    if (!secondArrived && event.type !== pair.first) continue;
+    const row = await trx
+      .selectFrom('source_event')
+      .select('envelope')
+      .where('case_id', '=', caseId)
+      .where('type', '=', secondArrived ? pair.first : pair.second)
+      .executeTakeFirst();
+    if (!row) continue;
+    const stored = (row.envelope as { data: unknown }).data;
+    const arrived = (event.envelope as { data: unknown }).data;
+    pair.check(secondArrived ? stored : arrived, secondArrived ? arrived : stored, secondArrived);
+  }
 }
 
 function wholeSeconds(sourceTime: string): number {

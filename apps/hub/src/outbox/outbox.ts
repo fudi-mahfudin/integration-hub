@@ -1,5 +1,5 @@
 import { sql, type Kysely, type Transaction } from 'kysely';
-import { applyCompletion, type StepView } from '../cases/case-model.js';
+import { applyCompletion, type DeadLetterReason, type StepName, type StepView } from '../cases/case-model.js';
 import { readSteps, writeDerivedStatus } from '../cases/case-status.js';
 import type { Database } from '../db/database.js';
 import type { Clock } from '../tokens.js';
@@ -14,7 +14,7 @@ import type { Clock } from '../tokens.js';
 export interface ClaimedStep {
   caseId: string;
   seq: number;
-  name: string;
+  name: StepName;
   /** This claim's attempt number (the counter increments on claim, #8). */
   attempt: number;
   leaseToken: string;
@@ -33,8 +33,8 @@ export interface RemoteIdentifier {
 
 /** What an attempt leaves in the step's append-only attempt log (#8, #28), besides its outcome. */
 export interface AttemptRecord {
-  /** The dead-letter reason, or the transient failure's code once #35 classifies them. */
-  errorCode: string | null;
+  /** The dead-letter reason (#35 adds transient failure codes). */
+  errorCode: DeadLetterReason | null;
   /** The last platform answer's HTTP status, if the attempt got one. */
   httpStatus: number | null;
   /** Values the attempt resolved and used, with the lookup method (#10). */
@@ -58,7 +58,7 @@ export interface Outbox {
    */
   complete(step: ClaimedStep, remote: RemoteIdentifier, pins: Pins, record: AttemptRecord): Promise<boolean>;
   /** Lease-fenced permanent failure; holds the rest of the case. False when the lease was lost. */
-  deadLetter(step: ClaimedStep, reason: string, record: AttemptRecord): Promise<boolean>;
+  deadLetter(step: ClaimedStep, reason: DeadLetterReason, record: AttemptRecord): Promise<boolean>;
   /** Lease-fenced transient failure: claimable again at `availableAt`. False when the lease was lost. */
   retryAt(step: ClaimedStep, availableAt: Date, record: AttemptRecord): Promise<boolean>;
 }

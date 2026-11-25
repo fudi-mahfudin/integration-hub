@@ -1,6 +1,7 @@
+import type { StepName } from '../cases/case-model.js';
 import type { WorkerConfig } from '../config.js';
 import type { AttemptRecord, ClaimedStep, Outbox } from '../outbox/outbox.js';
-import { PlatformError } from '../satusehat/fhir-client.js';
+import { PlatformError, permanentReason } from '../satusehat/fhir-client.js';
 import { createVisit } from '../steps/create-visit.js';
 import { submitDispense } from '../steps/submit-dispense.js';
 import { submitPrescription } from '../steps/submit-prescription.js';
@@ -9,7 +10,7 @@ import type { StepDeps, StepRunner } from '../steps/step-runner.js';
 import type { Clock } from '../tokens.js';
 
 /** Step name → its runner. */
-const RUNNERS: Record<string, StepRunner> = {
+const RUNNERS: Record<StepName, StepRunner> = {
   create_visit: createVisit,
   submit_prescription: submitPrescription,
   submit_dispense: submitDispense,
@@ -62,17 +63,23 @@ export function createWorkerLoop(opts: { config: WorkerConfig; outbox: Outbox; d
       ...fields,
     });
     try {
-      if (!runner) throw new Error(`no runner for step ${step.name} yet`);
       const result = await runner(step, { ...deps, fhir, kfa }, { used });
       // A false return means the lease was lost: a newer claim owns the
       // step, and this result (and its attempt log row) is discarded (#8).
       if (result.outcome === 'completed') await outbox.complete(step, result.remote, result.pins, record({}));
       else await outbox.deadLetter(step, result.reason, record({ errorCode: result.reason, violations: result.violations ?? [] }));
     } catch (err) {
-      // Every unclassified failure is transient for now; #35 classifies and backs off.
       const message = (err as Error).message;
-      console.warn(`step ${step.name} attempt ${step.attempt} failed: ${message}`);
       const status = err instanceof PlatformError ? err.status : httpStatus;
+      const reason = permanentReason(err);
+      if (reason !== undefined) {
+        // A permanent platform rejection dead-letters at once (#8).
+        console.warn(`step ${step.name} attempt ${step.attempt} dead-lettered ${reason}: ${message}`);
+        await outbox.deadLetter(step, reason, record({ errorCode: reason, httpStatus: status, detail: message }));
+        return;
+      }
+      // Anything else is transient; #35 adds backoff and the attempt cap.
+      console.warn(`step ${step.name} attempt ${step.attempt} failed: ${message}`);
       await outbox.retryAt(step, new Date(clock().getTime() + config.retryDelayMs), record({ httpStatus: status, detail: message }));
     }
   };

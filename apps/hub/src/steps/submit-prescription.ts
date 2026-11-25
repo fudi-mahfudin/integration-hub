@@ -1,28 +1,17 @@
 import { findIhsNumber, type SourcePerson } from '../lookup/people.js';
-import { kfaProduct } from '../mapping/kfa-products.js';
-import { findKfaCode } from '../mapping/mappings.js';
 import { sourceToPlatformTime } from '../time.js';
-import { KFA_SYSTEM, MEDICATION_TYPE_URL } from '../validation/medication-request-rules.js';
-import type { KfaProduct, MappingUse } from '../validation/validation.js';
+import type { KfaProduct } from '../validation/validation.js';
 import type { CreateVisitPins } from './create-visit.js';
-import { checkStep, completedStep, searchThenCreate, sourceEvent, type DeadLettered, type StepRunner } from './step-runner.js';
+import { containedMedication, doseFormUnit, prescriptionIdentifiers, resolveDrug } from './medication.js';
+import { checkStep, completedStep, searchThenCreate, sourceEvent, type StepRunner } from './step-runner.js';
 
-/** `http://sys-ids.kemkes.go.id/prescription/{org}`: the prescription's identifier system (#6, #9). */
-export const prescriptionSystem = (organizationId: string) => `http://sys-ids.kemkes.go.id/prescription/${organizationId}`;
-const prescriptionItemSystem = (organizationId: string) => `http://sys-ids.kemkes.go.id/prescription-item/${organizationId}`;
-const medicationSystem = (organizationId: string) => `http://sys-ids.kemkes.go.id/medication/${organizationId}`;
-/** Quantity units are dose forms (#6); the mock world's dose-form codes are v3-orderableDrugForm codes. */
-const DOSE_FORM_SYSTEM = 'http://terminology.hl7.org/CodeSystem/v3-orderableDrugForm';
 const ROUTE_SYSTEM = 'http://www.whocc.no/atc';
 
 /** What submit prescription pins on completion (#10); submit dispense compares against these, never the live mapping. */
 export interface SubmitPrescriptionPins {
   [pin: string]: unknown;
-  kfaCode: string;
-  kfaLevel: number;
-  parent92: string | null;
-  /** The prescribed product's 91 set, sorted. */
-  ingredients: string[];
+  /** The prescribed product (its 91 set sorted). */
+  product: KfaProduct;
   requesterIhs: string;
 }
 
@@ -41,23 +30,17 @@ interface PrescriptionWritten {
  * and patient (create visit's remote id and pins), validates it, then
  * searches it by `prescription/{org}` and creates it only if absent.
  */
-export const submitPrescription: StepRunner = async (step, { db, fhir, kfa, clock }, { used }) => {
+export const submitPrescription: StepRunner = async (step, deps, attempt) => {
+  const { db, fhir } = deps;
+  const { used } = attempt;
   const data = (await sourceEvent(db, step.caseId, 'prescription.written')).data as PrescriptionWritten;
   const item = data.items[0];
   const organizationId = step.organizationId;
 
   // Local data and KFA first, so a missing mapping or a wrong level never reaches FHIR.
-  const kfaCode = await findKfaCode(db, step.sourceId, item.drugCode);
-  const drug: Record<string, unknown> = { localCode: item.drugCode, kfaCode: kfaCode ?? null };
-  used.drug = drug;
-  const missing = (message?: string): DeadLettered =>
-    checkStep({ organizationId, mappings: [{ kind: 'drug', localCode: item.drugCode, found: false, message }] }) as DeadLettered;
-  if (kfaCode === undefined) return missing();
-  const details = await kfaProduct(db, kfa, kfaCode, clock);
-  if (details === undefined) return missing(`KFA does not know ${kfaCode}, the code local drug ${item.drugCode} maps to`);
-  const product: KfaProduct = { code: details.code, level: details.level, parent92: details.parent92, ingredients: details.ingredients };
-  drug.kfa = product;
-  const mappings: MappingUse[] = [{ kind: 'drug', localCode: item.drugCode, found: true }];
+  const drug = await resolveDrug(deps, step, item.drugCode, attempt);
+  if ('outcome' in drug) return drug;
+  const { details, product, mappings } = drug;
   const medication = { role: 'prescription' as const, product };
   const wrongLevel = checkStep({ organizationId, mappings, medication });
   if (wrongLevel) return wrongLevel;
@@ -67,31 +50,12 @@ export const submitPrescription: StepRunner = async (step, { db, fhir, kfa, cloc
   used.requester = requester ?? null;
   if (requester === undefined) return { outcome: 'dead_lettered', reason: 'PRACTITIONER_NOT_FOUND' };
 
-  const unit = details.doseForm ? { unit: details.doseForm.name, system: DOSE_FORM_SYSTEM, code: details.doseForm.code } : {};
-  const identifier = { system: prescriptionSystem(organizationId), value: data.prescriptionId };
+  const unit = doseFormUnit(details);
+  const { identifier, identifiers } = prescriptionIdentifiers(organizationId, data.prescriptionId, item.itemId);
   const medicationRequest = {
     resourceType: 'MedicationRequest',
-    contained: [
-      {
-        resourceType: 'Medication',
-        id: 'medication',
-        identifier: [{ system: medicationSystem(organizationId), use: 'official', value: item.itemId }],
-        code: { coding: [{ system: KFA_SYSTEM, code: details.code, display: details.display }] },
-        status: 'active',
-        extension: [
-          {
-            url: MEDICATION_TYPE_URL,
-            valueCodeableConcept: {
-              coding: [{ system: 'http://terminology.kemkes.go.id/CodeSystem/medication-type', code: 'NC', display: 'Non-compound' }],
-            },
-          },
-        ],
-      },
-    ],
-    identifier: [
-      { ...identifier, use: 'official' },
-      { system: prescriptionItemSystem(organizationId), use: 'official', value: item.itemId },
-    ],
+    contained: [containedMedication(details, organizationId, item.itemId)],
+    identifier: identifiers,
     status: 'completed',
     intent: 'order',
     category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/medicationrequest-category', code: 'community', display: 'Community' }] }],
@@ -118,12 +82,6 @@ export const submitPrescription: StepRunner = async (step, { db, fhir, kfa, cloc
 
   const result = await searchThenCreate(fhir, 'MedicationRequest', identifier, medicationRequest);
   if (result.outcome !== 'completed') return result;
-  const pins: SubmitPrescriptionPins = {
-    kfaCode: product.code,
-    kfaLevel: product.level,
-    parent92: product.parent92,
-    ingredients: [...product.ingredients],
-    requesterIhs: requester.ihsNumber,
-  };
+  const pins: SubmitPrescriptionPins = { product, requesterIhs: requester.ihsNumber };
   return { ...result, pins };
 };

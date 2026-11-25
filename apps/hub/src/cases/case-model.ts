@@ -11,6 +11,26 @@ export const STEPS = [
   { seq: 4, name: 'update_visit', eventType: 'visit.finished' },
 ] as const satisfies readonly { seq: number; name: string; eventType: EventType }[];
 
+export type StepName = (typeof STEPS)[number]['name'];
+
+/**
+ * The stable dead-letter reason codes on a step (#8, #9, #13). The first five
+ * are the Validation module's rule order; the rest come from lookups,
+ * search-then-create and the platform's answer.
+ */
+export const DEAD_LETTER_REASONS = [
+  'MAPPING_MISSING',
+  'KFA_LEVEL_INVALID',
+  'UNSUPPORTED_THERAPEUTIC_SUBSTITUTION',
+  'SUBSTITUTION_MISMATCH',
+  'PAYLOAD_INVALID',
+  'PATIENT_NOT_FOUND',
+  'PRACTITIONER_NOT_FOUND',
+  'REMOTE_RECORD_AMBIGUOUS',
+  'PLATFORM_FORBIDDEN',
+] as const;
+export type DeadLetterReason = (typeof DEAD_LETTER_REASONS)[number];
+
 export type StepState =
   | 'awaiting_event'
   | 'blocked'

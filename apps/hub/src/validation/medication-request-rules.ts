@@ -1,3 +1,4 @@
+import { KFA_SYSTEM, MEDICATION_TYPE_URL, sysIdSystem } from '../satusehat/systems.js';
 import { checkTime, isObject, reference, text, type Fail } from './payload-checks.js';
 import type { Violation } from './validation.js';
 
@@ -11,8 +12,6 @@ import type { Violation } from './validation.js';
 
 const STATUSES = ['active', 'on-hold', 'cancelled', 'completed', 'entered-in-error', 'stopped', 'draft', 'unknown'];
 const INTENTS = ['proposal', 'plan', 'order', 'original-order', 'reflex-order', 'filler-order', 'instance-order', 'option'];
-export const KFA_SYSTEM = 'http://sys-ids.kemkes.go.id/kfa';
-export const MEDICATION_TYPE_URL = 'https://fhir.kemkes.go.id/r4/StructureDefinition/MedicationType';
 
 export function medicationRequestRules(m: Record<string, any>, organizationId: string): Violation[] {
   const out: Violation[] = [];
@@ -66,8 +65,8 @@ export function medicationRequestRules(m: Record<string, any>, organizationId: s
 export function prescriptionIdentifiers(m: Record<string, any>, type: string, organizationId: string, fail: Fail): void {
   const identifiers: any[] = Array.isArray(m.identifier) ? m.identifier : [];
   if (identifiers.length === 0) return fail('REQUIRED', `${type}.identifier`, 'identifier is required');
-  for (const kind of ['prescription', 'prescription-item']) {
-    const system = `http://sys-ids.kemkes.go.id/${kind}/${organizationId}`;
+  for (const kind of ['prescription', 'prescription-item'] as const) {
+    const system = sysIdSystem(kind, organizationId);
     const i = identifiers.findIndex((x) => x?.system === system);
     if (i < 0) fail('IDENTIFIER_SYSTEM', `${type}.identifier`, `needs an identifier with system ${system}`);
     else if (!text(identifiers[i].value)) fail('REQUIRED', `${type}.identifier[${i}].value`, 'identifier value is required');
@@ -91,7 +90,7 @@ export function containedMedication(m: Record<string, any>, type: string, organi
 
 /** The contained non-compound Medication: `medication/{org}` identifier, a KFA code, the NC type. */
 function medicationRules(med: Record<string, any>, organizationId: string, fail: Fail): void {
-  const system = `http://sys-ids.kemkes.go.id/medication/${organizationId}`;
+  const system = sysIdSystem('medication', organizationId);
   const ids: any[] = Array.isArray(med.identifier) ? med.identifier : [];
   if (!ids.some((i) => i?.system === system && text(i.value))) fail('IDENTIFIER_SYSTEM', 'Medication.identifier', `needs a valued identifier with system ${system}`);
   const codings: any[] = Array.isArray(med.code?.coding) ? med.code.coding : [];

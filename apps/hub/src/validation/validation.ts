@@ -6,6 +6,8 @@
  *
  * Written from #9's rule text, never from the mock's rules (ADR 0006).
  */
+import type { DeadLetterReason } from '../cases/case-model.js';
+import type { KfaLevel } from '../satusehat/fhir-client.js';
 import { encounterRules } from './encounter-rules.js';
 import { medicationDispenseRules } from './medication-dispense-rules.js';
 import { medicationRequestRules } from './medication-request-rules.js';
@@ -17,7 +19,7 @@ export const RULE_ORDER = [
   'UNSUPPORTED_THERAPEUTIC_SUBSTITUTION',
   'SUBSTITUTION_MISMATCH',
   'PAYLOAD_INVALID',
-] as const;
+] as const satisfies readonly DeadLetterReason[];
 export type RuleCode = (typeof RULE_ORDER)[number];
 
 export interface Violation {
@@ -45,9 +47,9 @@ export interface MappingUse {
 /** A KFA product as the drug mapping and KFA details provide it (#9, #10). */
 export interface KfaProduct {
   code: string;
-  /** 91 ingredient, 92 product template, 93 product. */
-  level: number;
-  /** For a 93: its 92. */
+  /** 91 ingredient, 92 virtual product, 93 actual product (GLOSSARY). */
+  level: KfaLevel;
+  /** For an actual product (93): its virtual product (92). */
   parent92: string | null;
   /** The set of active-ingredient (91) codes. */
   ingredients: readonly string[];
@@ -118,7 +120,7 @@ export function deadLetterReason(violations: readonly Violation[]): RuleCode | u
 
 function medicationRules(m: MedicationUse): Violation[] {
   // A prescription maps to 92 or 93, a dispense to 93 (#9).
-  const allowed = m.role === 'prescription' ? [92, 93] : [93];
+  const allowed: readonly KfaLevel[] = m.role === 'prescription' ? [92, 93] : [93];
   if (!allowed.includes(m.product.level)) {
     return [
       {
