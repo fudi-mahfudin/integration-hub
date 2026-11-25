@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { Encounter } from 'fhir/r4.js';
+import type { Encounter, Resource } from 'fhir/r4.js';
+import { FaultEngine } from './faults.js';
+import { Holds } from './holds.js';
 import type { LogEntry } from './log.js';
 import type { KfaProduct, World, WorldLocation, WorldPatient, WorldPractitioner, WorldSeed } from './world/world.js';
 
@@ -16,7 +18,8 @@ export class MockState {
   kfaByCode = new Map<string, KfaProduct>();
   organizationIds = new Set<string>();
 
-  encounters = new Map<string, Encounter>();
+  /** Stored records by resource type, then id. */
+  private records = new Map<string, Map<string, Resource>>();
   private versionCounter = 0;
 
   private tokens = new Map<string, number>();
@@ -24,13 +27,33 @@ export class MockState {
 
   log: LogEntry[] = [];
   private nextSeq = 1;
-  faultSeed: number | null = null;
+  readonly faults = new FaultEngine();
+  readonly holds = new Holds();
+  private pending = new AbortController();
+  /** Bumped on every reset; a request remembers the epoch it arrived in. */
+  epoch = 0;
 
   constructor(
     private readonly world: World,
     readonly settings: MockSettings,
   ) {
     this.reset();
+  }
+
+  /** Aborted on reset and shutdown: delayed and parked requests stop waiting. */
+  get pendingSignal(): AbortSignal {
+    return this.pending.signal;
+  }
+
+  /** Drops every parked request and cuts every fault delay short. */
+  abortPending(): void {
+    this.holds.dropAll();
+    this.pending.abort();
+    this.pending = new AbortController();
+  }
+
+  get faultSeed(): number | null {
+    return this.faults.seed;
   }
 
   get organization() {
@@ -43,12 +66,14 @@ export class MockState {
     this.locationsById.clear();
     this.kfaByCode.clear();
     this.organizationIds = new Set([this.world.organization.id]);
-    this.encounters.clear();
+    this.records.clear();
     this.tokens.clear();
     this.tokenThrottleUntil = 0;
+    this.epoch += 1;
     this.log = [];
     this.nextSeq = 1;
-    this.faultSeed = null;
+    this.faults.clear();
+    this.abortPending();
     this.seed(this.world);
   }
 
@@ -89,6 +114,19 @@ export class MockState {
   }
 
   // --- records ----------------------------------------------------------
+
+  recordsOf(type: string): Map<string, Resource> {
+    let m = this.records.get(type);
+    if (!m) {
+      m = new Map();
+      this.records.set(type, m);
+    }
+    return m;
+  }
+
+  get encounters(): Map<string, Encounter> {
+    return this.recordsOf('Encounter') as Map<string, Encounter>;
+  }
 
   nextVersionId(): string {
     this.versionCounter += 1;
