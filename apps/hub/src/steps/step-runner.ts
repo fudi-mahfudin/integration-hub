@@ -1,4 +1,5 @@
 import type { Kysely } from 'kysely';
+import type { DeadLetterReason, EventType, StepName } from '../cases/case-model.js';
 import type { Database } from '../db/database.js';
 import type { ClaimedStep, Pins, RemoteIdentifier } from '../outbox/outbox.js';
 import type { FhirClient, KfaClient } from '../satusehat/fhir-client.js';
@@ -6,7 +7,7 @@ import type { Clock } from '../tokens.js';
 import { deadLetterReason, validateStep, type StepCheck, type Violation } from '../validation/validation.js';
 
 /** A permanent failure: the step dead-letters with this stable reason code (#8, #9). */
-export type DeadLettered = { outcome: 'dead_lettered'; reason: string; violations?: Violation[] };
+export type DeadLettered = { outcome: 'dead_lettered'; reason: DeadLetterReason; violations?: Violation[] };
 
 /**
  * What a step attempt ended with. A failure is a thrown error instead: the
@@ -55,7 +56,7 @@ export function checkStep(check: StepCheck): DeadLettered | undefined {
  * The pins of a completed step of this case (#10). Later steps read the
  * values earlier steps sent from here, never from the live mappings.
  */
-export async function stepPins<T extends Pins>(db: Kysely<Database>, caseId: string, stepName: string): Promise<T> {
+export async function stepPins<T extends Pins>(db: Kysely<Database>, caseId: string, stepName: StepName): Promise<T> {
   return (await completedStep<T>(db, caseId, stepName)).pins;
 }
 
@@ -63,7 +64,7 @@ export async function stepPins<T extends Pins>(db: Kysely<Database>, caseId: str
 export async function completedStep<T extends Pins>(
   db: Kysely<Database>,
   caseId: string,
-  stepName: string,
+  stepName: StepName,
 ): Promise<{ pins: T; remote: RemoteIdentifier }> {
   const row = await db
     .selectFrom('step')
@@ -79,7 +80,7 @@ export async function completedStep<T extends Pins>(
 }
 
 /** The source event envelope a step works from (stored by ingest, immutable). */
-export async function sourceEvent(db: Kysely<Database>, caseId: string, type: string): Promise<Record<string, any>> {
+export async function sourceEvent(db: Kysely<Database>, caseId: string, type: EventType): Promise<Record<string, any>> {
   const row = await db
     .selectFrom('source_event')
     .select('envelope')

@@ -1,3 +1,4 @@
+import type { DeadLetterReason } from '../cases/case-model.js';
 import type { SatusehatConfig } from '../config.js';
 import type { Clock } from '../tokens.js';
 
@@ -24,7 +25,7 @@ const DEFERRED_4XX = new Set([404, 410]);
  * (the platform rejected what local validation let through: a hub bug, #9).
  * The OperationOutcome is not parsed for a finer code (#20).
  */
-export function permanentReason(err: unknown): 'PLATFORM_FORBIDDEN' | 'PAYLOAD_INVALID' | undefined {
+export function permanentReason(err: unknown): Extract<DeadLetterReason, 'PLATFORM_FORBIDDEN' | 'PAYLOAD_INVALID'> | undefined {
   if (!(err instanceof PlatformError)) return undefined;
   const { status, body } = err;
   if (status < 400 || status > 499 || TRANSIENT_4XX.has(status) || DEFERRED_4XX.has(status)) return undefined;
@@ -189,11 +190,21 @@ function createTokenProvider(config: SatusehatConfig, clock: Clock): TokenProvid
   };
 }
 
+/** KFA's code levels: 91 ingredient, 92 virtual product, 93 actual product (GLOSSARY). */
+export const KFA_LEVELS = [91, 92, 93] as const;
+export type KfaLevel = (typeof KFA_LEVELS)[number];
+
+/** The level a KFA code names: its first two digits (KFA's numbering); undefined for any other prefix. */
+export function kfaLevel(code: string): KfaLevel | undefined {
+  const prefix = Number(code.slice(0, 2));
+  return KFA_LEVELS.find((l) => l === prefix);
+}
+
 /** A KFA product as KFA v2 describes it (#10): what the drug rules and the MedicationRequest need. */
 export interface KfaDetails {
   code: string;
-  /** 91 ingredient, 92 virtual product, 93 actual product (GLOSSARY): the code's first two digits (KFA's numbering). */
-  level: number;
+  /** The code's level (`kfaLevel`). */
+  level: KfaLevel;
   display: string;
   /** For an actual product (93): its virtual product (92), KFA's `product_template.kfa_code`. */
   parent92: string | null;
@@ -205,7 +216,7 @@ export interface KfaDetails {
 
 /** KFA v2 product detail, `{kfa}/products?identifier=kfa&code=…`, with the FHIR client's token (#14). */
 export interface KfaClient {
-  /** The product, or undefined when KFA does not know the code (404 or no result). Network errors and 5xx throw (transient). */
+  /** The product, or undefined when KFA does not know the code (404, no result, or not a 91/92/93 code). Network errors and 5xx throw (transient). */
   product(code: string): Promise<KfaDetails | undefined>;
   /** The same client, reporting every answer's HTTP status to `onStatus`. */
   observe(onStatus: (status: number) => void): KfaClient;
@@ -227,8 +238,8 @@ function createKfaClient(config: SatusehatConfig, token: TokenProvider): KfaClie
       const url = `${config.kfaUrl}/products?${new URLSearchParams({ identifier: 'kfa', code })}`;
       const res = await call(token, onStatus, 'GET', url, { accept: (s) => s === 404, mediaType: 'application/json' });
       const result = res.status === 404 ? undefined : (res.body as KfaProductBody | null)?.result;
-      if (!result || result.kfa_code !== code) return undefined;
-      const level = Number(code.slice(0, 2));
+      const level = kfaLevel(code);
+      if (!result || result.kfa_code !== code || level === undefined) return undefined;
       const form = result.dosage_form;
       const ingredients = (result.active_ingredients ?? []).map((i) => i?.kfa_code).filter((c): c is string => typeof c === 'string');
       return {

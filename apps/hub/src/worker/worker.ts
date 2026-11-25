@@ -1,3 +1,4 @@
+import type { StepName } from '../cases/case-model.js';
 import type { WorkerConfig } from '../config.js';
 import type { AttemptRecord, ClaimedStep, Outbox } from '../outbox/outbox.js';
 import { PlatformError, permanentReason } from '../satusehat/fhir-client.js';
@@ -9,7 +10,7 @@ import type { StepDeps, StepRunner } from '../steps/step-runner.js';
 import type { Clock } from '../tokens.js';
 
 /** Step name → its runner. */
-const RUNNERS: Record<string, StepRunner> = {
+const RUNNERS: Record<StepName, StepRunner> = {
   create_visit: createVisit,
   submit_prescription: submitPrescription,
   submit_dispense: submitDispense,
@@ -62,7 +63,6 @@ export function createWorkerLoop(opts: { config: WorkerConfig; outbox: Outbox; d
       ...fields,
     });
     try {
-      if (!runner) throw new Error(`no runner for step ${step.name} yet`);
       const result = await runner(step, { ...deps, fhir, kfa }, { used });
       // A false return means the lease was lost: a newer claim owns the
       // step, and this result (and its attempt log row) is discarded (#8).

@@ -11,7 +11,7 @@ export interface FieldError {
 /** Where every problem `type` URI points: the API contract, one anchor per code. */
 const PROBLEM_TYPE_BASE = 'https://github.com/fudi-mahfudin/integration-hub/blob/main/docs/api.md#';
 
-const TITLES: Record<string, string> = {
+const TITLES = {
   UNAUTHENTICATED: 'Missing or unknown API key',
   IDEMPOTENCY_KEY_MISSING: 'Idempotency-Key header is required',
   IDEMPOTENCY_KEY_INVALID: 'Idempotency-Key header is invalid',
@@ -23,7 +23,10 @@ const TITLES: Record<string, string> = {
   FINISHED_BEFORE_STARTED: 'The visit cannot finish before it started',
   NOT_FOUND: 'Not found',
   INTERNAL_ERROR: 'Internal error',
-};
+} as const satisfies Record<string, string>;
+
+/** Every problem code the API answers with; add a code to `TITLES` and to docs/api.md. */
+export type ProblemCode = keyof typeof TITLES;
 
 /**
  * An RFC 9457 problem. Throw it anywhere in a request; `ProblemFilter`
@@ -32,7 +35,7 @@ const TITLES: Record<string, string> = {
 export class Problem extends Error {
   constructor(
     readonly status: number,
-    readonly code: string,
+    readonly code: ProblemCode,
     readonly errors: FieldError[] = [],
     readonly detail?: string,
   ) {
@@ -42,7 +45,7 @@ export class Problem extends Error {
   toJSON() {
     return {
       type: PROBLEM_TYPE_BASE + this.code.toLowerCase().replaceAll('_', '-'),
-      title: TITLES[this.code] ?? this.code,
+      title: TITLES[this.code],
       status: this.status,
       code: this.code,
       ...(this.detail === undefined ? {} : { detail: this.detail }),
