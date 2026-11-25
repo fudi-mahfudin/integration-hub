@@ -1,3 +1,6 @@
+import type { Resource } from 'fhir/r4.js';
+import type { FaultConfig } from './faults.js';
+import type { HoldInfo } from './holds.js';
 import type { LogEntry, LogQuery, Report } from './log.js';
 import type { WorldSeed } from './world/world.js';
 
@@ -22,6 +25,47 @@ export class MockClient {
   /** Invalidates every issued token; the next FHIR call gets 401. */
   async revokeTokens(): Promise<void> {
     await this.send('POST', '/__mock/tokens/revoke');
+  }
+
+  /** Replaces every fault rule and restarts their request counters. */
+  async setFaults(config: FaultConfig): Promise<void> {
+    await this.send('PUT', '/__mock/faults', config);
+  }
+
+  async clearFaults(): Promise<void> {
+    await this.send('PUT', '/__mock/faults', { seed: 0, rules: [] });
+  }
+
+  /** Parked requests; long-polls up to `waitMs` until there is at least one. */
+  async holds(waitMs = 0): Promise<HoldInfo[]> {
+    return (await this.send('GET', `/__mock/holds?wait=${waitMs}`)) as HoldInfo[];
+  }
+
+  /** Waits (up to `waitMs`) for a parked request and returns it; throws if none arrives. */
+  async nextHold(waitMs = 5_000): Promise<HoldInfo> {
+    const [h] = await this.holds(waitMs);
+    if (!h) throw new Error(`no request parked within ${waitMs}ms`);
+    return h;
+  }
+
+  /** Lets a parked request carry on as if nothing happened. */
+  async releaseHold(id: string): Promise<void> {
+    await this.send('POST', `/__mock/holds/${encodeURIComponent(id)}/release`);
+  }
+
+  /** Removes a stored record: later reads and PUTs get 404. */
+  async deleteRecord(type: string, id: string): Promise<void> {
+    await this.send('DELETE', `/__mock/records/${encodeURIComponent(type)}/${encodeURIComponent(id)}`);
+  }
+
+  /** JSON merge patch on a stored record (a remote divergence); bumps `meta.versionId`. Returns the record. */
+  async patchRecord<T extends Resource = Resource>(type: string, id: string, patch: unknown): Promise<T> {
+    return (await this.send('PATCH', `/__mock/records/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, patch)) as T;
+  }
+
+  /** Stores a record directly ("remote but not local"); `id` and `meta` are assigned if absent. Returns the record. */
+  async insertRecord<T extends Resource>(resource: T): Promise<T> {
+    return (await this.send('POST', '/__mock/records', resource)) as T;
   }
 
   async log(query: LogQuery = {}): Promise<LogEntry[]> {

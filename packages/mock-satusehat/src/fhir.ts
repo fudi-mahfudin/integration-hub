@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import type { Encounter, Resource } from 'fhir/r4.js';
+import { encounterIdentifier, isEncounterSystem } from './identity.js';
 import { respond, type Outcome } from './server.js';
 import type { MockState } from './state.js';
 import {
@@ -19,6 +20,10 @@ type Query = Record<string, string | undefined>;
 
 export function registerFhirRoutes(fhir: FastifyInstance, state: MockState): void {
   const send = (req: FastifyRequest, reply: FastifyReply, o: Outcome) => respond(state, req, reply, o);
+  const visitOf = (r: Resource) => {
+    const i = encounterIdentifier(r, state);
+    return { visitKey: i?.value ?? null, businessIdentifier: i ? `${i.system}|${i.value}` : null };
+  };
 
   fhir.addHook('preHandler', async (req, reply) => {
     const header = req.headers.authorization ?? '';
@@ -68,6 +73,29 @@ export function registerFhirRoutes(fhir: FastifyInstance, state: MockState): voi
     return badSearch();
   });
 
+  fhir.get('/:type/:id', async (req, reply) => {
+    const { type, id } = req.params as { type: string; id: string };
+    const record = state.recordsOf(type).get(id);
+    if (!record) return send(req, reply, notFound(type, id));
+    return send(req, reply, { status: 200, resourceType: type, ...visitOf(record), body: record });
+  });
+
+  // Update. Only the 404 for a missing or deleted record and the versionId bump
+  // are built here; per-resource validation of the update comes with its step.
+  fhir.put('/:type/:id', async (req, reply) => {
+    const { type, id } = req.params as { type: string; id: string };
+    const records = state.recordsOf(type);
+    const existing = records.get(id);
+    if (!existing) return send(req, reply, notFound(type, id));
+    const body = (req.body ?? {}) as Resource;
+    if (body.resourceType !== type) {
+      return send(req, reply, { status: 400, resourceType: type, body: simpleOutcome.build('invalid', `body must be a ${type}`) });
+    }
+    const stored = { ...body, id, meta: { versionId: state.nextVersionId(), lastUpdated: utcNow() } } as Resource;
+    records.set(id, stored);
+    return send(req, reply, { status: 200, resourceType: type, ...visitOf(stored), effect: 'updated', body: stored });
+  });
+
   fhir.post('/:type', async (req, reply) => {
     const { type } = req.params as { type: string };
     if (type !== 'Encounter') {
@@ -96,20 +124,10 @@ export function registerFhirRoutes(fhir: FastifyInstance, state: MockState): voi
   });
 }
 
-const ENCOUNTER_SYSTEM_PREFIX = 'http://sys-ids.kemkes.go.id/encounter/';
+export { isEncounterSystem };
 
-export function isEncounterSystem(system: string, state: MockState): boolean {
-  return system.startsWith(ENCOUNTER_SYSTEM_PREFIX) && state.organizationIds.has(system.slice(ENCOUNTER_SYSTEM_PREFIX.length));
-}
-
-/** The visit's `encounter/{org}` identifier, if the payload carries one. */
-function encounterIdentifier(e: Encounter, state: MockState): { system: string; value: string } | null {
-  for (const i of Array.isArray(e.identifier) ? e.identifier : []) {
-    if (typeof i?.system === 'string' && typeof i.value === 'string' && isEncounterSystem(i.system, state)) {
-      return { system: i.system, value: i.value };
-    }
-  }
-  return null;
+function notFound(type: string, id: string): Outcome {
+  return { status: 404, resourceType: type, body: simpleOutcome.build('not-found', `${type}/${id} not found`) };
 }
 
 function splitToken(token: string): [string | null, string] {

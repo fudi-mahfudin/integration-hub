@@ -1,10 +1,16 @@
 import formbody from '@fastify/formbody';
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { validateFaultConfig, type FaultConfig } from './faults.js';
 import type { LogEntry } from './log.js';
+import { applyFaults, respond } from './respond.js';
 import { MockState, type MockSettings } from './state.js';
 import { simpleOutcome, tokenRejected, tokenResponse, tokenThrottled } from './templates/index.js';
 import { defaultWorldPath, loadWorld, type WorldSeed } from './world/world.js';
-import { registerFhirRoutes } from './fhir.js';
+import type { Resource } from 'fhir/r4.js';
+import { randomUUID } from 'node:crypto';
+import { registerFhirRoutes, utcNow } from './fhir.js';
+import { encounterIdentifier } from './identity.js';
+import { mergePatch } from './merge-patch.js';
 import { reportFromLog } from './report.js';
 
 export interface MockOptions {
@@ -23,44 +29,7 @@ export interface RunningMock {
   close(): Promise<void>;
 }
 
-declare module 'fastify' {
-  interface FastifyRequest {
-    receivedAt: string;
-  }
-}
-
-/** What a handler decided; `respond` sends it and logs it. */
-export interface Outcome {
-  status: number;
-  body: unknown;
-  headers?: Record<string, string>;
-  resourceType?: string | null;
-  visitKey?: string | null;
-  businessIdentifier?: string | null;
-  effect?: LogEntry['effect'];
-  kind?: LogEntry['kind'];
-}
-
-export function respond(state: MockState, req: FastifyRequest, reply: FastifyReply, o: Outcome): FastifyReply {
-  const url = new URL(req.url, 'http://mock');
-  state.append({
-    kind: o.kind ?? 'platform',
-    receivedAt: req.receivedAt,
-    respondedAt: new Date().toISOString(),
-    method: req.method,
-    path: url.pathname,
-    resourceType: o.resourceType ?? null,
-    visitKey: o.visitKey ?? null,
-    businessIdentifier: o.businessIdentifier ?? null,
-    request: { query: Object.fromEntries(url.searchParams), body: req.body ?? null },
-    response: { status: o.status, body: o.body ?? null },
-    fault: null,
-    effect: o.effect ?? 'none',
-  });
-  reply.code(o.status);
-  if (o.headers) reply.headers(o.headers);
-  return o.body === undefined ? reply.send() : reply.send(o.body);
-}
+export { respond, type Outcome } from './respond.js';
 
 /** Builds the mock app without listening. */
 export function createMockApp(options: MockOptions = {}): FastifyInstance {
@@ -80,9 +49,17 @@ export function createMockApp(options: MockOptions = {}): FastifyInstance {
     }
   });
   app.decorateRequest('receivedAt', '');
+  app.decorateRequest('epoch', 0);
+  app.decorateRequest('identity', null);
+  app.decorateRequest('faultId', null);
+  app.decorateRequest('afterApply', null);
   app.addHook('onRequest', async (req) => {
     req.receivedAt = new Date().toISOString();
+    req.epoch = state.epoch;
   });
+  app.addHook('preHandler', (req, reply) => applyFaults(state, req, reply));
+  // Parked and delayed requests would otherwise keep `close()` waiting.
+  app.addHook('preClose', async () => state.abortPending());
 
   // --- token endpoint ----------------------------------------------------
   app.post('/oauth2/v1/accesstoken', async (req, reply) => {
@@ -132,6 +109,56 @@ export function createMockApp(options: MockOptions = {}): FastifyInstance {
     state.revokeTokens();
     return respond(state, req, reply, { status: 204, body: undefined, kind: 'admin' });
   });
+  app.put('/__mock/faults', async (req, reply) => {
+    const errors = validateFaultConfig(req.body);
+    if (errors.length > 0) return reply.code(400).send({ errors });
+    state.faults.configure(req.body as FaultConfig);
+    return respond(state, req, reply, { status: 204, body: undefined, kind: 'admin' });
+  });
+  app.get('/__mock/holds', async (req) => {
+    const wait = Number((req.query as { wait?: string }).wait ?? 0);
+    return state.holds.wait(Number.isFinite(wait) ? wait : 0);
+  });
+  app.post('/__mock/holds/:id/release', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!state.holds.release(id)) return reply.code(404).send({ errors: [`no parked request ${id}`] });
+    return respond(state, req, reply, { status: 204, body: undefined, kind: 'admin' });
+  });
+  // --- records, changed behind the hub's back (#33) -----------------------
+  const adminRecord = (r: Resource) => {
+    const i = encounterIdentifier(r, state);
+    return { kind: 'admin' as const, resourceType: r.resourceType, visitKey: i?.value ?? null, businessIdentifier: i ? `${i.system}|${i.value}` : null };
+  };
+  const unknownRecord = (type: string, id: string) => ({ errors: [`no ${type}/${id}`] });
+  app.post('/__mock/records', async (req, reply) => {
+    const body = req.body as Resource | null;
+    if (body === null || typeof body !== 'object' || typeof body.resourceType !== 'string') {
+      return reply.code(400).send({ errors: ['body must be a FHIR resource'] });
+    }
+    const id = body.id ?? randomUUID();
+    const stored = { ...body, id, meta: { versionId: state.nextVersionId(), lastUpdated: utcNow(), ...body.meta } } as Resource;
+    state.recordsOf(stored.resourceType).set(id, stored);
+    return respond(state, req, reply, { status: 201, body: stored, ...adminRecord(stored) });
+  });
+  app.patch('/__mock/records/:type/:id', async (req, reply) => {
+    const { type, id } = req.params as { type: string; id: string };
+    const records = state.recordsOf(type);
+    const existing = records.get(id);
+    if (!existing) return reply.code(404).send(unknownRecord(type, id));
+    const merged = mergePatch(existing, req.body ?? {}) as Resource;
+    const stored = { ...merged, resourceType: type, id, meta: { ...merged.meta, versionId: state.nextVersionId(), lastUpdated: utcNow() } } as Resource;
+    records.set(id, stored);
+    return respond(state, req, reply, { status: 200, body: stored, ...adminRecord(stored) });
+  });
+  app.delete('/__mock/records/:type/:id', async (req, reply) => {
+    const { type, id } = req.params as { type: string; id: string };
+    const records = state.recordsOf(type);
+    const existing = records.get(id);
+    if (!existing) return reply.code(404).send(unknownRecord(type, id));
+    records.delete(id);
+    return respond(state, req, reply, { status: 204, body: undefined, ...adminRecord(existing) });
+  });
+
   app.get('/__mock/log', async (req) => {
     const q = req.query as Record<string, string | undefined>;
     const afterSeq = q.afterSeq === undefined ? 0 : Number(q.afterSeq);
