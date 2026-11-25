@@ -23,6 +23,23 @@ export interface StepTable {
   event_type: string;
   state: string;
   updated_at: Timestamp;
+  attempts: Generated<number>;
+  lease_token: string | null;
+  lease_expires_at: Timestamp | null;
+  available_at: Timestamp | null;
+  remote_type: string | null;
+  remote_id: string | null;
+  remote_version: string | null;
+  dead_letter_reason: string | null;
+}
+
+export interface LocationMappingTable {
+  source_id: string;
+  location_code: string;
+  /** SATUSEHAT Location id. */
+  location_id: string;
+  note: string | null;
+  updated_at: Timestamp;
 }
 
 export interface SourceEventTable {
@@ -52,6 +69,7 @@ export interface Database {
   step: StepTable;
   source_event: SourceEventTable;
   idempotency_key: IdempotencyKeyTable;
+  location_mapping: LocationMappingTable;
 }
 
 export function createDatabase(databaseUrl: string): Kysely<Database> {

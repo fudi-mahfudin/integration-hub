@@ -12,6 +12,10 @@ import { HealthController } from './health/health.controller.js';
 import { ProblemFilter } from './http/problem.js';
 import { createIngest, type Ingest } from './ingestion/ingest.js';
 import { EventsController } from './ingestion/events.controller.js';
+import { loadMappingSeed, readMappingSeed } from './mapping/location-mappings.js';
+import { createOutbox } from './outbox/outbox.js';
+import { createFhirClient } from './satusehat/fhir-client.js';
+import { createWorkerLoop } from './worker/worker.js';
 import { CLOCK, CONFIG, DATABASE, INGEST, REDIS, SOURCE_SYSTEMS, type Clock } from './tokens.js';
 
 export { DATABASE, REDIS } from './tokens.js';
@@ -67,6 +71,13 @@ export async function createHub(config: HubConfig, options: HubOptions = {}): Pr
   const redis = new Redis(config.redisUrl, { lazyConnect: true, maxRetriesPerRequest: 1 });
   const clock = options.clock ?? (() => new Date());
   const ingest = createIngest({ config, db, redis, clock });
+  // Operator mappings from the seed file, upserted idempotently on every boot (#10).
+  try {
+    await loadMappingSeed(db, readMappingSeed(config.mappingSeedPath), clock());
+  } catch (err) {
+    await db.destroy();
+    throw err;
+  }
 
   const app = await NestFactory.create<NestFastifyApplication>(
     HubServiceModule.register({ config, db, redis, clock, ingest }),
@@ -102,6 +113,36 @@ export async function createHub(config: HubConfig, options: HubOptions = {}): Pr
       await app.close();
       await db.destroy();
       redis.disconnect();
+    },
+  };
+}
+
+export interface WorkerProcess {
+  /** Starts claiming steps. */
+  start(): void;
+  /** Stops claiming, waits for attempts in progress, then disconnects. */
+  close(): Promise<void>;
+}
+
+/**
+ * The production composition root of the worker process (ADR 0001: same
+ * codebase, second entry point). It serves no HTTP; it claims steps from the
+ * Postgres outbox and runs them against SATUSEHAT.
+ */
+export async function createWorker(config: HubConfig, options: HubOptions = {}): Promise<WorkerProcess> {
+  const db = createDatabase(config.databaseUrl);
+  const clock = options.clock ?? (() => new Date());
+  const loop = createWorkerLoop({
+    config: config.worker,
+    outbox: createOutbox({ db, clock, leaseMs: config.worker.leaseMs }),
+    deps: { db, fhir: createFhirClient(config.satusehat, clock) },
+    clock,
+  });
+  return {
+    start: () => loop.start(),
+    async close() {
+      await loop.stop();
+      await db.destroy();
     },
   };
 }

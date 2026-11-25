@@ -18,9 +18,10 @@ To run the hub service itself:
 ```sh
 pnpm build
 node apps/hub/dist/main.js     # serves GET http://localhost:3000/livez
+node apps/hub/dist/worker-main.js   # claims steps and sends them to SATUSEHAT (default: the mock on :4010)
 ```
 
-The HTTP API (events, cases, error codes, idempotency key retention) is specified in [docs/api.md](docs/api.md). Without `HUB_SOURCES` the hub registers one development source system, `simulator`, with the public key `dev-source-key`; set `HUB_SOURCES` to a JSON array of `{ id, organizationId, apiKey }` anywhere else.
+The HTTP API (events, cases, error codes, idempotency key retention) is specified in [docs/api.md](docs/api.md). Without `HUB_SOURCES` the hub registers one development source system, `simulator`, with the public key `dev-source-key`; set `HUB_SOURCES` to a JSON array of `{ id, organizationId, apiKey }` anywhere else. Location mappings (source, local `locationCode` → SATUSEHAT Location) come from `apps/hub/seed/mappings.json` (`MAPPING_SEED_PATH`), upserted each time the hub service boots.
 
 `pnpm deps:down` stops the containers and deletes their data.
 
@@ -32,7 +33,7 @@ The hub never migrates itself: always run `pnpm migrate` before starting it. The
 
 | Path | What |
 |---|---|
-| `apps/hub` | The hub: one NestJS + Fastify codebase, deployed as the hub service and (later) the worker process (ADR 0001) |
+| `apps/hub` | The hub: one NestJS + Fastify codebase, deployed as the hub service (`src/main.ts`) and the worker process (`src/worker-main.ts`) (ADR 0001) |
 | `compose.yaml` | Local infrastructure; only components from the closed list |
 | `.github/workflows/ci.yml` | CI: the same `pnpm test` against Postgres and Redis service containers |
 

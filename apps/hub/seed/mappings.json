@@ -1,0 +1,8 @@
+{
+  "locations": [
+    { "source": "simulator", "locationCode": "APOTEK-RJ", "locationId": "99a10000-0000-4000-8000-000000000001", "note": "Apotek Rawat Jalan (mock world)" },
+    { "source": "simulator", "locationCode": "POLI-PD", "locationId": "99a10000-0000-4000-8000-000000000002", "note": "Poli Penyakit Dalam (mock world)" },
+    { "source": "simulator", "locationCode": "POLI-ANAK", "locationId": "99a10000-0000-4000-8000-000000000003", "note": "Poli Anak (mock world)" },
+    { "source": "simulator", "locationCode": "IGD", "locationId": "99a10000-0000-4000-8000-000000000004", "note": "Instalasi Gawat Darurat (mock world)" }
+  ]
+}

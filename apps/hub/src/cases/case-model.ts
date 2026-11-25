@@ -50,6 +50,17 @@ export function applyEventArrival(steps: readonly StepView[], seq: number): Step
   });
 }
 
+/**
+ * Applies the completion of step `seq` (#8): it becomes `completed`; the new
+ * current step, if its event is already stored (`blocked`), becomes `ready`.
+ * Otherwise it stays `awaiting_event` and the case derives to `waiting`.
+ */
+export function applyCompletion(steps: readonly StepView[], seq: number): StepView[] {
+  const done = steps.map((s): StepView => (s.seq === seq ? { seq, state: 'completed' } : s));
+  const next = currentStep(done);
+  return done.map((s): StepView => (s.seq === next?.seq && s.state === 'blocked' ? { seq: s.seq, state: 'ready' } : s));
+}
+
 export interface DerivedStatus {
   status: Exclude<CaseStatus, 'abandoned'>;
   /** The event type of the earliest missing event, when `waiting`. */

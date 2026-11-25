@@ -1,0 +1,82 @@
+import type { WorkerConfig } from '../config.js';
+import type { ClaimedStep, Outbox } from '../outbox/outbox.js';
+import { createVisit } from '../steps/create-visit.js';
+import type { StepDeps, StepRunner } from '../steps/step-runner.js';
+import type { Clock } from '../tokens.js';
+
+/** Step name → its runner. Later steps register here as they land (#29-#31). */
+const RUNNERS: Record<string, StepRunner> = {
+  create_visit: createVisit,
+};
+
+export interface Worker {
+  start(): void;
+  /** Stops claiming and waits for attempts in progress. The 70s drain is #43's. */
+  stop(): Promise<void>;
+}
+
+/**
+ * The worker loop: `concurrency` slots, each claims one step, runs its
+ * attempt and records the outcome through the lease fence; sleeps
+ * `pollIntervalMs` when nothing is claimable.
+ */
+export function createWorkerLoop(opts: { config: WorkerConfig; outbox: Outbox; deps: StepDeps; clock: Clock }): Worker {
+  const { config, outbox, deps, clock } = opts;
+  let running = false;
+  let slots: Promise<void>[] = [];
+  let wake: (() => void)[] = [];
+
+  const idle = () =>
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(done, config.pollIntervalMs);
+      function done() {
+        clearTimeout(timer);
+        wake = wake.filter((w) => w !== done);
+        resolve();
+      }
+      wake.push(done);
+    });
+
+  const attempt = async (step: ClaimedStep): Promise<void> => {
+    const runner = RUNNERS[step.name];
+    try {
+      if (!runner) throw new Error(`no runner for step ${step.name} yet`);
+      const result = await runner(step, deps);
+      // A false return means the lease was lost: a newer claim owns the
+      // step, and this result is discarded (#8).
+      if (result.outcome === 'completed') await outbox.complete(step, result.remote);
+      else await outbox.deadLetter(step, result.reason);
+    } catch (err) {
+      // Every unclassified failure is transient for now; #35 classifies and backs off.
+      console.warn(`step ${step.name} attempt ${step.attempt} failed: ${(err as Error).message}`);
+      await outbox.retryAt(step, new Date(clock().getTime() + config.retryDelayMs));
+    }
+  };
+
+  const slot = async (): Promise<void> => {
+    while (running) {
+      try {
+        const step = await outbox.claim();
+        if (step) await attempt(step);
+        else await idle();
+      } catch (err) {
+        // Claim or outcome write failed (database trouble); the lease covers the step.
+        console.error('worker slot error', err);
+        if (running) await idle();
+      }
+    }
+  };
+
+  return {
+    start() {
+      if (running) return;
+      running = true;
+      slots = Array.from({ length: config.concurrency }, () => slot());
+    },
+    async stop() {
+      running = false;
+      for (const w of [...wake]) w();
+      await Promise.all(slots);
+    },
+  };
+}
