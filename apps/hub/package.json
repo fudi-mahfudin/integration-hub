@@ -7,7 +7,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/main.js",
     "migrate": "tsx src/db/migrate-cli.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "demo:naive-race": "tsx scripts/naive-race-demo.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.6.0",
