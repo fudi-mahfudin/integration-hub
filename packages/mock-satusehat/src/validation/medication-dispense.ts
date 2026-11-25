@@ -8,6 +8,7 @@
  * MedicationRequest the mock holds (dictionary rule 10394).
  */
 import type { Violation } from '../templates/outcome.js';
+import { FLOOR_MS, isObject, nonEmpty, parseUtc, reference } from './common.js';
 import type { KfaProduct } from '../world/world.js';
 
 export interface MedicationDispenseRuleContext {
@@ -25,9 +26,7 @@ const KFA_SYSTEM = 'http://sys-ids.kemkes.go.id/kfa';
 const MEDICATION_TYPE_URL = 'https://fhir.kemkes.go.id/r4/StructureDefinition/MedicationType';
 const SUBSTITUTION_TYPE_SYSTEM = 'http://terminology.hl7.org/CodeSystem/v3-substanceAdminSubstitution';
 const SUBSTITUTION_TYPES = new Set(['G', 'BC', 'TG', 'TB']);
-const TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\+00:00$/;
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
-const FLOOR_MS = Date.UTC(2014, 5, 3);
 const STATUSES = new Set(['preparation', 'in-progress', 'cancelled', 'on-hold', 'completed', 'entered-in-error', 'stopped', 'declined', 'unknown']);
 
 type Fail = (rule: string, path: string, message: string, code?: string) => void;
@@ -185,19 +184,6 @@ function substitution(s: any, v: Fail, dispensed: KfaProduct | undefined, prescr
   parties.forEach((p, i) => reference(p, 'Practitioner', `${path}.responsibleParty[${i}].reference`, v));
 }
 
-function parseUtc(value: unknown): number | null {
-  if (typeof value !== 'string') return null;
-  const m = TIME.exec(value);
-  if (!m) return null;
-  const [y, mo, d, h, mi, s] = m.slice(1).map(Number) as [number, number, number, number, number, number];
-  const ms = Date.UTC(y, mo - 1, d, h, mi, s);
-  const back = new Date(ms);
-  const exact =
-    back.getUTCFullYear() === y && back.getUTCMonth() === mo - 1 && back.getUTCDate() === d &&
-    back.getUTCHours() === h && back.getUTCMinutes() === mi && back.getUTCSeconds() === s;
-  return exact ? ms : null;
-}
-
 function parseDate(value: unknown): number | null {
   if (typeof value !== 'string') return null;
   const m = DATE.exec(value);
@@ -206,25 +192,4 @@ function parseDate(value: unknown): number | null {
   const ms = Date.UTC(y, mo - 1, d);
   const back = new Date(ms);
   return back.getUTCFullYear() === y && back.getUTCMonth() === mo - 1 && back.getUTCDate() === d ? ms : null;
-}
-
-function reference(ref: unknown, type: string, path: string, v: Fail): boolean {
-  if (!isObject(ref) || !nonEmpty(ref.reference)) {
-    v('REQUIRED', path, `${path.replace(/^MedicationDispense\./, '')} is required`);
-    return false;
-  }
-  const [t, id, ...rest] = String(ref.reference).split('/');
-  if (t !== type || !nonEmpty(id) || rest.length > 0) {
-    v('REFERENCE_TYPE', path, `must reference a ${type}`);
-    return false;
-  }
-  return true;
-}
-
-function isObject(x: unknown): x is Record<string, any> {
-  return typeof x === 'object' && x !== null && !Array.isArray(x);
-}
-
-function nonEmpty(x: unknown): x is string {
-  return typeof x === 'string' && x.trim() !== '';
 }

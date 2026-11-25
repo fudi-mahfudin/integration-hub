@@ -6,6 +6,7 @@
  * must be the product's dose form.
  */
 import type { Violation } from '../templates/outcome.js';
+import { FLOOR_MS, isObject, nonEmpty, parseUtc, reference } from './common.js';
 import type { KfaProduct } from '../world/world.js';
 
 export interface MedicationRequestRuleContext {
@@ -20,8 +21,6 @@ const PRESCRIPTION_ITEM = /^http:\/\/sys-ids\.kemkes\.go\.id\/prescription-item\
 const MEDICATION_ID = /^http:\/\/sys-ids\.kemkes\.go\.id\/medication\/([^/]+)$/;
 const KFA_SYSTEM = 'http://sys-ids.kemkes.go.id/kfa';
 const MEDICATION_TYPE_URL = 'https://fhir.kemkes.go.id/r4/StructureDefinition/MedicationType';
-const TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\+00:00$/;
-const FLOOR_MS = Date.UTC(2014, 5, 3);
 const STATUSES = new Set(['active', 'on-hold', 'cancelled', 'completed', 'entered-in-error', 'stopped', 'draft', 'unknown']);
 const INTENTS = new Set(['proposal', 'plan', 'order', 'original-order', 'reflex-order', 'filler-order', 'instance-order', 'option']);
 
@@ -138,38 +137,4 @@ function medication(med: Record<string, any>, v: Fail, ctx: MedicationRequestRul
 function unit(q: unknown, product: KfaProduct | undefined, path: string, v: Fail): void {
   if (!isObject(q) || product?.doseForm === undefined) return;
   if (q.code !== product.doseForm.code) v('VALUE_SET', path, `quantity unit must be the dose form ${product.doseForm.code} of ${product.code}`);
-}
-
-function parseUtc(value: unknown): number | null {
-  if (typeof value !== 'string') return null;
-  const m = TIME.exec(value);
-  if (!m) return null;
-  const [y, mo, d, h, mi, s] = m.slice(1).map(Number) as [number, number, number, number, number, number];
-  const ms = Date.UTC(y, mo - 1, d, h, mi, s);
-  const back = new Date(ms);
-  const exact =
-    back.getUTCFullYear() === y && back.getUTCMonth() === mo - 1 && back.getUTCDate() === d &&
-    back.getUTCHours() === h && back.getUTCMinutes() === mi && back.getUTCSeconds() === s;
-  return exact ? ms : null;
-}
-
-function reference(ref: unknown, type: string, path: string, v: Fail): boolean {
-  if (!isObject(ref) || !nonEmpty(ref.reference)) {
-    v('REQUIRED', path, `${path.replace(/^MedicationRequest\./, '')} is required`);
-    return false;
-  }
-  const [t, id, ...rest] = String(ref.reference).split('/');
-  if (t !== type || !nonEmpty(id) || rest.length > 0) {
-    v('REFERENCE_TYPE', path, `must reference a ${type}`);
-    return false;
-  }
-  return true;
-}
-
-function isObject(x: unknown): x is Record<string, any> {
-  return typeof x === 'object' && x !== null && !Array.isArray(x);
-}
-
-function nonEmpty(x: unknown): x is string {
-  return typeof x === 'string' && x.trim() !== '';
 }
