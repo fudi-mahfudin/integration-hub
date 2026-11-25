@@ -7,6 +7,7 @@
  * Written from #9's rule text, never from the mock's rules (ADR 0006).
  */
 import { encounterRules } from './encounter-rules.js';
+import { medicationDispenseRules } from './medication-dispense-rules.js';
 import { medicationRequestRules } from './medication-request-rules.js';
 
 /** Step dead-letter codes, in rule order (#9). */
@@ -75,10 +76,11 @@ export interface StepCheck {
   resource?: FhirPayload;
 }
 
-/** Payload rules per resource type; #30-#31 add MedicationDispense and the Encounter update. */
+/** Payload rules per resource type; #31 adds the Encounter update. */
 const PAYLOAD_RULES: Record<string, (resource: FhirPayload, organizationId: string) => Violation[]> = {
   Encounter: encounterRules,
   MedicationRequest: medicationRequestRules,
+  MedicationDispense: medicationDispenseRules,
 };
 
 /** Every violation of `check`, ordered by rule (stable within a rule). */
@@ -128,11 +130,9 @@ function medicationRules(m: MedicationUse): Violation[] {
   }
   if (m.role === 'prescription') return [];
 
-  // Substitution (#9): neither the prescribed 93 nor a child of the prescribed 92, but the same 91 set.
   const { product, prescribed } = m;
-  const asPrescribed =
-    prescribed.level === 93 ? product.code === prescribed.code : product.parent92 !== null && product.parent92 === prescribed.code;
-  if (!asPrescribed && !sameSet(product.ingredients, prescribed.ingredients)) {
+  const kind = substitutionKind(product, prescribed);
+  if (kind === 'therapeutic') {
     return [
       {
         code: 'UNSUPPORTED_THERAPEUTIC_SUBSTITUTION',
@@ -141,7 +141,7 @@ function medicationRules(m: MedicationUse): Violation[] {
       },
     ];
   }
-  const substituted = !asPrescribed;
+  const substituted = kind === 'substitution';
   if (substituted !== m.declaredSubstitution) {
     return [
       {
@@ -154,6 +154,20 @@ function medicationRules(m: MedicationUse): Violation[] {
     ];
   }
   return [];
+}
+
+/**
+ * What a dispensed 93 is against the prescribed product (#9): the prescribed
+ * 93 or a child of the prescribed 92 is `as_prescribed`; otherwise an equal
+ * 91 set is a `substitution` (strength change or brand swap); any other 91
+ * set is `therapeutic` (unsupported). Submit dispense sets `wasSubstituted`
+ * from this, the medication rule checks the source's declaration against it.
+ */
+export function substitutionKind(product: KfaProduct, prescribed: KfaProduct): 'as_prescribed' | 'substitution' | 'therapeutic' {
+  const asPrescribed =
+    prescribed.level === 93 ? product.code === prescribed.code : product.parent92 !== null && product.parent92 === prescribed.code;
+  if (asPrescribed) return 'as_prescribed';
+  return sameSet(product.ingredients, prescribed.ingredients) ? 'substitution' : 'therapeutic';
 }
 
 function sameSet(a: readonly string[], b: readonly string[]): boolean {

@@ -111,6 +111,37 @@ export function worldPrescriptionWritten(visitId: string, item: Record<string, u
   };
 }
 
+/** `world-source`'s local drug code for the world KFA product `kfaCode`. */
+export const drugCode = (kfaCode: string) => {
+  const drug = WORLD_DRUGS.find((d) => d.product.code === kfaCode);
+  if (!drug) throw new Error(`no world KFA product ${kfaCode}`);
+  return drug.code;
+};
+
+/**
+ * A `drug.dispensed` for the item `worldPrescriptionWritten(visitId)`
+ * prescribes, of the same mapped 93 by default, by the world pharmacist,
+ * with a batch; `data` is shallow-merged.
+ */
+export function worldDrugDispensed(visitId: string, data: Record<string, unknown> = {}) {
+  return {
+    type: 'drug.dispensed',
+    visitId,
+    occurredAt: '2026-03-02T09:10:00+07:00',
+    data: {
+      prescriptionId: `RX-${visitId}`,
+      itemId: `RX-${visitId}-1`,
+      drugCode: worldDrug(93).code,
+      quantity: 10,
+      preparedAt: '2026-03-02T09:00:00+07:00',
+      handedOverAt: '2026-03-02T09:10:00+07:00',
+      pharmacist: { nik: worldPharmacist.nik },
+      batch: { lot: 'LOT-2026-01', expiry: '2028-01-31' },
+      ...data,
+    } as Record<string, unknown>,
+  };
+}
+
 /** The world organization's `prescription/{org}` identifier system. */
 export const PRESCRIPTION_SYSTEM = `http://sys-ids.kemkes.go.id/prescription/${world.organization.id}`;
 

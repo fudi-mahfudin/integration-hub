@@ -19,6 +19,7 @@ const TITLES: Record<string, string> = {
   VALIDATION_FAILED: 'The event failed validation',
   UNSUPPORTED_MULTI_ITEM: 'A prescription must have exactly one item',
   EVENT_ALREADY_RECORDED: 'This event was already recorded for the visit',
+  PRESCRIPTION_MISMATCH: 'The dispense does not name the visit prescription',
   NOT_FOUND: 'Not found',
   INTERNAL_ERROR: 'Internal error',
 };

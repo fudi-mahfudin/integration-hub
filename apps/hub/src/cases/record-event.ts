@@ -1,7 +1,7 @@
 import type { Transaction } from 'kysely';
 import type { SourceSystem } from '../auth/source-systems.js';
 import type { Database } from '../db/database.js';
-import { Problem } from '../http/problem.js';
+import { Problem, type FieldError } from '../http/problem.js';
 import type { ValidatedEvent } from '../ingestion/event-schema.js';
 import { applyEventArrival, openingSteps, stepBySeq, stepForEvent, type DerivedStatus, type StepState } from './case-model.js';
 import { readSteps, writeDerivedStatus } from './case-status.js';
@@ -16,7 +16,8 @@ export interface RecordedEvent {
  * case keyed by (source, visitId) with all four steps if needed, stores the
  * event, releases or blocks its step and re-derives the case status (#8).
  * @throws Problem 409 `EVENT_ALREADY_RECORDED` when the case already has this event type;
- *   422 `UNSUPPORTED_MULTI_ITEM` when it is a prescription for another item (#6).
+ *   422 `UNSUPPORTED_MULTI_ITEM` when it is a prescription for another item (#6);
+ *   422 `PRESCRIPTION_MISMATCH` when the prescription and the dispense name different (prescriptionId, itemId) (#9).
  */
 export async function recordEvent(
   trx: Transaction<Database>,
@@ -79,6 +80,7 @@ export async function recordEvent(
     .returning('id')
     .executeTakeFirst();
   if (!stored) throw await alreadyRecorded(trx, kase.id, event);
+  await checkPrescriptionPair(trx, kase.id, event);
 
   const seq = stepForEvent(event.type).seq;
   const after = applyEventArrival(await readSteps(trx, kase.id), seq);
@@ -114,6 +116,37 @@ async function alreadyRecorded(trx: Transaction<Database>, caseId: string, event
     }
   }
   return new Problem(409, 'EVENT_ALREADY_RECORDED');
+}
+
+const PAIRED: Partial<Record<string, string>> = { 'prescription.written': 'drug.dispensed', 'drug.dispensed': 'prescription.written' };
+
+/**
+ * The pair check (#9), run when the second of `prescription.written` and
+ * `drug.dispensed` arrives (either order): the dispense must name the case
+ * prescription's `prescriptionId` and `itemId`. The case row is locked.
+ */
+async function checkPrescriptionPair(trx: Transaction<Database>, caseId: string, event: ValidatedEvent): Promise<void> {
+  const other = PAIRED[event.type];
+  if (other === undefined) return;
+  const row = await trx
+    .selectFrom('source_event')
+    .select('envelope')
+    .where('case_id', '=', caseId)
+    .where('type', '=', other)
+    .executeTakeFirst();
+  if (!row) return;
+  const dispenseSecond = event.type === 'drug.dispensed';
+  const prescribed = ((dispenseSecond ? row.envelope : event.envelope) as { data: { prescriptionId: string; items: { itemId: string }[] } }).data;
+  const dispensed = ((dispenseSecond ? event.envelope : row.envelope) as { data: { prescriptionId: string; itemId: string } }).data;
+  const errors: FieldError[] = [];
+  if (prescribed.prescriptionId !== dispensed.prescriptionId) {
+    errors.push({ path: '/data/prescriptionId', code: 'PRESCRIPTION_MISMATCH', message: 'the prescription and the dispense name different prescriptionIds' });
+  }
+  if (prescribed.items[0]?.itemId !== dispensed.itemId) {
+    const path = dispenseSecond ? '/data/itemId' : '/data/items/0/itemId';
+    errors.push({ path, code: 'PRESCRIPTION_MISMATCH', message: 'the prescription and the dispense name different itemIds' });
+  }
+  if (errors.length > 0) throw new Problem(422, 'PRESCRIPTION_MISMATCH', errors);
 }
 
 function prescriptionItemKey(envelope: unknown): string {

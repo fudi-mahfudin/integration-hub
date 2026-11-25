@@ -28,7 +28,7 @@ Submits one source event. The hub accepts it and answers without waiting for SAT
 
 Headers: `Authorization`, `Idempotency-Key` (required, opaque, 1 to 255 characters, a UUID is fine but not required).
 
-Body, the envelope: `{ type, visitId, occurredAt, data }`. `visitId` is the source system's own visit number, unique per source system. Event types accepted so far: `visit.started`, `prescription.written`. Events of one visit may arrive in any order: an event whose predecessor is missing is stored and its step waits as `blocked`.
+Body, the envelope: `{ type, visitId, occurredAt, data }`. `visitId` is the source system's own visit number, unique per source system. Event types accepted so far: `visit.started`, `prescription.written`, `drug.dispensed`. Events of one visit may arrive in any order: an event whose predecessor is missing is stored and its step waits as `blocked`.
 
 `visit.started` `data`:
 
@@ -51,6 +51,18 @@ Body, the envelope: `{ type, visitId, occurredAt, data }`. `visitId` is the sour
 
 `drugCode` is the source's local drug code (the hub maps it to KFA); `quantity` and `doseAmount` are positive numbers, `timesPerDay` a positive integer; the unit is never sent (the hub takes it from the KFA product's dose form). `itemId` is the `prescription-item/{org}` identifier.
 
+`drug.dispensed` `data`:
+
+| Field | Rule |
+|---|---|
+| `prescriptionId`, `itemId` | the prescription and item it fills; must be the visit's (`422 PRESCRIPTION_MISMATCH`, checked when the second of the prescription and the dispense arrives) |
+| `drugCode` | the local code of the product actually handed over (the hub maps it to a KFA 93) |
+| `quantity` | positive number, in the product's dose form |
+| `preparedAt`, `handedOverAt` | date-times with offset, not before the floor |
+| `pharmacist` | `{ nik }` or `{ name, birthDate, gender }` |
+| `batch` | optional `{ lot, expiry }`, both or neither (`BATCH_INCOMPLETE`); `expiry` is a plain `YYYY-MM-DD` date, sent as is, not before `2014-06-03` |
+| `substitution` | optional `{ reasonCode }`, one of `OS`, `FP`, `DRUG_INTERACTION`, `PATIENT_CHOICE`, `PRESCRIPTION_ERROR` (else `INVALID_SUBSTITUTION_REASON`). Declare it exactly when the product is neither the prescribed 93 nor a child of the prescribed 92; the hub decides from KFA and dead-letters a disagreement (`SUBSTITUTION_MISMATCH`) |
+
 NIKs are 16 digits; `birthDate` is `YYYY-MM-DD`; `gender` is `male` or `female`.
 
 **Times** (`occurredAt`, `startedAt`) must be ISO 8601 date-times with an explicit offset (`Z` allowed), e.g. `2026-03-02T08:00:00+07:00`. A time without an offset, or a partial one, is `TIME_OFFSET_MISSING`. `startedAt` must not be before `2014-06-03T00:00:00+00:00`, compared on the UTC instant (so `2014-06-03T05:00+07:00` is `DATE_BEFORE_FLOOR`).
@@ -62,10 +74,11 @@ NIKs are 16 digits; `birthDate` is `YYYY-MM-DD`; `gender` is `male` or `female`.
 3. Key lookup. If this source system has already had an event accepted under this key:
    - same body: the original answer, status and body byte for byte, plus `Idempotent-Replayed: true` (a **duplicate ingest**). `caseStatus` in it is the status at first acceptance, not now.
    - different body: `422 IDEMPOTENCY_KEY_REUSED`. Bodies are compared by the SHA-256 of their RFC 8785 canonical form, so key order and whitespace do not matter.
-4. `422 VALIDATION_FAILED`: the event's own schema. Every violation is listed at once in `errors[]` with a field code: `REQUIRED`, `INVALID_FORMAT`, `TIME_OFFSET_MISSING`, `DATE_BEFORE_FLOOR`.
+4. `422 VALIDATION_FAILED`: the event's own schema. Every violation is listed at once in `errors[]` with a field code: `REQUIRED`, `INVALID_FORMAT`, `TIME_OFFSET_MISSING`, `DATE_BEFORE_FLOOR`, `BATCH_INCOMPLETE`, `INVALID_SUBSTITUTION_REASON`.
 5. `422 UNSUPPORTED_MULTI_ITEM`: a prescription without exactly one item, or a second `prescription.written` for the visit naming another `prescriptionId`/`itemId` (one item per visit, ADR 0004).
 6. `409 EVENT_ALREADY_RECORDED`: the visit already has an event of this type, sent under another key (or under a key no longer retained, below).
-7. `202 Accepted`, body `{ visitId, type, caseStatus }`, header `Location: /v1/cases/{id}`.
+7. `422 PRESCRIPTION_MISMATCH`: the prescription and the dispense of the visit name different `prescriptionId`/`itemId`; the one arriving second is rejected, `errors[]` names the field(s).
+8. `202 Accepted`, body `{ visitId, type, caseStatus }`, header `Location: /v1/cases/{id}`.
 
 Only a `202` consumes the key: after any `4xx`/`5xx` nothing is recorded against it, and the same key may be sent again with a corrected body. Rejections from step 4 on are written to the visit's **rejection log** (code, event type, time; never the body), shown on the case as `rejections` and never changing its state. Concurrent identical requests get identical answers and open one case.
 
@@ -106,11 +119,11 @@ The case and its step states. A source system's key sees only its own cases; any
 }
 ```
 
-Per step: `attempts` counts claims by a worker (an attempt is counted when it starts); `remote` is the SATUSEHAT record the step created or adopted (its remote identifier), set only when the step completes; `deadLetterReason` is a stable code when the step is `dead_lettered`. Reasons so far: `MAPPING_MISSING` (no location mapping for the event's `locationCode`, no drug mapping for its `drugCode`, or a mapped KFA code that KFA does not know), `KFA_LEVEL_INVALID` (the drug maps to a KFA level a prescription cannot use: only 92 or 93), `PAYLOAD_INVALID` (the payload the hub built broke a payload rule: mandatory field, time format, date floor, identifier system or reference; a hub bug or a malformed mapping value; the rule and path are in the attempt log), `PATIENT_NOT_FOUND`, `PRACTITIONER_NOT_FOUND` (no single IHS number for the NIK), `REMOTE_RECORD_AMBIGUOUS` (the search by the step's local identifier found more than one record, so the hub will not guess).
+Per step: `attempts` counts claims by a worker (an attempt is counted when it starts); `remote` is the SATUSEHAT record the step created or adopted (its remote identifier), set only when the step completes; `deadLetterReason` is a stable code when the step is `dead_lettered`. Reasons so far: `MAPPING_MISSING` (no location mapping for the event's `locationCode`, no drug mapping for its `drugCode`, or a mapped KFA code that KFA does not know), `KFA_LEVEL_INVALID` (the drug maps to a KFA level the step cannot use: a prescription 92 or 93, a dispense only 93), `UNSUPPORTED_THERAPEUTIC_SUBSTITUTION` (the dispensed 93 is neither the prescribed 93 nor a child of the prescribed 92 and has other active ingredients (91 set)), `SUBSTITUTION_MISMATCH` (the hub's substitution decision from KFA disagrees with the source's `substitution` declaration, in either direction; these two are bad source data that replay cannot fix), `PAYLOAD_INVALID` (the payload the hub built broke a payload rule: mandatory field, time format, date floor, identifier system or reference; a hub bug or a malformed mapping value; the rule and path are in the attempt log), `PATIENT_NOT_FOUND`, `PRACTITIONER_NOT_FOUND` (no single IHS number for the NIK), `REMOTE_RECORD_AMBIGUOUS` (the search by the step's local identifier found more than one record, so the hub will not guess).
 
 Before sending, every payload is checked by the hub's Validation module; a violation dead-letters the step and holds the rest of the case. When there are several, `deadLetterReason` is the first in rule order (`MAPPING_MISSING`, `KFA_LEVEL_INVALID`, `UNSUPPORTED_THERAPEUTIC_SUBSTITUTION`, `SUBSTITUTION_MISMATCH`, `PAYLOAD_INVALID`) and all of them are in the attempt's `violations`.
 
-`pins` are the values a completed step sent (create visit: `patientIhs`, `practitionerIhs`, `locationId`; submit prescription: `kfaCode`, `kfaLevel`, `parent92`, `ingredients` (the 91 set), `requesterIhs`), stored with its remote identifier; later steps use these, never the live mappings. `attemptLog` is append-only, one entry per finished attempt: `outcome` (`completed`, `dead_lettered`, `retry_wait`), `errorCode`, the last platform `httpStatus`, the values `used` with the patient/practitioner lookup `method` (and for a prescription `drug { localCode, kfaCode, kfa }` and `requester`), every validation violation (`code`, `path`, `message`, `rule`, and `mapping` for a missing mapping) and a `detail` message for transient failures.
+`pins` are the values a completed step sent (create visit: `patientIhs`, `practitionerIhs`, `locationId`; submit prescription: `kfaCode`, `kfaLevel`, `parent92`, `ingredients` (the 91 set), `requesterIhs`; submit dispense: the dispensed `kfaCode`, `kfaLevel`, `parent92`, `ingredients`, `pharmacistIhs`, `wasSubstituted`), stored with its remote identifier; later steps use these, never the live mappings. `attemptLog` is append-only, one entry per finished attempt: `outcome` (`completed`, `dead_lettered`, `retry_wait`), `errorCode`, the last platform `httpStatus`, the values `used` with the patient/practitioner lookup `method` (and for a prescription `drug { localCode, kfaCode, kfa }` and `requester`, for a dispense `drug` and `pharmacist`), every validation violation (`code`, `path`, `message`, `rule`, and `mapping` for a missing mapping) and a `detail` message for transient failures.
 
 `status` is `waiting` (with `waitingFor`, the earliest missing event type, and `waitingSince`), `active`, `dead_lettered`, `completed` or `abandoned`. Step states: `awaiting_event`, `blocked`, `ready`, `in_flight`, `retry_wait`, `completed`, `dead_lettered`.
 
@@ -125,5 +138,6 @@ Before sending, every payload is checked by the hub's Validation module; a viola
 | <a id="validation-failed"></a>`VALIDATION_FAILED` | 422 | The event's own schema; see `errors[]` |
 | <a id="unsupported-multi-item"></a>`UNSUPPORTED_MULTI_ITEM` | 422 | A prescription must have exactly one item, and a visit one prescription item |
 | <a id="event-already-recorded"></a>`EVENT_ALREADY_RECORDED` | 409 | The visit already has this event type |
+| <a id="prescription-mismatch"></a>`PRESCRIPTION_MISMATCH` | 422 | The dispense and the visit's prescription name different `prescriptionId`/`itemId` |
 | <a id="not-found"></a>`NOT_FOUND` | 404 | No such resource for this caller |
 | <a id="internal-error"></a>`INTERNAL_ERROR` | 500 | Unexpected server error |

@@ -36,14 +36,19 @@ export function prescriptionIdentifier(r: Resource): { system: string; value: st
   return null;
 }
 
+/** Resource types identified by `prescription/{org}`: the prescription and its dispense (#9). */
+const PRESCRIPTION_TYPES = new Set(['MedicationRequest', 'MedicationDispense']);
+
 /**
  * The visit a resource belongs to (#12): an Encounter's own identifier, or for
- * a MedicationRequest the identifier of the Encounter it references.
+ * a MedicationRequest (`encounter`) or MedicationDispense (`context`) the
+ * identifier of the Encounter it references.
  */
 export function visitIdentifier(r: Resource, state: MockState): { system: string; value: string } | null {
   const own = encounterIdentifier(r, state);
   if (own) return own;
-  const ref = (r as { encounter?: { reference?: unknown } }).encounter?.reference;
+  const link = r.resourceType === 'MedicationDispense' ? (r as { context?: unknown }).context : (r as { encounter?: unknown }).encounter;
+  const ref = (link as { reference?: unknown } | undefined)?.reference;
   if (typeof ref !== 'string' || !ref.startsWith('Encounter/')) return null;
   const encounter = state.encounters.get(ref.slice('Encounter/'.length));
   return encounter ? encounterIdentifier(encounter, state) : null;
@@ -52,7 +57,7 @@ export function visitIdentifier(r: Resource, state: MockState): { system: string
 /** Who a resource is about: its visit and its business identifier (`encounter/{org}` or `prescription/{org}`). */
 export function resourceIdentity(r: Resource, state: MockState): { visitKey: string | null; businessIdentifier: string | null } {
   const visit = visitIdentifier(r, state);
-  const business = r.resourceType === 'MedicationRequest' ? prescriptionIdentifier(r) : visit;
+  const business = PRESCRIPTION_TYPES.has(r.resourceType) ? prescriptionIdentifier(r) : visit;
   return { visitKey: visit?.value ?? null, businessIdentifier: business ? `${business.system}|${business.value}` : null };
 }
 
@@ -92,9 +97,9 @@ export function requestIdentity(
     const system = bar < 0 ? '' : identifierQuery.slice(0, bar);
     const value = identifierQuery.slice(bar + 1);
     if (resourceType === 'Encounter' && isEncounterSystem(system, state)) found = { visitKey: value, businessIdentifier: identifierQuery };
-    if (resourceType === 'MedicationRequest' && isPrescriptionSystem(system, state)) {
-      // The visit of a prescription the mock already holds, if any.
-      const held = [...state.recordsOf('MedicationRequest').values()].find((r) => prescriptionIdentifier(r)?.value === value && prescriptionIdentifier(r)?.system === system);
+    if (resourceType !== null && PRESCRIPTION_TYPES.has(resourceType) && isPrescriptionSystem(system, state)) {
+      // The visit of a record of this type the mock already holds, if any.
+      const held = [...state.recordsOf(resourceType).values()].find((r) => prescriptionIdentifier(r)?.value === value && prescriptionIdentifier(r)?.system === system);
       found = { visitKey: held ? resourceIdentity(held, state).visitKey : null, businessIdentifier: identifierQuery };
     }
   }

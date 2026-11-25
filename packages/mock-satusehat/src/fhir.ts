@@ -16,6 +16,7 @@ import {
   type Violation,
 } from './templates/index.js';
 import { validateEncounter } from './validation/encounter.js';
+import { validateMedicationDispense } from './validation/medication-dispense.js';
 import { validateMedicationRequest } from './validation/medication-request.js';
 
 type Query = Record<string, string | undefined>;
@@ -69,10 +70,10 @@ export function registerFhirRoutes(fhir: FastifyInstance, state: MockState): voi
       );
       return bundle(hits, { visitKey: value, businessIdentifier: `${system}|${value}` });
     }
-    if (type === 'MedicationRequest' && only(keys, 'identifier')) {
+    if ((type === 'MedicationRequest' || type === 'MedicationDispense') && only(keys, 'identifier')) {
       const [system, value] = splitToken(query.identifier!);
       if (system === null || !isPrescriptionSystem(system, state)) return badSearch();
-      const hits = [...state.recordsOf('MedicationRequest').values()].filter((r) => {
+      const hits = [...state.recordsOf(type).values()].filter((r) => {
         const i = prescriptionIdentifier(r);
         return i?.system === system && i.value === value;
       });
@@ -139,6 +140,13 @@ const VALIDATORS: Record<string, (body: unknown, state: MockState) => Violation[
       organizationIds: state.organizationIds,
       kfaByCode: state.kfaByCode,
       hasEncounter: (id) => state.encounters.has(id),
+    }),
+  MedicationDispense: (body, state) =>
+    validateMedicationDispense(body, {
+      organizationIds: state.organizationIds,
+      kfaByCode: state.kfaByCode,
+      hasEncounter: (id) => state.encounters.has(id),
+      medicationRequest: (id) => state.recordsOf('MedicationRequest').get(id) as Record<string, any> | undefined,
     }),
 };
 

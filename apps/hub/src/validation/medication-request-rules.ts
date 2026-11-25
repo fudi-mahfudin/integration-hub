@@ -18,29 +18,12 @@ export function medicationRequestRules(m: Record<string, any>, organizationId: s
   const out: Violation[] = [];
   const fail: Fail = (rule, path, message) => out.push({ code: 'PAYLOAD_INVALID', rule, path, message });
 
-  const identifiers: any[] = Array.isArray(m.identifier) ? m.identifier : [];
-  if (identifiers.length === 0) fail('REQUIRED', 'MedicationRequest.identifier', 'identifier is required');
-  else {
-    for (const kind of ['prescription', 'prescription-item']) {
-      const system = `http://sys-ids.kemkes.go.id/${kind}/${organizationId}`;
-      const i = identifiers.findIndex((x) => x?.system === system);
-      if (i < 0) fail('IDENTIFIER_SYSTEM', 'MedicationRequest.identifier', `needs an identifier with system ${system}`);
-      else if (!text(identifiers[i].value)) fail('REQUIRED', `MedicationRequest.identifier[${i}].value`, 'identifier value is required');
-    }
-  }
+  prescriptionIdentifiers(m, 'MedicationRequest', organizationId, fail);
 
   oneOf(m.status, STATUSES, 'MedicationRequest.status', fail);
   oneOf(m.intent, INTENTS, 'MedicationRequest.intent', fail);
 
-  if (!isObject(m.medicationReference) || !text(m.medicationReference.reference)) {
-    fail('REQUIRED', 'MedicationRequest.medicationReference.reference', 'medicationReference is required');
-  } else {
-    const ref = String(m.medicationReference.reference);
-    const contained: any[] = Array.isArray(m.contained) ? m.contained : [];
-    const med = ref.startsWith('#') ? contained.find((c) => c?.resourceType === 'Medication' && c.id === ref.slice(1)) : undefined;
-    if (!med) fail('REFERENCE', 'MedicationRequest.medicationReference.reference', 'must reference a contained Medication (#id)');
-    else medicationRules(med, organizationId, fail);
-  }
+  containedMedication(m, 'MedicationRequest', organizationId, fail);
 
   reference(m.subject, 'Patient', 'MedicationRequest.subject.reference', fail);
   reference(m.encounter, 'Encounter', 'MedicationRequest.encounter.reference', fail);
@@ -79,6 +62,33 @@ export function medicationRequestRules(m: Record<string, any>, organizationId: s
   return out;
 }
 
+/** `prescription/{org}` and `prescription-item/{org}`, each valued: MedicationRequest and MedicationDispense alike (#9). */
+export function prescriptionIdentifiers(m: Record<string, any>, type: string, organizationId: string, fail: Fail): void {
+  const identifiers: any[] = Array.isArray(m.identifier) ? m.identifier : [];
+  if (identifiers.length === 0) return fail('REQUIRED', `${type}.identifier`, 'identifier is required');
+  for (const kind of ['prescription', 'prescription-item']) {
+    const system = `http://sys-ids.kemkes.go.id/${kind}/${organizationId}`;
+    const i = identifiers.findIndex((x) => x?.system === system);
+    if (i < 0) fail('IDENTIFIER_SYSTEM', `${type}.identifier`, `needs an identifier with system ${system}`);
+    else if (!text(identifiers[i].value)) fail('REQUIRED', `${type}.identifier[${i}].value`, 'identifier value is required');
+  }
+}
+
+/** `medicationReference` to a contained Medication, checked by `medicationRules`; returns that Medication. */
+export function containedMedication(m: Record<string, any>, type: string, organizationId: string, fail: Fail): Record<string, any> | undefined {
+  const path = `${type}.medicationReference.reference`;
+  if (!isObject(m.medicationReference) || !text(m.medicationReference.reference)) {
+    fail('REQUIRED', path, 'medicationReference is required');
+    return undefined;
+  }
+  const ref = String(m.medicationReference.reference);
+  const contained: any[] = Array.isArray(m.contained) ? m.contained : [];
+  const med = ref.startsWith('#') ? contained.find((c) => c?.resourceType === 'Medication' && c.id === ref.slice(1)) : undefined;
+  if (!med) fail('REFERENCE', path, 'must reference a contained Medication (#id)');
+  else medicationRules(med, organizationId, fail);
+  return med;
+}
+
 /** The contained non-compound Medication: `medication/{org}` identifier, a KFA code, the NC type. */
 function medicationRules(med: Record<string, any>, organizationId: string, fail: Fail): void {
   const system = `http://sys-ids.kemkes.go.id/medication/${organizationId}`;
@@ -93,7 +103,7 @@ function medicationRules(med: Record<string, any>, organizationId: string, fail:
   if (!nonCompound) fail('REQUIRED', 'Medication.extension', 'needs the MedicationType extension with code NC');
 }
 
-function oneOf(value: unknown, allowed: string[], path: string, fail: Fail): void {
+export function oneOf(value: unknown, allowed: string[], path: string, fail: Fail): void {
   if (!text(value)) fail('REQUIRED', path, `${path.split('.').pop()} is required`);
   else if (!allowed.includes(value)) fail('VALUE_SET', path, `${value} is not allowed`);
 }
