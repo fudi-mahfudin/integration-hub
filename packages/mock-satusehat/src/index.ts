@@ -4,3 +4,4 @@ export { MockClient } from './client.js';
 export type { LogEntry, LogQuery, Report } from './log.js';
 export type { World, WorldSeed, WorldPatient, WorldPractitioner, WorldLocation, KfaProduct } from './world/world.js';
 export { STEP_CODE_SYSTEM, RULE_CODE_SYSTEM } from './templates/outcome.js';
+export { reportFromLog } from './report.js';

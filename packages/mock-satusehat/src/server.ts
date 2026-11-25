@@ -5,7 +5,7 @@ import { MockState, type MockSettings } from './state.js';
 import { simpleOutcome, tokenRejected, tokenResponse, tokenThrottled } from './templates/index.js';
 import { defaultWorldPath, loadWorld, type WorldSeed } from './world/world.js';
 import { registerFhirRoutes } from './fhir.js';
-import { buildReport } from './report.js';
+import { reportFromLog } from './report.js';
 
 export interface MockOptions {
   host?: string;
@@ -150,7 +150,14 @@ export function createMockApp(options: MockOptions = {}): FastifyInstance {
     reply.type('application/x-ndjson');
     return state.log.map((e) => `${JSON.stringify(e)}\n`).join('');
   });
-  app.get('/__mock/report', async () => buildReport(state.log, state.faultSeed));
+  app.get('/__mock/report', async () => reportFromLog(state.log, state.faultSeed));
+
+  // Framework-level failures (e.g. a body that is not JSON) are logged like any other request.
+  app.setErrorHandler((err: { statusCode?: number; message: string }, req, reply) => {
+    const status = err.statusCode !== undefined && err.statusCode >= 400 && err.statusCode < 500 ? err.statusCode : 500;
+    const resourceType = /^\/fhir-r4\/v1\/([A-Za-z]+)/.exec(new URL(req.url, 'http://mock').pathname)?.[1] ?? null;
+    return respond(state, req, reply, { status, resourceType, body: simpleOutcome.build('invalid', err.message) });
+  });
 
   app.setNotFoundHandler((req, reply) =>
     respond(state, req, reply, { status: 404, body: simpleOutcome.build('not-found', `no route ${req.method} ${req.url}`) }),
