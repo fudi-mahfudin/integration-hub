@@ -10,11 +10,8 @@ import type { SubmitPrescriptionPins } from './submit-prescription.js';
 /** What submit dispense pins on completion (#10): the dispensed KFA product and the pharmacist. */
 export interface SubmitDispensePins {
   [pin: string]: unknown;
-  kfaCode: string;
-  kfaLevel: number;
-  parent92: string | null;
-  /** The dispensed product's 91 set, sorted. */
-  ingredients: string[];
+  /** The dispensed product (its 91 set sorted). */
+  product: KfaProduct;
   pharmacistIhs: string;
   wasSubstituted: boolean;
 }
@@ -53,7 +50,7 @@ export const submitDispense: StepRunner = async (step, deps, attempt) => {
 
   const prescription = await completedStep<SubmitPrescriptionPins>(db, step.caseId, 'submit_prescription');
   const p = prescription.pins;
-  const prescribed: KfaProduct = { code: p.kfaCode, level: p.kfaLevel, parent92: p.parent92, ingredients: p.ingredients };
+  const prescribed = p.product;
   const medication: MedicationUse = { role: 'dispense', product, prescribed, declaredSubstitution: data.substitution !== undefined };
   const refused = checkStep({ organizationId, mappings, medication });
   if (refused) return refused;
@@ -107,13 +104,6 @@ export const submitDispense: StepRunner = async (step, deps, attempt) => {
 
   const result = await searchThenCreate(fhir, 'MedicationDispense', identifier, medicationDispense);
   if (result.outcome !== 'completed') return result;
-  const pins: SubmitDispensePins = {
-    kfaCode: product.code,
-    kfaLevel: product.level,
-    parent92: product.parent92,
-    ingredients: [...product.ingredients],
-    pharmacistIhs: pharmacist.ihsNumber,
-    wasSubstituted,
-  };
+  const pins: SubmitDispensePins = { product, pharmacistIhs: pharmacist.ihsNumber, wasSubstituted };
   return { ...result, pins };
 };

@@ -1,5 +1,6 @@
 import { findIhsNumber, type SourcePerson } from '../lookup/people.js';
 import { sourceToPlatformTime } from '../time.js';
+import type { KfaProduct } from '../validation/validation.js';
 import type { CreateVisitPins } from './create-visit.js';
 import { containedMedication, doseFormUnit, prescriptionIdentifiers, resolveDrug } from './medication.js';
 import { checkStep, completedStep, searchThenCreate, sourceEvent, type StepRunner } from './step-runner.js';
@@ -9,11 +10,8 @@ const ROUTE_SYSTEM = 'http://www.whocc.no/atc';
 /** What submit prescription pins on completion (#10); submit dispense compares against these, never the live mapping. */
 export interface SubmitPrescriptionPins {
   [pin: string]: unknown;
-  kfaCode: string;
-  kfaLevel: number;
-  parent92: string | null;
-  /** The prescribed product's 91 set, sorted. */
-  ingredients: string[];
+  /** The prescribed product (its 91 set sorted). */
+  product: KfaProduct;
   requesterIhs: string;
 }
 
@@ -84,12 +82,6 @@ export const submitPrescription: StepRunner = async (step, deps, attempt) => {
 
   const result = await searchThenCreate(fhir, 'MedicationRequest', identifier, medicationRequest);
   if (result.outcome !== 'completed') return result;
-  const pins: SubmitPrescriptionPins = {
-    kfaCode: product.code,
-    kfaLevel: product.level,
-    parent92: product.parent92,
-    ingredients: [...product.ingredients],
-    requesterIhs: requester.ihsNumber,
-  };
+  const pins: SubmitPrescriptionPins = { product, requesterIhs: requester.ihsNumber };
   return { ...result, pins };
 };
