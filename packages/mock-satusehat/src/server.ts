@@ -9,7 +9,8 @@ import { defaultWorldPath, loadWorld, type WorldSeed } from './world/world.js';
 import type { Resource } from 'fhir/r4.js';
 import { randomUUID } from 'node:crypto';
 import { registerFhirRoutes, utcNow } from './fhir.js';
-import { encounterIdentifier } from './identity.js';
+import { registerKfaRoutes } from './kfa.js';
+import { resourceIdentity } from './identity.js';
 import { mergePatch } from './merge-patch.js';
 import { reportFromLog } from './report.js';
 
@@ -96,6 +97,9 @@ export function createMockApp(options: MockOptions = {}): FastifyInstance {
   // --- FHIR --------------------------------------------------------------
   app.register(async (fhir) => registerFhirRoutes(fhir, state), { prefix: '/fhir-r4/v1' });
 
+  // --- KFA v2 (same token, own base, #14) -------------------------------
+  app.register(async (kfa) => registerKfaRoutes(kfa, state), { prefix: '/kfa-v2' });
+
   // --- inspection and control ---------------------------------------------
   app.post('/__mock/reset', async (_req, reply) => {
     state.reset();
@@ -126,8 +130,7 @@ export function createMockApp(options: MockOptions = {}): FastifyInstance {
   });
   // --- records, changed behind the hub's back (#33) -----------------------
   const adminRecord = (r: Resource) => {
-    const i = encounterIdentifier(r, state);
-    return { kind: 'admin' as const, resourceType: r.resourceType, visitKey: i?.value ?? null, businessIdentifier: i ? `${i.system}|${i.value}` : null };
+    return { kind: 'admin' as const, resourceType: r.resourceType, ...resourceIdentity(r, state) };
   };
   const unknownRecord = (type: string, id: string) => ({ errors: [`no ${type}/${id}`] });
   app.post('/__mock/records', async (req, reply) => {

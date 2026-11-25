@@ -95,6 +95,15 @@ describe('world dataset', () => {
       expect(new Set(sets).size).toBeLessThan(sets.length);
     });
 
+    it('gives every 92 and 93 a dose form (the quantity unit, #6), a 93 the one of its 92; a 91 none', () => {
+      for (const p of world.kfaProducts) {
+        if (p.level === 91) expect(p.doseForm).toBeUndefined();
+        else expect(p.doseForm).toMatchObject({ code: expect.stringMatching(/^[A-Z]+$/), name: expect.any(String) });
+        if (p.level === 93) expect(p.doseForm).toEqual(byCode.get(p.parentCode ?? '')?.doseForm);
+      }
+      expect(new Set(world.kfaProducts.flatMap((p) => (p.doseForm ? [p.doseForm.code] : []))).size).toBeGreaterThan(1);
+    });
+
     it('has a multi-ingredient product (91 set larger than one)', () => {
       expect(world.kfaProducts.some((x) => x.level === 92 && x.ingredientCodes.length > 1)).toBe(true);
     });

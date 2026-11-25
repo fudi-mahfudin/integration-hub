@@ -39,6 +39,9 @@ export const docs = {
   encounter: 'https://satusehat.kemkes.go.id/platform/docs/id/fhir/resources/encounter/',
   validation: 'https://satusehat.kemkes.go.id/platform/docs/id/api-catalogue/validasi/kamus-validasi/',
   patient: 'https://satusehat.kemkes.go.id/platform/docs/id/api-catalogue/onboardings/apis/patient/',
+  kfa: 'https://satusehat.kemkes.go.id/platform/docs/id/master-data/kfa/rest-api-kfa/',
+  medicationRequest: 'https://satusehat.kemkes.go.id/platform/docs/id/fhir/resources/medication-request/',
+  pharmacyGuide: 'https://satusehat.kemkes.go.id/platform/docs/id/interoperability/kefarmasian/',
 } as const;
 
 export const fhirSpec = {

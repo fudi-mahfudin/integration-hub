@@ -67,6 +67,12 @@ export interface KfaProduct {
   parentCode?: string;
   /** The set of 91 codes (active ingredients). Empty for a 91 itself. */
   ingredientCodes: string[];
+  /**
+   * For a 92 or 93: its dose form, the unit of a prescribed quantity (#6).
+   * Synthetic: `code` is a v3-orderableDrugForm code (TAB, CAP), where real
+   * KFA uses its own dose-form codes.
+   */
+  doseForm?: { code: string; name: string };
 }
 
 /** Partial world accepted by `POST /__mock/seed`; entries live until the next reset. */
