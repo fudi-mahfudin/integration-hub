@@ -40,10 +40,10 @@ describe('ingest: accepting visit.started', () => {
       waitingFor: null,
       waitingSince: null,
       steps: [
-        { step: 'create_visit', eventType: 'visit.started', state: 'ready', attempts: 0, deadLetterReason: null, remote: null },
-        { step: 'submit_prescription', eventType: 'prescription.written', state: 'awaiting_event', attempts: 0, deadLetterReason: null, remote: null },
-        { step: 'submit_dispense', eventType: 'drug.dispensed', state: 'awaiting_event', attempts: 0, deadLetterReason: null, remote: null },
-        { step: 'update_visit', eventType: 'visit.finished', state: 'awaiting_event', attempts: 0, deadLetterReason: null, remote: null },
+        { step: 'create_visit', eventType: 'visit.started', state: 'ready', attempts: 0, deadLetterReason: null, remote: null, pins: null, attemptLog: [] },
+        { step: 'submit_prescription', eventType: 'prescription.written', state: 'awaiting_event', attempts: 0, deadLetterReason: null, remote: null, pins: null, attemptLog: [] },
+        { step: 'submit_dispense', eventType: 'drug.dispensed', state: 'awaiting_event', attempts: 0, deadLetterReason: null, remote: null, pins: null, attemptLog: [] },
+        { step: 'update_visit', eventType: 'visit.finished', state: 'awaiting_event', attempts: 0, deadLetterReason: null, remote: null, pins: null, attemptLog: [] },
       ],
     });
   });

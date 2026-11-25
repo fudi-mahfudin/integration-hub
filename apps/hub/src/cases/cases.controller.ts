@@ -25,7 +25,7 @@ export class CasesController {
     if (!UUID.test(id)) throw new Problem(404, 'NOT_FOUND');
     // One snapshot: a completion committing between the two reads would
     // otherwise show a completed step under the old case status.
-    const { kase, steps } = await this.db
+    const { kase, steps, log } = await this.db
       .transaction()
       .setIsolationLevel('repeatable read')
       .setAccessMode('read only')
@@ -38,11 +38,29 @@ export class CasesController {
           .executeTakeFirst();
         const steps = await trx
           .selectFrom('step')
-          .select(['name', 'event_type', 'state', 'attempts', 'dead_letter_reason', 'remote_type', 'remote_id', 'remote_version'])
+          .select([
+            'seq',
+            'name',
+            'event_type',
+            'state',
+            'attempts',
+            'dead_letter_reason',
+            'remote_type',
+            'remote_id',
+            'remote_version',
+            'pins',
+          ])
           .where('case_id', '=', id)
           .orderBy('seq')
           .execute();
-        return { kase, steps };
+        const log = await trx
+          .selectFrom('step_attempt')
+          .selectAll()
+          .where('case_id', '=', id)
+          .orderBy('seq')
+          .orderBy('attempt')
+          .execute();
+        return { kase, steps, log };
       });
     if (!kase) throw new Problem(404, 'NOT_FOUND');
     return {
@@ -62,6 +80,20 @@ export class CasesController {
           s.remote_type !== null && s.remote_id !== null
             ? { type: s.remote_type, id: s.remote_id, version: s.remote_version }
             : null,
+        pins: s.pins,
+        attemptLog: log
+          .filter((a) => a.seq === s.seq)
+          .map((a) => ({
+            attempt: a.attempt,
+            startedAt: a.started_at.toISOString(),
+            endedAt: a.ended_at.toISOString(),
+            outcome: a.outcome,
+            errorCode: a.error_code,
+            httpStatus: a.http_status,
+            used: a.used,
+            violations: a.violations,
+            detail: a.detail,
+          })),
       })),
     };
   }

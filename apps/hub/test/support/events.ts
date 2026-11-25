@@ -61,6 +61,19 @@ export function getCase(baseUrl: string, location: string, apiKey = SOURCE_API_K
   return fetch(new URL(location, baseUrl), { headers: { authorization: `Bearer ${apiKey}` } });
 }
 
+/** One row of a step's append-only attempt log in the case view. */
+export interface AttemptLogEntry {
+  attempt: number;
+  startedAt: string;
+  endedAt: string;
+  outcome: 'completed' | 'dead_lettered' | 'retry_wait';
+  errorCode: string | null;
+  httpStatus: number | null;
+  used: Record<string, unknown>;
+  violations: { code: string; path: string; message: string; rule?: string; mapping?: { kind: string; localCode: string } }[];
+  detail: string | null;
+}
+
 /** The shape of `GET /v1/cases/{id}`. */
 export interface CaseView {
   caseId: string;
@@ -76,6 +89,8 @@ export interface CaseView {
     attempts: number;
     deadLetterReason: string | null;
     remote: { type: string; id: string; version: string | null } | null;
+    pins: Record<string, unknown> | null;
+    attemptLog: AttemptLogEntry[];
   }[];
 }
 

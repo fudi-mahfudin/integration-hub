@@ -21,6 +21,8 @@ export interface ClaimedStep {
   sourceId: string;
   organizationId: string;
   visitId: string;
+  /** When this claim started: the attempt's start time. */
+  claimedAt: Date;
 }
 
 export interface RemoteIdentifier {
@@ -29,19 +31,36 @@ export interface RemoteIdentifier {
   version: string | null;
 }
 
+/** What an attempt leaves in the step's append-only attempt log (#8, #28), besides its outcome. */
+export interface AttemptRecord {
+  /** The dead-letter reason, or the transient failure's code once #35 classifies them. */
+  errorCode: string | null;
+  /** The last platform answer's HTTP status, if the attempt got one. */
+  httpStatus: number | null;
+  /** Values the attempt resolved and used, with the lookup method (#10). */
+  used: Record<string, unknown>;
+  /** Every Validation violation, in rule order (#9). */
+  violations: readonly unknown[];
+  detail: string | null;
+}
+
+/** Values a completed step sent (#10). Later steps read these, never the live mappings. */
+export type Pins = Record<string, unknown>;
+
 export interface Outbox {
   /** Claims one claimable step, skipping rows other workers hold; undefined when none. */
   claim(): Promise<ClaimedStep | undefined>;
   /**
    * Lease-fenced completion (#8): one transaction that stores the remote
-   * identifier, releases the next step or makes the case wait.
+   * identifier and the pins, releases the next step or makes the case wait.
+   * Each outcome also appends the attempt to the attempt log, in the same transaction.
    * @returns false when the lease was lost; the result is discarded.
    */
-  complete(step: ClaimedStep, remote: RemoteIdentifier): Promise<boolean>;
+  complete(step: ClaimedStep, remote: RemoteIdentifier, pins: Pins, record: AttemptRecord): Promise<boolean>;
   /** Lease-fenced permanent failure; holds the rest of the case. False when the lease was lost. */
-  deadLetter(step: ClaimedStep, reason: string): Promise<boolean>;
+  deadLetter(step: ClaimedStep, reason: string, record: AttemptRecord): Promise<boolean>;
   /** Lease-fenced transient failure: claimable again at `availableAt`. False when the lease was lost. */
-  retryAt(step: ClaimedStep, availableAt: Date): Promise<boolean>;
+  retryAt(step: ClaimedStep, availableAt: Date, record: AttemptRecord): Promise<boolean>;
 }
 
 export function createOutbox({ db, clock, leaseMs }: { db: Kysely<Database>; clock: Clock; leaseMs: number }): Outbox {
@@ -51,6 +70,8 @@ export function createOutbox({ db, clock, leaseMs }: { db: Kysely<Database>; clo
    */
   const fenced = async (
     step: ClaimedStep,
+    outcome: 'completed' | 'dead_lettered' | 'retry_wait',
+    record: AttemptRecord,
     change: (trx: Transaction<Database>, now: Date) => Promise<boolean>,
     nextSteps: (steps: StepView[]) => StepView[] = (s) => s,
   ): Promise<boolean> =>
@@ -63,6 +84,22 @@ export function createOutbox({ db, clock, leaseMs }: { db: Kysely<Database>; clo
         .forUpdate()
         .executeTakeFirstOrThrow();
       if (!(await change(trx, now))) return false;
+      await trx
+        .insertInto('step_attempt')
+        .values({
+          case_id: step.caseId,
+          seq: step.seq,
+          attempt: step.attempt,
+          started_at: step.claimedAt,
+          ended_at: now,
+          outcome,
+          error_code: record.errorCode,
+          http_status: record.httpStatus,
+          used: JSON.stringify(record.used),
+          violations: JSON.stringify(record.violations),
+          detail: record.detail,
+        })
+        .execute();
       const before = await readSteps(trx, step.caseId);
       const after = nextSteps(before);
       for (const s of after) {
@@ -101,6 +138,7 @@ export function createOutbox({ db, clock, leaseMs }: { db: Kysely<Database>; clo
                lease_token = gen_random_uuid(),
                lease_expires_at = ${leaseExpiresAt},
                available_at = null,
+               claimed_at = ${now},
                updated_at = ${now}
           from (
                 select case_id, seq
@@ -117,14 +155,16 @@ export function createOutbox({ db, clock, leaseMs }: { db: Kysely<Database>; clo
            and s.seq = picked.seq
            and k.id = s.case_id
      returning s.case_id as "caseId", s.seq, s.name, s.attempts as attempt, s.lease_token as "leaseToken",
-               k.source_id as "sourceId", k.organization_id as "organizationId", k.visit_id as "visitId"
+               k.source_id as "sourceId", k.organization_id as "organizationId", k.visit_id as "visitId", s.claimed_at as "claimedAt"
       `.execute(db);
       return rows[0];
     },
 
-    complete: (step, remote) =>
+    complete: (step, remote, pins, record) =>
       fenced(
         step,
+        'completed',
+        record,
         async (trx, now) => {
           const r = await holding(step)(trx)
             .set({
@@ -132,6 +172,7 @@ export function createOutbox({ db, clock, leaseMs }: { db: Kysely<Database>; clo
               remote_type: remote.type,
               remote_id: remote.id,
               remote_version: remote.version,
+              pins: JSON.stringify(pins),
               lease_token: null,
               lease_expires_at: null,
               updated_at: now,
@@ -143,16 +184,16 @@ export function createOutbox({ db, clock, leaseMs }: { db: Kysely<Database>; clo
         (steps) => applyCompletion(steps, step.seq),
       ),
 
-    deadLetter: (step, reason) =>
-      fenced(step, async (trx, now) => {
+    deadLetter: (step, reason, record) =>
+      fenced(step, 'dead_lettered', record, async (trx, now) => {
         const r = await holding(step)(trx)
           .set({ state: 'dead_lettered', dead_letter_reason: reason, lease_token: null, lease_expires_at: null, updated_at: now })
           .executeTakeFirst();
         return r.numUpdatedRows > 0n;
       }),
 
-    retryAt: (step, availableAt) =>
-      fenced(step, async (trx, now) => {
+    retryAt: (step, availableAt, record) =>
+      fenced(step, 'retry_wait', record, async (trx, now) => {
         const r = await holding(step)(trx)
           .set({ state: 'retry_wait', available_at: availableAt, lease_token: null, lease_expires_at: null, updated_at: now })
           .executeTakeFirst();
