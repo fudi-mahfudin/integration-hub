@@ -25,8 +25,8 @@ export const DATE_FLOOR = new Date('2014-06-03T00:00:00+00:00');
 /** The floor for plain dates (`batch.expiry`), compared as `YYYY-MM-DD` strings. */
 const DATE_FLOOR_DAY = '2014-06-03';
 
-/** Event types ingest accepts so far; `visit.finished` arrives with #31. */
-const SUPPORTED_TYPES: readonly EventType[] = ['visit.started', 'prescription.written', 'drug.dispensed'];
+/** Event types ingest accepts. */
+const SUPPORTED_TYPES: readonly EventType[] = ['visit.started', 'prescription.written', 'drug.dispensed', 'visit.finished'];
 /** `drug.dispensed.substitution.reasonCode` (#9). */
 export const SUBSTITUTION_REASONS = ['OS', 'FP', 'DRUG_INTERACTION', 'PATIENT_CHOICE', 'PRESCRIPTION_ERROR'] as const;
 const ENCOUNTER_CLASSES = ['AMB', 'IMP', 'EMER'];
@@ -62,6 +62,7 @@ export function validateEvent(body: ParsedBody): ValidatedEvent {
     else if (type === 'visit.started') checkVisitStarted(c, data);
     else if (type === 'prescription.written') checkPrescriptionWritten(c, data);
     else if (type === 'drug.dispensed') checkDrugDispensed(c, data);
+    else if (type === 'visit.finished') c.time('/data/finishedAt', data.finishedAt, { floor: true });
   }
 
   c.throwIfAny();

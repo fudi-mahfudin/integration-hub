@@ -20,6 +20,7 @@ const TITLES: Record<string, string> = {
   UNSUPPORTED_MULTI_ITEM: 'A prescription must have exactly one item',
   EVENT_ALREADY_RECORDED: 'This event was already recorded for the visit',
   PRESCRIPTION_MISMATCH: 'The dispense does not name the visit prescription',
+  FINISHED_BEFORE_STARTED: 'The visit cannot finish before it started',
   NOT_FOUND: 'Not found',
   INTERNAL_ERROR: 'Internal error',
 };

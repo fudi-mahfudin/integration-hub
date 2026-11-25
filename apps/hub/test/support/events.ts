@@ -79,6 +79,19 @@ export function drugDispensed(overrides: { visitId?: string; data?: Record<strin
   };
 }
 
+/** A valid `visit.finished` envelope, after `visitStarted()`'s `startedAt`; `data` overrides are shallow-merged. */
+export function visitFinished(overrides: { visitId?: string; data?: Record<string, unknown> } = {}) {
+  return {
+    type: 'visit.finished',
+    visitId: overrides.visitId ?? newVisitId(),
+    occurredAt: '2026-03-02T09:30:00+07:00',
+    data: {
+      finishedAt: '2026-03-02T09:30:00+07:00',
+      ...overrides.data,
+    } as Record<string, unknown>,
+  };
+}
+
 export interface PostOptions {
   /** `null` omits the header. Defaults to the test source's key. */
   apiKey?: string | null;
