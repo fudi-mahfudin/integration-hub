@@ -57,12 +57,15 @@ export function stepForEvent(type: EventType): (typeof STEPS)[number] {
 
 /**
  * Applies the arrival of the source event for step `seq` (#8): if that step is
- * the current step it becomes `ready`, otherwise `blocked`.
+ * the current step and awaiting its event it becomes `ready`, otherwise `blocked`.
  */
 export function applyEventArrival(steps: readonly StepView[], seq: number): StepView[] {
   const current = currentStep(steps);
   return steps.map((s): StepView => {
     if (s.seq !== seq) return s;
+    if (s.state !== 'awaiting_event') {
+      throw new Error(`invariant broken: an event arrived for step ${seq}, which is ${s.state}, not awaiting_event`);
+    }
     return { seq, state: current?.seq === seq ? 'ready' : 'blocked' };
   });
 }

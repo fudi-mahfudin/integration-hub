@@ -21,12 +21,12 @@ Sends one source event.
 
 1. Authenticate (`401`).
 2. `Idempotency-Key` present and valid (`400`).
-3. Key lookup: a key already accepted from this source system with the same body is a duplicate ingest and gets the original answer replayed; with a different body it is [`422 IDEMPOTENCY_KEY_REUSED`](#idempotency_key_reused).
+3. Key lookup: a key already accepted from this source system with the same body is a duplicate ingest and gets the original answer again; with a different body it is [`422 IDEMPOTENCY_KEY_REUSED`](#idempotency_key_reused).
 4. Event schema ([`422 VALIDATION_FAILED`](#validation_failed)).
 5. Checks against events already recorded for the visit ([`409 EVENT_ALREADY_RECORDED`](#event_already_recorded)).
 6. Accept (`202`).
 
-A true duplicate always gets its replay. It is never validated again into a different answer.
+A true duplicate always gets the original answer. It is never validated again into a different answer.
 
 ### Envelope
 
@@ -44,7 +44,7 @@ A true duplicate always gets its replay. It is never validated again into a diff
 | `type` | The event type. Only `visit.started` is accepted so far. |
 | `visitId` | The source system's own visit number, 1-64 characters, unique per source system. The case for the visit is keyed by (source system, `visitId`). |
 | `occurredAt` | When the event happened at the source. A time (see [Times](#times)). |
-| `data` | The event's payload, by `type`. |
+| `data` | The event's fields, by `type`. |
 
 Unknown fields are ignored.
 
@@ -79,7 +79,7 @@ Unknown fields are ignored.
 - **Same key, different body**: [`422 IDEMPOTENCY_KEY_REUSED`](#idempotency_key_reused). Nothing is recorded.
 - **Only a `202` consumes a key.** After a `400`, `401`, `409` or `422` nothing is recorded, and the same key may be sent again, for example with a corrected body.
 - **Concurrent identical requests** open exactly one case and all get the same answer.
-- **Retention.** An accepted key is kept for **at least 24 hours**, then deleted by a periodic purge (hourly by default). Until it is purged, it still replays. After that, an identical resend gets [`409 EVENT_ALREADY_RECORDED`](#event_already_recorded) instead of a replay. The event is still recorded once; only the answer differs.
+- **Retention.** An accepted key is kept for **at least 24 hours**, then deleted by a periodic purge (hourly by default). Until it is purged, a resend still gets the original answer. After that, an identical resend gets [`409 EVENT_ALREADY_RECORDED`](#event_already_recorded) instead. The event is still recorded once; only the answer differs.
 
 ## `GET /v1/cases/{id}`
 
@@ -156,4 +156,4 @@ Every error is an RFC 9457 problem, `Content-Type: application/problem+json`:
 
 ### INTERNAL_ERROR
 
-`500`. An unexpected error. Retry with the same key: if the event was accepted after all, the retry gets its replay.
+`500`. An unexpected error. Retry with the same key: if the event was accepted after all, the retry gets the original answer.

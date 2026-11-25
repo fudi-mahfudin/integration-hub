@@ -1,12 +1,12 @@
 import type { Kysely } from 'kysely';
 import type { SourceSystemId } from '../auth/source-systems.js';
 import type { Database } from '../db/database.js';
-import type { CaseStatus, EventType, StepName, StepState } from './case-model.js';
+import type { CaseId, CaseStatus, EventType, StepName, StepState, VisitId } from './case-model.js';
 
 /** A case as `GET /v1/cases/{id}` shows it: its status and its step states, in order. */
 export interface CaseView {
-  caseId: string;
-  visitId: string;
+  caseId: CaseId;
+  visitId: VisitId;
   status: CaseStatus;
   steps: { step: StepName; eventType: EventType; state: StepState }[];
 }
@@ -44,8 +44,9 @@ export async function readCase(
         .orderBy('seq')
         .execute();
       return {
-        caseId: kase.id,
-        visitId: kase.visit_id,
+        // Read back from the row this case's ids were written to.
+        caseId: kase.id as CaseId,
+        visitId: kase.visit_id as VisitId,
         status: kase.status,
         steps: steps.map((s) => ({ step: s.name, eventType: s.event_type, state: s.state })),
       };

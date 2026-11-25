@@ -1,6 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { bootHub, type BootedHub } from './support/boot-hub.js';
 import { postEvent, TEST_SOURCES, visitStarted } from './support/events.js';
+
+/** The problem body a 422 carries; parsed rather than cast. */
+const problemSchema = z.object({
+  code: z.string(),
+  errors: z.array(z.object({ path: z.string(), code: z.string(), message: z.string() })),
+});
 
 describe('ingest: visit.started schema', () => {
   let hub: BootedHub;
@@ -17,7 +24,7 @@ describe('ingest: visit.started schema', () => {
     const res = await postEvent(hub.baseUrl, { body });
     expect(res.status).toBe(422);
     expect(res.headers.get('content-type')).toMatch(/^application\/problem\+json/);
-    const problem = (await res.json()) as { code: string; errors: { path: string; code: string }[] };
+    const problem = problemSchema.parse(await res.json());
     expect(problem.code).toBe('VALIDATION_FAILED');
     return problem.errors.map(({ path, code }) => ({ path, code }));
   }
@@ -33,7 +40,7 @@ describe('ingest: visit.started schema', () => {
     });
 
     const res = await postEvent(hub.baseUrl, { body: event });
-    const problem = (await res.json()) as { errors: { path: string; code: string; message: string }[] };
+    const problem = problemSchema.parse(await res.json());
 
     expect(res.status).toBe(422);
     expect(problem.errors.map(({ path, code }) => ({ path, code }))).toEqual(

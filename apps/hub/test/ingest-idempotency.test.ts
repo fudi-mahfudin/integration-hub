@@ -14,7 +14,7 @@ describe('ingest: duplicate ingest and idempotency keys', () => {
     await hub?.close();
   });
 
-  it('a resend with the same key and body replays the original status and body verbatim, flagged Idempotent-Replayed', async () => {
+  it('a resend with the same key and body gets the original status and body verbatim, flagged Idempotent-Replayed', async () => {
     const idempotencyKey = randomUUID();
     const body = visitStarted();
     const first = await postEvent(hub.baseUrl, { idempotencyKey, body });

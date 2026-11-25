@@ -11,8 +11,8 @@ type FieldCode = 'REQUIRED' | 'INVALID_FORMAT' | 'TIME_OFFSET_MISSING' | 'DATE_B
 const NIK = /^\d{16}$/;
 
 /** Builds a custom issue carrying one of our field codes in `params.code`. */
-function issue(code: FieldCode, message: string, path: PropertyKey[] = []): z.core.$ZodRawIssue {
-  return { code: 'custom', params: { code }, message, path, input: undefined };
+function issue(code: FieldCode, message: string): z.core.$ZodRawIssue {
+  return { code: 'custom', params: { code }, message, path: [], input: undefined };
 }
 
 const text = (max: number) => z.string().min(1, 'must not be empty').max(max, `must be at most ${max} characters`);

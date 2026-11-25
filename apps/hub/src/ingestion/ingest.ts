@@ -1,6 +1,6 @@
 import type { SourceSystem } from '../auth/source-systems.js';
 import type { Clock } from '../clock.js';
-import { recordEvent, type AcceptedEvent } from '../cases/record-event.js';
+import { recordEvent, type AcceptedEvent, type RecordedEvent } from '../cases/record-event.js';
 import { Problem } from '../http/problem.js';
 import { parseEvent } from './event-schema.js';
 import { fingerprint, type Fingerprint, type RequestBody } from './fingerprint.js';
@@ -23,19 +23,41 @@ export function createIngest(deps: { store: IdempotencyStore; clock: Clock }): I
   return {
     async ingest(source, key, rawBody) {
       const body = readBody(rawBody);
-      const print = fingerprint(body);
+      const bodyFingerprint = fingerprint(body);
 
       const known = await store.lookup(source.id, key);
-      if (known) return replay(known, print);
+      if (known) return answerDuplicate(known, bodyFingerprint);
 
-      const event = parseEvent(body);
-      const result = await store.record(source.id, key, print, (trx) =>
+      const event = await parseEventAfterKeyLookup(store, source, key, body, bodyFingerprint);
+      const result = await store.record(source.id, key, bodyFingerprint, (trx) =>
         recordEvent(trx, source, event, clock()).then((recorded) => accepted(event, recorded)),
       );
-      return 'accepted' in result ? result.accepted : replay(result.raced, print);
+      return 'accepted' in result ? result.accepted : answerDuplicate(result.raced, bodyFingerprint);
     },
     purgeExpiredKeys: () => store.purgeExpired(),
   };
+}
+
+/**
+ * The schema check, keeping the #7 check order under a race: if the body is
+ * invalid but a concurrent request accepted the same key since the first
+ * lookup, the key answer (`IDEMPOTENCY_KEY_REUSED`) wins over `VALIDATION_FAILED`.
+ */
+async function parseEventAfterKeyLookup(
+  store: IdempotencyStore,
+  source: SourceSystem,
+  key: IdempotencyKey,
+  body: RequestBody,
+  bodyFingerprint: Fingerprint,
+): Promise<AcceptedEvent> {
+  try {
+    return parseEvent(body);
+  } catch (err) {
+    if (!(err instanceof Problem)) throw err;
+    const known = await store.lookup(source.id, key);
+    if (known) answerDuplicate(known, bodyFingerprint);
+    throw err;
+  }
 }
 
 function readBody(rawBody: string): RequestBody {
@@ -50,14 +72,15 @@ function readBody(rawBody: string): RequestBody {
 
 /**
  * A duplicate ingest gets the original status and body verbatim, flagged with
- * `Idempotent-Replayed: true`; the same key with another body is rejected (#7).
+ * `Idempotent-Replayed: true` (the header's name comes from the IETF draft);
+ * the same key with another body is rejected (#7).
  */
-function replay(known: StoredKey, print: Fingerprint): IngestResponse {
-  if (known.fingerprint !== print) throw new Problem('IDEMPOTENCY_KEY_REUSED', []);
+function answerDuplicate(known: StoredKey, bodyFingerprint: Fingerprint): IngestResponse {
+  if (known.fingerprint !== bodyFingerprint) throw new Problem('IDEMPOTENCY_KEY_REUSED', []);
   return { ...known.response, headers: { ...known.response.headers, 'idempotent-replayed': 'true' } };
 }
 
-function accepted(event: AcceptedEvent, recorded: { caseId: string; caseStatus: string }): IngestResponse {
+function accepted(event: AcceptedEvent, recorded: RecordedEvent): IngestResponse {
   return {
     status: 202,
     headers: { 'content-type': 'application/json; charset=utf-8', location: `/v1/cases/${recorded.caseId}` },

@@ -75,6 +75,6 @@ for (const store of ['naive-redis', 'postgres'] as const) {
 console.log(
   'The naive store checks Redis, accepts, and only then writes the key, so concurrent duplicates all see\n' +
     '"not seen yet"; one wins and the rest get 409 instead of the original 202. The Postgres store inserts the\n' +
-    'key row first in the accepting transaction: duplicates wait on its primary key and replay the winner.',
+    "key row first in the accepting transaction: duplicates wait on its primary key and return the first request's answer instead.",
 );
 process.exitCode = naiveDiffered && postgresAgreed ? 0 : 1;
