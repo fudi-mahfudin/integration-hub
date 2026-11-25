@@ -1,7 +1,5 @@
 {
-  "$comment": "Numbers every evidence run is judged by, fixed before any result exists. Changing this file needs a reason in the commit message. Official runs refuse to start if the file changed since its own commit. Sources: issues #19 (big run, load test), #13 (fault scope), #20 (cache run, world dataset).",
-  "version": 1,
-
+  "$comment": "Numbers every evidence run is judged by, fixed before any result exists. Changing this file needs a reason in the commit message. The big-run harness (#45) will refuse an official run if the file changed since its own commit. Sources: issues #19 (big run, load test), #13 (fault scope), #20 (cache run, world dataset).",
   "world": {
     "patients": 1000,
     "patientDraw": "uniform",
@@ -99,8 +97,6 @@
       "lostEvents": 0,
       "duplicateSubmissions": 0,
       "orderPerCase": "preserved",
-      "deadLetteredCases": 0,
-      "abandonedCases": 0,
       "hubSide": {
         "completedCases": 2000,
         "waitingCases": 0,
@@ -140,7 +136,7 @@
     "eventsPerSecond": 50,
     "topology": "same as bigRun",
     "mockLatencyMs": { "reads": 150, "writes": 300 },
-    "arms": ["off", "practitioner-only", "both"],
+    "arms": ["no cache", "ihs_practitioner only", "ihs_patient + ihs_practitioner"],
     "runsPerArm": 3,
     "order": "alternating",
     "barToStay": {
