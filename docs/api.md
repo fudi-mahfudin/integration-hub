@@ -76,16 +76,28 @@ The case and its step states. A source system's key sees only its own cases; any
   "steps": [
     {
       "step": "create_visit", "eventType": "visit.started", "state": "completed", "attempts": 1, "deadLetterReason": null,
-      "remote": { "type": "Encounter", "id": "…", "version": "…" }
+      "remote": { "type": "Encounter", "id": "…", "version": "…" },
+      "pins": { "patientIhs": "…", "practitionerIhs": "…", "locationId": "…" },
+      "attemptLog": [
+        {
+          "attempt": 1, "startedAt": "…", "endedAt": "…", "outcome": "completed", "errorCode": null, "httpStatus": 201,
+          "used": { "location": { "localCode": "POLI-PD", "locationId": "…" }, "patient": { "ihsNumber": "…", "method": "nik" }, "practitioner": { "ihsNumber": "…", "method": "nik" } },
+          "violations": [], "detail": null
+        }
+      ]
     },
-    { "step": "submit_prescription", "eventType": "prescription.written", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null },
-    { "step": "submit_dispense", "eventType": "drug.dispensed", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null },
-    { "step": "update_visit", "eventType": "visit.finished", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null }
+    { "step": "submit_prescription", "eventType": "prescription.written", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null, "pins": null, "attemptLog": [] },
+    { "step": "submit_dispense", "eventType": "drug.dispensed", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null, "pins": null, "attemptLog": [] },
+    { "step": "update_visit", "eventType": "visit.finished", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null, "pins": null, "attemptLog": [] }
   ]
 }
 ```
 
-Per step: `attempts` counts claims by a worker (an attempt is counted when it starts); `remote` is the SATUSEHAT record the step created or adopted (its remote identifier), set only when the step completes; `deadLetterReason` is a stable code when the step is `dead_lettered`. Reasons so far: `MAPPING_MISSING` (no location mapping for the event's `locationCode`), `PATIENT_NOT_FOUND`, `PRACTITIONER_NOT_FOUND` (no single IHS number for the NIK), `REMOTE_RECORD_AMBIGUOUS` (the search by the step's local identifier found more than one record, so the hub will not guess).
+Per step: `attempts` counts claims by a worker (an attempt is counted when it starts); `remote` is the SATUSEHAT record the step created or adopted (its remote identifier), set only when the step completes; `deadLetterReason` is a stable code when the step is `dead_lettered`. Reasons so far: `MAPPING_MISSING` (no location mapping for the event's `locationCode`), `PAYLOAD_INVALID` (the payload the hub built broke a payload rule: mandatory field, time format, date floor, identifier system or reference; a hub bug or a malformed mapping value; the rule and path are in the attempt log), `PATIENT_NOT_FOUND`, `PRACTITIONER_NOT_FOUND` (no single IHS number for the NIK), `REMOTE_RECORD_AMBIGUOUS` (the search by the step's local identifier found more than one record, so the hub will not guess).
+
+Before sending, every payload is checked by the hub's Validation module; a violation dead-letters the step and holds the rest of the case. When there are several, `deadLetterReason` is the first in rule order (`MAPPING_MISSING`, `KFA_LEVEL_INVALID`, `UNSUPPORTED_THERAPEUTIC_SUBSTITUTION`, `SUBSTITUTION_MISMATCH`, `PAYLOAD_INVALID`) and all of them are in the attempt's `violations`.
+
+`pins` are the values a completed step sent (IHS numbers, Location id), stored with its remote identifier; later steps use these, never the live mappings. `attemptLog` is append-only, one entry per finished attempt: `outcome` (`completed`, `dead_lettered`, `retry_wait`), `errorCode`, the last platform `httpStatus`, the values `used` with the patient/practitioner lookup `method`, every validation violation (`code`, `path`, `message`, `rule`, and `mapping` for a missing mapping) and a `detail` message for transient failures.
 
 `status` is `waiting` (with `waitingFor`, the earliest missing event type, and `waitingSince`), `active`, `dead_lettered`, `completed` or `abandoned`. Step states: `awaiting_event`, `blocked`, `ready`, `in_flight`, `retry_wait`, `completed`, `dead_lettered`.
 

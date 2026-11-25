@@ -31,6 +31,24 @@ export interface StepTable {
   remote_id: string | null;
   remote_version: string | null;
   dead_letter_reason: string | null;
+  claimed_at: Timestamp | null;
+  /** Values a completed step sent (#10); later steps read only these. */
+  pins: ColumnType<Record<string, unknown> | null, string | null, string | null>;
+}
+
+/** Append-only: one row per finished attempt, never updated (#8, #28). */
+export interface StepAttemptTable {
+  case_id: string;
+  seq: number;
+  attempt: number;
+  started_at: Timestamp;
+  ended_at: Timestamp;
+  outcome: 'completed' | 'dead_lettered' | 'retry_wait';
+  error_code: string | null;
+  http_status: number | null;
+  used: ColumnType<Record<string, unknown>, string, never>;
+  violations: ColumnType<unknown[], string, never>;
+  detail: string | null;
 }
 
 export interface LocationMappingTable {
@@ -70,6 +88,7 @@ export interface Database {
   source_event: SourceEventTable;
   idempotency_key: IdempotencyKeyTable;
   location_mapping: LocationMappingTable;
+  step_attempt: StepAttemptTable;
 }
 
 export function createDatabase(databaseUrl: string): Kysely<Database> {

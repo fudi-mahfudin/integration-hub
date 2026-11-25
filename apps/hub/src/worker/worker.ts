@@ -1,5 +1,6 @@
 import type { WorkerConfig } from '../config.js';
-import type { ClaimedStep, Outbox } from '../outbox/outbox.js';
+import type { AttemptRecord, ClaimedStep, Outbox } from '../outbox/outbox.js';
+import { PlatformError } from '../satusehat/fhir-client.js';
 import { createVisit } from '../steps/create-visit.js';
 import type { StepDeps, StepRunner } from '../steps/step-runner.js';
 import type { Clock } from '../tokens.js';
@@ -39,17 +40,32 @@ export function createWorkerLoop(opts: { config: WorkerConfig; outbox: Outbox; d
 
   const attempt = async (step: ClaimedStep): Promise<void> => {
     const runner = RUNNERS[step.name];
+    const used: Record<string, unknown> = {};
+    let httpStatus: number | null = null;
+    const fhir = deps.fhir.observe((status) => {
+      httpStatus = status;
+    });
+    const record = (fields: Partial<AttemptRecord>): AttemptRecord => ({
+      errorCode: null,
+      httpStatus,
+      used,
+      violations: [],
+      detail: null,
+      ...fields,
+    });
     try {
       if (!runner) throw new Error(`no runner for step ${step.name} yet`);
-      const result = await runner(step, deps);
+      const result = await runner(step, { ...deps, fhir }, { used });
       // A false return means the lease was lost: a newer claim owns the
-      // step, and this result is discarded (#8).
-      if (result.outcome === 'completed') await outbox.complete(step, result.remote);
-      else await outbox.deadLetter(step, result.reason);
+      // step, and this result (and its attempt log row) is discarded (#8).
+      if (result.outcome === 'completed') await outbox.complete(step, result.remote, result.pins, record({}));
+      else await outbox.deadLetter(step, result.reason, record({ errorCode: result.reason, violations: result.violations ?? [] }));
     } catch (err) {
       // Every unclassified failure is transient for now; #35 classifies and backs off.
-      console.warn(`step ${step.name} attempt ${step.attempt} failed: ${(err as Error).message}`);
-      await outbox.retryAt(step, new Date(clock().getTime() + config.retryDelayMs));
+      const message = (err as Error).message;
+      console.warn(`step ${step.name} attempt ${step.attempt} failed: ${message}`);
+      const status = err instanceof PlatformError ? err.status : httpStatus;
+      await outbox.retryAt(step, new Date(clock().getTime() + config.retryDelayMs), record({ httpStatus: status, detail: message }));
     }
   };
 

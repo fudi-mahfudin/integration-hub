@@ -29,6 +29,11 @@ export interface FhirClient {
   search(type: string, params: Record<string, string>): Promise<FhirResource[]>;
   /** `POST {fhir}/{type}`; resolves to the created resource as the platform returns it. */
   create(type: string, body: Record<string, unknown>): Promise<FhirResource>;
+  /**
+   * The same client (same token), reporting every FHIR answer's HTTP status to
+   * `onStatus`: how an attempt learns its status for the attempt log.
+   */
+  observe(onStatus: (status: number) => void): FhirClient;
 }
 
 export function createFhirClient(config: SatusehatConfig, clock: Clock): FhirClient {
@@ -45,7 +50,7 @@ export function createFhirClient(config: SatusehatConfig, clock: Clock): FhirCli
       body: body === undefined ? undefined : JSON.stringify(body),
     });
 
-  const call = async (method: string, path: string, body?: unknown): Promise<unknown> => {
+  const call = async (onStatus: (status: number) => void, method: string, path: string, body?: unknown): Promise<unknown> => {
     const bearer = await token.get();
     let res = await send(method, path, body, bearer);
     if (res.status === 401) {
@@ -53,23 +58,30 @@ export function createFhirClient(config: SatusehatConfig, clock: Clock): FhirCli
       token.invalidate(bearer);
       res = await send(method, path, body, await token.get());
     }
+    onStatus(res.status);
     const text = await res.text();
     const parsed = text === '' ? null : (JSON.parse(text) as unknown);
     if (!res.ok) throw new PlatformError(res.status, parsed, `${method} ${path.split('?')[0]}`);
     return parsed;
   };
 
-  return {
+  const view = (onStatus: (status: number) => void): FhirClient => ({
     async search(type, params) {
-      const bundle = (await call('GET', `/${type}?${new URLSearchParams(params)}`)) as {
+      const bundle = (await call(onStatus, 'GET', `/${type}?${new URLSearchParams(params)}`)) as {
         entry?: { resource: FhirResource }[];
       };
       return (bundle.entry ?? []).map((e) => e.resource).filter((r) => r.resourceType === type);
     },
     async create(type, body) {
-      return (await call('POST', `/${type}`, body)) as FhirResource;
+      return (await call(onStatus, 'POST', `/${type}`, body)) as FhirResource;
     },
-  };
+    observe: (next) =>
+      view((status) => {
+        onStatus(status);
+        next(status);
+      }),
+  });
+  return view(() => {});
 }
 
 /**
