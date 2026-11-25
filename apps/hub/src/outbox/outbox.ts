@@ -130,8 +130,28 @@ export function createOutbox({ db, clock, leaseMs }: { db: Kysely<Database>; clo
       const leaseExpiresAt = new Date(now.getTime() + leaseMs);
       // One statement: pick the oldest claimable row, skipping rows another
       // worker has locked, and take it under a fresh lease token. An expired
-      // lease is claimable again (its attempt is already counted).
+      // lease is claimable again: its attempt is already counted, and the
+      // same statement logs it as a failed `lease_expired` attempt (#8). The
+      // lost holder's late outcome then fails the fence (new token) and its
+      // row never conflicts with this one.
       const { rows } = await sql<ClaimedStep>`
+        with picked as (
+               select case_id, seq, state, attempts, claimed_at, lease_expires_at
+                 from step
+                where state = 'ready'
+                   or (state = 'retry_wait' and available_at <= ${now})
+                   or (state = 'in_flight' and lease_expires_at <= ${now})
+                order by updated_at
+                limit 1
+                  for update skip locked
+             ),
+             expired as (
+               insert into step_attempt (case_id, seq, attempt, started_at, ended_at, outcome, used, violations, detail)
+               select case_id, seq, attempts, claimed_at, lease_expires_at, 'lease_expired', '{}'::jsonb, '[]'::jsonb,
+                      'lease expired before the attempt recorded an outcome'
+                 from picked
+                where state = 'in_flight'
+             )
         update step s
            set state = 'in_flight',
                attempts = s.attempts + 1,
@@ -140,17 +160,7 @@ export function createOutbox({ db, clock, leaseMs }: { db: Kysely<Database>; clo
                available_at = null,
                claimed_at = ${now},
                updated_at = ${now}
-          from (
-                select case_id, seq
-                  from step
-                 where state = 'ready'
-                    or (state = 'retry_wait' and available_at <= ${now})
-                    or (state = 'in_flight' and lease_expires_at <= ${now})
-                 order by updated_at
-                 limit 1
-                   for update skip locked
-               ) picked,
-               "case" k
+          from picked, "case" k
          where s.case_id = picked.case_id
            and s.seq = picked.seq
            and k.id = s.case_id

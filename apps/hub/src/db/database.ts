@@ -43,7 +43,7 @@ export interface StepAttemptTable {
   attempt: number;
   started_at: Timestamp;
   ended_at: Timestamp;
-  outcome: 'completed' | 'dead_lettered' | 'retry_wait';
+  outcome: 'completed' | 'dead_lettered' | 'retry_wait' | 'lease_expired';
   error_code: string | null;
   http_status: number | null;
   used: ColumnType<Record<string, unknown>, string, never>;
