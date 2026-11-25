@@ -34,10 +34,13 @@ The hub never migrates itself: always run `pnpm migrate` before starting it. The
 | Path | What |
 |---|---|
 | `apps/hub` | The hub: one NestJS + Fastify codebase, deployed as the hub service (`src/main.ts`) and the worker process (`src/worker-main.ts`) (ADR 0001) |
+| `apps/hub/seed/mappings.json` | The operator mapping seed (locations and drugs), upserted at hub boot |
+| `packages/mock-satusehat` | The mock SATUSEHAT: platform surface, its own validation (ADR 0006), faults and holds, the world dataset; see its [README](packages/mock-satusehat/README.md) |
+| `bigrun.commitments.json` | Every number an evidence run is judged by (see Commitments) |
 | `compose.yaml` | Local infrastructure; only components from the closed list |
-| `.github/workflows/ci.yml` | CI: the same `pnpm test` against Postgres and Redis service containers |
+| `.github/workflows/ci.yml` | CI: boundary lint, typecheck and the same `pnpm test` against Postgres and Redis service containers |
 
-Later: `packages/mock-satusehat`, `packages/simulator`, `apps/dashboard`.
+Later: `packages/simulator`, `apps/dashboard`.
 
 ## Decisions
 
@@ -102,6 +105,7 @@ The payload scope is one non-compounded, single-dose scenario and one substituti
 | Therapeutic substitution | Only same-ingredient substitution (a strength change or brand swap) is supported; a different ingredient set dead-letters the case with `UNSUPPORTED_THERAPEUTIC_SUBSTITUTION` |
 | Diagnosis on the closing Encounter | Conditions are out of scope; the update visit PUT sends no `Encounter.diagnosis`. Known risk: only SATUSEHAT's Encounter resource page stars it, so the real platform may require it on a `finished` Encounter (#9) |
 | Patient creation | Registration is not part of the pharmacy flow; an unknown patient dead-letters the case with `PATIENT_NOT_FOUND` for an operator fix and replay |
+| Person lookup other than by NIK (for now) | Patients and practitioners are looked up by NIK only until the fallbacks of #32 (mother's NIK, name + birth date + gender) land; a visit whose patient has no NIK, or a NIK SATUSEHAT does not match to exactly one person, dead-letters with `PATIENT_NOT_FOUND` (`PRACTITIONER_NOT_FOUND` for a practitioner) |
 
 ## Commitments
 
