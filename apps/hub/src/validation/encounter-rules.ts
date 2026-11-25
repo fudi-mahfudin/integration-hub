@@ -1,4 +1,4 @@
-import { isRealDate } from '../time.js';
+import { checkTime, isObject, reference, text } from './payload-checks.js';
 import type { Violation } from './validation.js';
 
 /** Encounter payload rules (#9: mandatory fields, time format, floor, identifier systems). */
@@ -7,12 +7,6 @@ const ENCOUNTER_STATUSES = ['planned', 'arrived', 'triaged', 'in-progress', 'onl
 const ACT_CODE_SYSTEM = 'http://terminology.hl7.org/CodeSystem/v3-ActCode';
 const ENCOUNTER_CLASSES = ['AMB', 'IMP', 'EMER'];
 
-/** `YYYY-MM-DDThh:mm:ss+00:00`, exactly (#9). */
-const PLATFORM_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\+00:00$/;
-/** The date floor, `2014-06-03T00:00:00+00:00` (#9). */
-const FLOOR = '2014-06-03T00:00:00+00:00';
-/** A FHIR resource id. */
-const FHIR_ID = /^[A-Za-z0-9\-.]{1,64}$/;
 
 export function encounterRules(e: Record<string, any>, organizationId: string): Violation[] {
   const out: Violation[] = [];
@@ -50,11 +44,7 @@ export function encounterRules(e: Record<string, any>, organizationId: string): 
     }
   }
 
-  for (const [path, value] of times(e)) {
-    if (!platformTime(value)) fail('TIME_FORMAT', path, 'must be YYYY-MM-DDThh:mm:ss+00:00');
-    // Same fixed-width format, so the strings compare as instants.
-    else if (value < FLOOR) fail('DATE_FLOOR', path, `must not be before ${FLOOR}`);
-  }
+  for (const [path, value] of times(e)) checkTime(value, path, fail);
   return out;
 }
 
@@ -72,33 +62,4 @@ function times(e: Record<string, any>): [string, unknown][] {
     period(s?.period, `Encounter.statusHistory[${i}].period`),
   );
   return out;
-}
-
-function platformTime(value: unknown): value is string {
-  const m = typeof value === 'string' ? PLATFORM_TIME.exec(value) : null;
-  if (!m) return false;
-  const [y, mo, d, h, mi, s] = m.slice(1).map(Number) as [number, number, number, number, number, number];
-  return isRealDate(y, mo, d) && h < 24 && mi < 60 && s < 60;
-}
-
-/** `{ reference: "Type/id" }` with a FHIR id; true when it holds. */
-function reference(ref: any, type: string, path: string, fail: (rule: string, path: string, message: string) => void): boolean {
-  if (!isObject(ref) || !text(ref.reference)) {
-    fail('REQUIRED', path, 'reference is required');
-    return false;
-  }
-  const [t, id, ...rest] = String(ref.reference).split('/');
-  if (t !== type || id === undefined || !FHIR_ID.test(id) || rest.length > 0) {
-    fail('REFERENCE', path, `must be ${type}/{id}`);
-    return false;
-  }
-  return true;
-}
-
-function isObject(x: unknown): x is Record<string, any> {
-  return typeof x === 'object' && x !== null && !Array.isArray(x);
-}
-
-function text(x: unknown): x is string {
-  return typeof x === 'string' && x.trim() !== '';
 }

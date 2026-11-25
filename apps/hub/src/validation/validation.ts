@@ -7,6 +7,7 @@
  * Written from #9's rule text, never from the mock's rules (ADR 0006).
  */
 import { encounterRules } from './encounter-rules.js';
+import { medicationRequestRules } from './medication-request-rules.js';
 
 /** Step dead-letter codes, in rule order (#9). */
 export const RULE_ORDER = [
@@ -36,6 +37,8 @@ export interface MappingUse {
   kind: MappingKind;
   localCode: string;
   found: boolean;
+  /** Why it is missing, when not simply absent (e.g. KFA does not know the mapped code). */
+  message?: string;
 }
 
 /** A KFA product as the drug mapping and KFA details provide it (#9, #10). */
@@ -72,9 +75,10 @@ export interface StepCheck {
   resource?: FhirPayload;
 }
 
-/** Payload rules per resource type; #29-#31 add MedicationRequest, MedicationDispense and the Encounter update. */
+/** Payload rules per resource type; #30-#31 add MedicationDispense and the Encounter update. */
 const PAYLOAD_RULES: Record<string, (resource: FhirPayload, organizationId: string) => Violation[]> = {
   Encounter: encounterRules,
+  MedicationRequest: medicationRequestRules,
 };
 
 /** Every violation of `check`, ordered by rule (stable within a rule). */
@@ -85,7 +89,7 @@ export function validateStep(check: StepCheck): Violation[] {
       out.push({
         code: 'MAPPING_MISSING',
         path: '',
-        message: `no ${m.kind} mapping for local code ${m.localCode}`,
+        message: m.message ?? `no ${m.kind} mapping for local code ${m.localCode}`,
         mapping: { kind: m.kind, localCode: m.localCode },
       });
     }
