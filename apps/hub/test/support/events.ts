@@ -126,7 +126,7 @@ export interface AttemptLogEntry {
   attempt: number;
   startedAt: string;
   endedAt: string;
-  outcome: 'completed' | 'dead_lettered' | 'retry_wait';
+  outcome: 'completed' | 'dead_lettered' | 'retry_wait' | 'lease_expired';
   errorCode: string | null;
   httpStatus: number | null;
   used: Record<string, unknown>;

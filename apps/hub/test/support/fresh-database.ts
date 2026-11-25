@@ -24,8 +24,32 @@ export async function createFreshDatabase(): Promise<FreshDatabase> {
   await runMigrations(url.toString());
   return {
     url: url.toString(),
-    drop: () => admin(base, `DROP DATABASE IF EXISTS ${name} WITH (FORCE)`),
+    drop: async () => {
+      await connectionsGone(base, name);
+      await admin(base, `DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+    },
   };
+}
+
+/**
+ * pg's `pool.end()` resolves before its sockets have closed; a FORCE drop
+ * that terminates one of those mid-goodbye raises an unhandled 57P01 in the
+ * closed pool. So wait (briefly) for closed pools to really go away first;
+ * FORCE is left for connections that never will (a SIGKILLed worker's).
+ */
+async function connectionsGone(base: URL, name: string, timeoutMs = 5_000): Promise<void> {
+  const client = new pg.Client({ connectionString: base.toString() });
+  await client.connect();
+  try {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const { rows } = await client.query<{ n: number }>('select count(*)::int as n from pg_stat_activity where datname = $1', [name]);
+      if (rows[0]!.n === 0) return;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  } finally {
+    await client.end();
+  }
 }
 
 async function admin(base: URL, statement: string): Promise<void> {
