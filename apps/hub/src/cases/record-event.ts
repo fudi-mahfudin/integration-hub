@@ -15,7 +15,8 @@ export interface RecordedEvent {
  * Stores an accepted source event inside the caller's transaction: opens the
  * case keyed by (source, visitId) with all four steps if needed, stores the
  * event, releases or blocks its step and re-derives the case status (#8).
- * @throws Problem 409 `EVENT_ALREADY_RECORDED` when the case already has this event type.
+ * @throws Problem 409 `EVENT_ALREADY_RECORDED` when the case already has this event type;
+ *   422 `UNSUPPORTED_MULTI_ITEM` when it is a prescription for another item (#6).
  */
 export async function recordEvent(
   trx: Transaction<Database>,
@@ -77,7 +78,7 @@ export async function recordEvent(
     .onConflict((oc) => oc.constraint('source_event_case_type_key').doNothing())
     .returning('id')
     .executeTakeFirst();
-  if (!stored) throw new Problem(409, 'EVENT_ALREADY_RECORDED');
+  if (!stored) throw await alreadyRecorded(trx, kase.id, event);
 
   const seq = stepForEvent(event.type).seq;
   const after = applyEventArrival(await readSteps(trx, kase.id), seq);
@@ -91,4 +92,31 @@ export async function recordEvent(
 
   const derived = await writeDerivedStatus(trx, kase, after, now);
   return { caseId: kase.id, caseStatus: derived.status };
+}
+
+/**
+ * The rejection for a second event of a type the case already has: a
+ * prescription naming another (prescriptionId, itemId) would make the visit
+ * multi-item (#6, ADR 0004); anything else is the same event again.
+ */
+async function alreadyRecorded(trx: Transaction<Database>, caseId: string, event: ValidatedEvent): Promise<Problem> {
+  if (event.type === 'prescription.written') {
+    const row = await trx
+      .selectFrom('source_event')
+      .select('envelope')
+      .where('case_id', '=', caseId)
+      .where('type', '=', event.type)
+      .executeTakeFirstOrThrow();
+    if (prescriptionItemKey(row.envelope) !== prescriptionItemKey(event.envelope)) {
+      return new Problem(422, 'UNSUPPORTED_MULTI_ITEM', [
+        { path: '/data/items', code: 'UNSUPPORTED_MULTI_ITEM', message: 'the visit already has a prescription for another item' },
+      ]);
+    }
+  }
+  return new Problem(409, 'EVENT_ALREADY_RECORDED');
+}
+
+function prescriptionItemKey(envelope: unknown): string {
+  const data = (envelope as { data: { prescriptionId: string; items: { itemId: string }[] } }).data;
+  return JSON.stringify([data.prescriptionId, data.items[0]?.itemId]);
 }

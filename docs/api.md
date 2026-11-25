@@ -28,7 +28,7 @@ Submits one source event. The hub accepts it and answers without waiting for SAT
 
 Headers: `Authorization`, `Idempotency-Key` (required, opaque, 1 to 255 characters, a UUID is fine but not required).
 
-Body, the envelope: `{ type, visitId, occurredAt, data }`. `visitId` is the source system's own visit number, unique per source system. Event types accepted so far: `visit.started`.
+Body, the envelope: `{ type, visitId, occurredAt, data }`. `visitId` is the source system's own visit number, unique per source system. Event types accepted so far: `visit.started`, `prescription.written`. Events of one visit may arrive in any order: an event whose predecessor is missing is stored and its step waits as `blocked`.
 
 `visit.started` `data`:
 
@@ -39,6 +39,17 @@ Body, the envelope: `{ type, visitId, occurredAt, data }`. `visitId` is the sour
 | `encounterClass` | `AMB`, `IMP` or `EMER` |
 | `locationCode` | the source system's local location code |
 | `startedAt` | date-time with offset, not before the floor |
+
+`prescription.written` `data`:
+
+| Field | Rule |
+|---|---|
+| `prescriptionId` | the source's prescription number (the `prescription/{org}` identifier) |
+| `authoredAt` | date-time with offset, not before the floor |
+| `requester` | `{ nik }` or `{ name, birthDate, gender }` |
+| `items` | exactly one `{ itemId, drugCode, quantity, dosage { text, timesPerDay, doseAmount, routeCode } }`; any other count is `422 UNSUPPORTED_MULTI_ITEM` (checked after the schema) |
+
+`drugCode` is the source's local drug code (the hub maps it to KFA); `quantity` and `doseAmount` are positive numbers, `timesPerDay` a positive integer; the unit is never sent (the hub takes it from the KFA product's dose form). `itemId` is the `prescription-item/{org}` identifier.
 
 NIKs are 16 digits; `birthDate` is `YYYY-MM-DD`; `gender` is `male` or `female`.
 
@@ -52,10 +63,11 @@ NIKs are 16 digits; `birthDate` is `YYYY-MM-DD`; `gender` is `male` or `female`.
    - same body: the original answer, status and body byte for byte, plus `Idempotent-Replayed: true` (a **duplicate ingest**). `caseStatus` in it is the status at first acceptance, not now.
    - different body: `422 IDEMPOTENCY_KEY_REUSED`. Bodies are compared by the SHA-256 of their RFC 8785 canonical form, so key order and whitespace do not matter.
 4. `422 VALIDATION_FAILED`: the event's own schema. Every violation is listed at once in `errors[]` with a field code: `REQUIRED`, `INVALID_FORMAT`, `TIME_OFFSET_MISSING`, `DATE_BEFORE_FLOOR`.
-5. `409 EVENT_ALREADY_RECORDED`: the visit already has an event of this type, sent under another key (or under a key no longer retained, below).
-6. `202 Accepted`, body `{ visitId, type, caseStatus }`, header `Location: /v1/cases/{id}`.
+5. `422 UNSUPPORTED_MULTI_ITEM`: a prescription without exactly one item, or a second `prescription.written` for the visit naming another `prescriptionId`/`itemId` (one item per visit, ADR 0004).
+6. `409 EVENT_ALREADY_RECORDED`: the visit already has an event of this type, sent under another key (or under a key no longer retained, below).
+7. `202 Accepted`, body `{ visitId, type, caseStatus }`, header `Location: /v1/cases/{id}`.
 
-Only a `202` consumes the key: after any `4xx`/`5xx` nothing is recorded, and the same key may be sent again with a corrected body. Concurrent identical requests get identical answers and open one case.
+Only a `202` consumes the key: after any `4xx`/`5xx` nothing is recorded against it, and the same key may be sent again with a corrected body. Rejections from step 4 on are written to the visit's **rejection log** (code, event type, time; never the body), shown on the case as `rejections` and never changing its state. Concurrent identical requests get identical answers and open one case.
 
 ### Idempotency key retention
 
@@ -73,6 +85,7 @@ The case and its step states. A source system's key sees only its own cases; any
   "status": "active",
   "waitingFor": null,
   "waitingSince": null,
+  "rejections": [{ "code": "UNSUPPORTED_MULTI_ITEM", "eventType": "prescription.written", "rejectedAt": "…" }],
   "steps": [
     {
       "step": "create_visit", "eventType": "visit.started", "state": "completed", "attempts": 1, "deadLetterReason": null,
@@ -110,6 +123,7 @@ Before sending, every payload is checked by the hub's Validation module; a viola
 | <a id="idempotency-key-invalid"></a>`IDEMPOTENCY_KEY_INVALID` | 400 | Empty or longer than 255 characters |
 | <a id="idempotency-key-reused"></a>`IDEMPOTENCY_KEY_REUSED` | 422 | Key already accepted with a different body |
 | <a id="validation-failed"></a>`VALIDATION_FAILED` | 422 | The event's own schema; see `errors[]` |
+| <a id="unsupported-multi-item"></a>`UNSUPPORTED_MULTI_ITEM` | 422 | A prescription must have exactly one item, and a visit one prescription item |
 | <a id="event-already-recorded"></a>`EVENT_ALREADY_RECORDED` | 409 | The visit already has this event type |
 | <a id="not-found"></a>`NOT_FOUND` | 404 | No such resource for this caller |
 | <a id="internal-error"></a>`INTERNAL_ERROR` | 500 | Unexpected server error |

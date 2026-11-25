@@ -17,6 +17,7 @@ const TITLES: Record<string, string> = {
   IDEMPOTENCY_KEY_INVALID: 'Idempotency-Key header is invalid',
   IDEMPOTENCY_KEY_REUSED: 'Idempotency-Key was already used for a different request',
   VALIDATION_FAILED: 'The event failed validation',
+  UNSUPPORTED_MULTI_ITEM: 'A prescription must have exactly one item',
   EVENT_ALREADY_RECORDED: 'This event was already recorded for the visit',
   NOT_FOUND: 'Not found',
   INTERNAL_ERROR: 'Internal error',
