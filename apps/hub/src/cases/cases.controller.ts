@@ -25,7 +25,7 @@ export class CasesController {
     if (!UUID.test(id)) throw new Problem(404, 'NOT_FOUND');
     // One snapshot: a completion committing between the two reads would
     // otherwise show a completed step under the old case status.
-    const { kase, steps, log } = await this.db
+    const { kase, steps, log, rejections } = await this.db
       .transaction()
       .setIsolationLevel('repeatable read')
       .setAccessMode('read only')
@@ -60,7 +60,16 @@ export class CasesController {
           .orderBy('seq')
           .orderBy('attempt')
           .execute();
-        return { kase, steps, log };
+        const rejections = kase
+          ? await trx
+              .selectFrom('ingest_rejection')
+              .select(['code', 'event_type', 'rejected_at'])
+              .where('source_id', '=', kase.source_id)
+              .where('visit_id', '=', kase.visit_id)
+              .orderBy('id')
+              .execute()
+          : [];
+        return { kase, steps, log, rejections };
       });
     if (!kase) throw new Problem(404, 'NOT_FOUND');
     return {
@@ -70,6 +79,8 @@ export class CasesController {
       status: kase.status,
       waitingFor: kase.waiting_for,
       waitingSince: kase.waiting_since?.toISOString() ?? null,
+      // Ingest rejections for the visit, oldest first; they never change state (#8).
+      rejections: rejections.map((r) => ({ code: r.code, eventType: r.event_type, rejectedAt: r.rejected_at.toISOString() })),
       steps: steps.map((s) => ({
         step: s.name,
         eventType: s.event_type,

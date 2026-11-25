@@ -23,17 +23,18 @@ export function parseBody(rawBody: string): ParsedBody {
 /** SATUSEHAT's date floor, compared on the UTC instant (#9). */
 export const DATE_FLOOR = new Date('2014-06-03T00:00:00+00:00');
 
-/** Event types ingest accepts so far; the other three arrive with #29-#31. */
-const SUPPORTED_TYPES: readonly EventType[] = ['visit.started'];
+/** Event types ingest accepts so far; the other two arrive with #30-#31. */
+const SUPPORTED_TYPES: readonly EventType[] = ['visit.started', 'prescription.written'];
 const ENCOUNTER_CLASSES = ['AMB', 'IMP', 'EMER'];
 const GENDERS = ['male', 'female'];
-const MAX_VISIT_ID_LENGTH = 255;
+export const MAX_VISIT_ID_LENGTH = 255;
 
 /**
  * Validates a source event's own schema (#6, #9), reporting every violation
  * at once. Never reads mappings or other events (those are cross-event
  * checks, run after this passes).
- * @throws Problem 422 `VALIDATION_FAILED` with every violation in `errors[]`.
+ * @throws Problem 422 `VALIDATION_FAILED` with every violation in `errors[]`;
+ *   422 `UNSUPPORTED_MULTI_ITEM` for a schema-valid prescription without exactly one item.
  */
 export function validateEvent(body: ParsedBody): ValidatedEvent {
   const c = new Checker();
@@ -55,9 +56,18 @@ export function validateEvent(body: ParsedBody): ValidatedEvent {
   if (c.required('/data', data)) {
     if (!isObject(data)) c.add('/data', 'INVALID_FORMAT', 'must be an object');
     else if (type === 'visit.started') checkVisitStarted(c, data);
+    else if (type === 'prescription.written') checkPrescriptionWritten(c, data);
   }
 
   c.throwIfAny();
+  if (type === 'prescription.written') {
+    const count = ((data as Record<string, unknown>).items as unknown[]).length;
+    if (count !== 1) {
+      throw new Problem(422, 'UNSUPPORTED_MULTI_ITEM', [
+        { path: '/data/items', code: 'UNSUPPORTED_MULTI_ITEM', message: `a prescription must have exactly one item, got ${count}` },
+      ]);
+    }
+  }
   return { type: type as EventType, visitId: envelope.visitId as string, occurredAt: occurredAt as Date, envelope };
 }
 
@@ -67,6 +77,31 @@ function checkVisitStarted(c: Checker, data: Record<string, unknown>): void {
   c.oneOf('/data/encounterClass', data.encounterClass, ENCOUNTER_CLASSES);
   c.string('/data/locationCode', data.locationCode);
   c.time('/data/startedAt', data.startedAt, { floor: true });
+}
+
+/** `prescriptionId`, `authoredAt`, `requester`, `items[{ itemId, drugCode, quantity, dosage }]` (#6). */
+function checkPrescriptionWritten(c: Checker, data: Record<string, unknown>): void {
+  c.string('/data/prescriptionId', data.prescriptionId);
+  c.time('/data/authoredAt', data.authoredAt, { floor: true });
+  if (c.required('/data/requester', data.requester)) checkPractitioner(c, '/data/requester', data.requester);
+  if (!c.required('/data/items', data.items)) return;
+  if (!Array.isArray(data.items)) return c.add('/data/items', 'INVALID_FORMAT', 'must be an array');
+  // Any other count is UNSUPPORTED_MULTI_ITEM, reported after the schema (ADR 0004).
+  if (data.items.length === 1) checkPrescriptionItem(c, '/data/items/0', data.items[0]);
+}
+
+function checkPrescriptionItem(c: Checker, path: string, item: unknown): void {
+  if (!isObject(item)) return c.add(path, 'INVALID_FORMAT', 'must be an object');
+  c.string(`${path}/itemId`, item.itemId);
+  c.string(`${path}/drugCode`, item.drugCode);
+  c.positive(`${path}/quantity`, item.quantity);
+  if (!c.required(`${path}/dosage`, item.dosage)) return;
+  const dosage = item.dosage;
+  if (!isObject(dosage)) return c.add(`${path}/dosage`, 'INVALID_FORMAT', 'must be an object');
+  c.string(`${path}/dosage/text`, dosage.text);
+  c.positive(`${path}/dosage/timesPerDay`, dosage.timesPerDay, { integer: true });
+  c.positive(`${path}/dosage/doseAmount`, dosage.doseAmount);
+  c.string(`${path}/dosage/routeCode`, dosage.routeCode);
 }
 
 /** `{ nik?, mrn, name?, birthDate?, gender?, motherNik? }`, identified by one of three combinations (#6). */
@@ -130,6 +165,14 @@ class Checker {
     if (typeof value !== 'string' || value.trim() === '' || value.length > maxLength) {
       const limit = maxLength === Infinity ? '' : ` of at most ${maxLength} characters`;
       this.add(path, 'INVALID_FORMAT', `must be a non-empty string${limit}`);
+    }
+  }
+
+  /** A finite number above zero; with `integer`, a whole one. */
+  positive(path: string, value: unknown, { integer = false } = {}): void {
+    if (!this.required(path, value)) return;
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || (integer && !Number.isInteger(value))) {
+      this.add(path, 'INVALID_FORMAT', integer ? 'must be a positive integer' : 'must be a positive number');
     }
   }
 

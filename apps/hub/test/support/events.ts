@@ -32,6 +32,33 @@ export function visitStarted(overrides: { visitId?: string; data?: Record<string
   };
 }
 
+/** One valid `prescription.written` item; overrides are shallow-merged. */
+export function prescriptionItem(overrides: Record<string, unknown> = {}) {
+  return {
+    itemId: 'RX-1-1',
+    drugCode: 'PCT-500',
+    quantity: 10,
+    dosage: { text: '3 x 1 tablet sesudah makan', timesPerDay: 3, doseAmount: 1, routeCode: 'O' },
+    ...overrides,
+  };
+}
+
+/** A valid single-item `prescription.written` envelope; `data` overrides are shallow-merged. */
+export function prescriptionWritten(overrides: { visitId?: string; data?: Record<string, unknown> } = {}) {
+  return {
+    type: 'prescription.written',
+    visitId: overrides.visitId ?? newVisitId(),
+    occurredAt: '2026-03-02T08:30:00+07:00',
+    data: {
+      prescriptionId: 'RX-1',
+      authoredAt: '2026-03-02T08:30:00+07:00',
+      requester: { nik: '7209061211900001' },
+      items: [prescriptionItem()],
+      ...overrides.data,
+    },
+  };
+}
+
 export interface PostOptions {
   /** `null` omits the header. Defaults to the test source's key. */
   apiKey?: string | null;
@@ -82,6 +109,8 @@ export interface CaseView {
   status: string;
   waitingFor: string | null;
   waitingSince: string | null;
+  /** Ingest rejections for this (source, visitId), oldest first (#8). */
+  rejections: { code: string; eventType: string | null; rejectedAt: string }[];
   steps: {
     step: string;
     eventType: string;

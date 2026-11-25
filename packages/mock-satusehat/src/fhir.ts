@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { randomUUID } from 'node:crypto';
-import type { Encounter, Resource } from 'fhir/r4.js';
-import { encounterIdentifier, isEncounterSystem } from './identity.js';
+import type { Resource } from 'fhir/r4.js';
+import { encounterIdentifier, isEncounterSystem, isPrescriptionSystem, prescriptionIdentifier, resourceIdentity } from './identity.js';
 import { respond, type Outcome } from './server.js';
 import type { MockState } from './state.js';
 import {
@@ -11,19 +11,18 @@ import {
   practitionerResource,
   searchBundle,
   simpleOutcome,
-  storedEncounter,
+  storedResource,
   validationOutcome,
+  type Violation,
 } from './templates/index.js';
 import { validateEncounter } from './validation/encounter.js';
+import { validateMedicationRequest } from './validation/medication-request.js';
 
 type Query = Record<string, string | undefined>;
 
 export function registerFhirRoutes(fhir: FastifyInstance, state: MockState): void {
   const send = (req: FastifyRequest, reply: FastifyReply, o: Outcome) => respond(state, req, reply, o);
-  const visitOf = (r: Resource) => {
-    const i = encounterIdentifier(r, state);
-    return { visitKey: i?.value ?? null, businessIdentifier: i ? `${i.system}|${i.value}` : null };
-  };
+  const visitOf = (r: Resource) => resourceIdentity(r, state);
 
   fhir.addHook('preHandler', async (req, reply) => {
     const header = req.headers.authorization ?? '';
@@ -70,6 +69,15 @@ export function registerFhirRoutes(fhir: FastifyInstance, state: MockState): voi
       );
       return bundle(hits, { visitKey: value, businessIdentifier: `${system}|${value}` });
     }
+    if (type === 'MedicationRequest' && only(keys, 'identifier')) {
+      const [system, value] = splitToken(query.identifier!);
+      if (system === null || !isPrescriptionSystem(system, state)) return badSearch();
+      const hits = [...state.recordsOf('MedicationRequest').values()].filter((r) => {
+        const i = prescriptionIdentifier(r);
+        return i?.system === system && i.value === value;
+      });
+      return bundle(hits);
+    }
     return badSearch();
   });
 
@@ -98,31 +106,41 @@ export function registerFhirRoutes(fhir: FastifyInstance, state: MockState): voi
 
   fhir.post('/:type', async (req, reply) => {
     const { type } = req.params as { type: string };
-    if (type !== 'Encounter') {
+    const validate = VALIDATORS[type];
+    if (!validate) {
       return send(req, reply, { status: 400, resourceType: type, body: simpleOutcome.build('not-supported', `create of ${type} is not supported`) });
     }
-    const body = (req.body ?? {}) as Encounter;
-    const violations = validateEncounter(body, { organizationIds: state.organizationIds });
-    const identifier = encounterIdentifier(body, state);
-    const visitKey = identifier?.value ?? null;
-    const businessIdentifier = identifier ? `${identifier.system}|${identifier.value}` : null;
+    const body = (req.body ?? {}) as Resource;
+    const { visitKey, businessIdentifier } = visitOf({ ...body, resourceType: type } as Resource);
+    const violations = validate(body, state);
     if (violations.length > 0) {
-      return send(req, reply, { status: 400, resourceType: 'Encounter', visitKey, businessIdentifier, body: validationOutcome.build(violations) });
+      return send(req, reply, { status: 400, resourceType: type, visitKey, businessIdentifier, body: validationOutcome.build(violations) });
     }
     const id = randomUUID();
-    const stored = storedEncounter.build(body, { id, versionId: state.nextVersionId(), lastUpdated: utcNow() });
-    state.encounters.set(id, stored);
+    const stored = storedResource.build(type, body, { id, versionId: state.nextVersionId(), lastUpdated: utcNow() });
+    state.recordsOf(type).set(id, stored);
     return send(req, reply, {
       status: 201,
-      resourceType: 'Encounter',
+      resourceType: type,
       visitKey,
       businessIdentifier,
       effect: 'created',
-      headers: { location: `${baseUrl(req)}/Encounter/${id}/_history/${stored.meta!.versionId}` },
+      headers: { location: `${baseUrl(req)}/${type}/${id}/_history/${stored.meta!.versionId}` },
       body: stored,
     });
   });
 }
+
+/** Creatable resource types and the mock's own rules for each (ADR 0006). */
+const VALIDATORS: Record<string, (body: unknown, state: MockState) => Violation[]> = {
+  Encounter: (body, state) => validateEncounter(body, { organizationIds: state.organizationIds }),
+  MedicationRequest: (body, state) =>
+    validateMedicationRequest(body, {
+      organizationIds: state.organizationIds,
+      kfaByCode: state.kfaByCode,
+      hasEncounter: (id) => state.encounters.has(id),
+    }),
+};
 
 export { isEncounterSystem };
 

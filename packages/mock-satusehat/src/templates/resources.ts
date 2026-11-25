@@ -1,4 +1,4 @@
-import type { Bundle, Encounter, Location, Patient, Practitioner, Resource } from 'fhir/r4.js';
+import type { Bundle, Location, Patient, Practitioner, Resource } from 'fhir/r4.js';
 import type { WorldLocation, WorldPatient, WorldPractitioner } from '../world/world.js';
 import { defineTemplate, docs, fhirSpec } from './provenance.js';
 
@@ -78,16 +78,16 @@ export const locationResource = defineTemplate({
   }),
 });
 
-export const storedEncounter = defineTemplate({
-  name: '201 create / stored Encounter',
+export const storedResource = defineTemplate({
+  name: '201 create / stored Encounter or MedicationRequest',
   provenance: { tag: 'satusehat-docs', note: 'created resource echoed with server id and meta', link: docs.encounter },
   fields: {
     'meta.versionId': { tag: 'assumed', note: 'opaque string; the real format is unknown' },
     'meta.lastUpdated': { tag: 'fhir-spec', note: 'instant set by the server' },
   },
-  build: (body: Encounter, a: { id: string; versionId: string; lastUpdated: string }): Encounter => ({
+  build: (type: string, body: Resource, a: { id: string; versionId: string; lastUpdated: string }): Resource => ({
     ...body,
-    resourceType: 'Encounter',
+    resourceType: type as Resource['resourceType'],
     id: a.id,
     meta: { versionId: a.versionId, lastUpdated: a.lastUpdated },
   }),

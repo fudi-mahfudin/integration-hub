@@ -19,6 +19,43 @@ export function encounterIdentifier(e: Pick<Encounter, 'identifier'> | Resource,
   return null;
 }
 
+const PRESCRIPTION_SYSTEM_PREFIX = 'http://sys-ids.kemkes.go.id/prescription/';
+
+export function isPrescriptionSystem(system: string, state: MockState): boolean {
+  return system.startsWith(PRESCRIPTION_SYSTEM_PREFIX) && state.organizationIds.has(system.slice(PRESCRIPTION_SYSTEM_PREFIX.length));
+}
+
+/** A MedicationRequest's `prescription/{org}` identifier, if it carries one. */
+export function prescriptionIdentifier(r: Resource): { system: string; value: string } | null {
+  const ids = (r as { identifier?: { system?: unknown; value?: unknown }[] }).identifier;
+  for (const i of Array.isArray(ids) ? ids : []) {
+    if (typeof i?.system === 'string' && typeof i.value === 'string' && i.system.startsWith(PRESCRIPTION_SYSTEM_PREFIX)) {
+      return { system: i.system, value: i.value };
+    }
+  }
+  return null;
+}
+
+/**
+ * The visit a resource belongs to (#12): an Encounter's own identifier, or for
+ * a MedicationRequest the identifier of the Encounter it references.
+ */
+export function visitIdentifier(r: Resource, state: MockState): { system: string; value: string } | null {
+  const own = encounterIdentifier(r, state);
+  if (own) return own;
+  const ref = (r as { encounter?: { reference?: unknown } }).encounter?.reference;
+  if (typeof ref !== 'string' || !ref.startsWith('Encounter/')) return null;
+  const encounter = state.encounters.get(ref.slice('Encounter/'.length));
+  return encounter ? encounterIdentifier(encounter, state) : null;
+}
+
+/** Who a resource is about: its visit and its business identifier (`encounter/{org}` or `prescription/{org}`). */
+export function resourceIdentity(r: Resource, state: MockState): { visitKey: string | null; businessIdentifier: string | null } {
+  const visit = visitIdentifier(r, state);
+  const business = r.resourceType === 'MedicationRequest' ? prescriptionIdentifier(r) : visit;
+  return { visitKey: visit?.value ?? null, businessIdentifier: business ? `${business.system}|${business.value}` : null };
+}
+
 export interface RequestIdentity {
   resourceType: string | null;
   visitKey: string | null;
@@ -41,21 +78,28 @@ export function requestIdentity(
   const [type, id] = path.startsWith(FHIR_PREFIX) ? path.slice(FHIR_PREFIX.length).split('/') : [];
   const resourceType = type && /^[A-Za-z]+$/.test(type) ? type : null;
 
-  let visit: { system: string; value: string } | null = null;
+  let found: { visitKey: string | null; businessIdentifier: string | null } = { visitKey: null, businessIdentifier: null };
   if (resourceType !== null && id !== undefined) {
     const stored = state.recordsOf(resourceType).get(id);
-    if (stored) visit = encounterIdentifier(stored, state);
+    if (stored) found = resourceIdentity(stored, state);
   }
-  if (visit === null && req.body !== null && typeof req.body === 'object') visit = encounterIdentifier(req.body as Resource, state);
+  if (found.businessIdentifier === null && req.body !== null && typeof req.body === 'object') {
+    found = resourceIdentity({ resourceType: resourceType ?? '', ...(req.body as object) } as Resource, state);
+  }
   const identifierQuery = url.searchParams.get('identifier');
-  if (visit === null && resourceType === 'Encounter' && identifierQuery !== null) {
+  if (found.businessIdentifier === null && identifierQuery !== null) {
     const bar = identifierQuery.indexOf('|');
     const system = bar < 0 ? '' : identifierQuery.slice(0, bar);
-    if (isEncounterSystem(system, state)) visit = { system, value: identifierQuery.slice(bar + 1) };
+    const value = identifierQuery.slice(bar + 1);
+    if (resourceType === 'Encounter' && isEncounterSystem(system, state)) found = { visitKey: value, businessIdentifier: identifierQuery };
+    if (resourceType === 'MedicationRequest' && isPrescriptionSystem(system, state)) {
+      // The visit of a prescription the mock already holds, if any.
+      const held = [...state.recordsOf('MedicationRequest').values()].find((r) => prescriptionIdentifier(r)?.value === value && prescriptionIdentifier(r)?.system === system);
+      found = { visitKey: held ? resourceIdentity(held, state).visitKey : null, businessIdentifier: identifierQuery };
+    }
   }
 
-  const businessIdentifier = visit ? `${visit.system}|${visit.value}` : null;
   const params = [...url.searchParams.entries()].sort(([a], [b]) => a.localeCompare(b));
   const fallback = `${path}?${new URLSearchParams(params)}`;
-  return { resourceType, visitKey: visit?.value ?? null, businessIdentifier, faultKey: businessIdentifier ?? fallback };
+  return { resourceType, ...found, faultKey: found.businessIdentifier ?? fallback };
 }

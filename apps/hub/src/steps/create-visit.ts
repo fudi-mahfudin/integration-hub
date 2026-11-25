@@ -1,5 +1,5 @@
 import { findIhsNumber, type SourcePerson } from '../lookup/people.js';
-import { findLocationId } from '../mapping/location-mappings.js';
+import { findLocationId } from '../mapping/mappings.js';
 import { sourceToPlatformTime } from '../time.js';
 import { checkStep, searchThenCreate, sourceEvent, type DeadLettered, type StepRunner } from './step-runner.js';
 

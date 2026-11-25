@@ -36,44 +36,71 @@ export interface FhirClient {
   observe(onStatus: (status: number) => void): FhirClient;
 }
 
-export function createFhirClient(config: SatusehatConfig, clock: Clock): FhirClient {
-  const token = createTokenProvider(config, clock);
+/** The platform clients of one process: FHIR and KFA v2 share one token (#14). */
+export interface SatusehatClients {
+  fhir: FhirClient;
+  kfa: KfaClient;
+}
 
-  const send = async (method: string, path: string, body: unknown, bearer: string) =>
-    fetch(`${config.fhirUrl}${path}`, {
+export function createSatusehatClients(config: SatusehatConfig, clock: Clock): SatusehatClients {
+  const token = createTokenProvider(config, clock);
+  return { fhir: createFhirClient(config, clock, token), kfa: createKfaClient(config, token) };
+}
+
+/**
+ * One authenticated platform request: bearer token, one fresh token and one
+ * resend on a 401 (#13), every final status to `onStatus`. A non-2xx answer
+ * throws `PlatformError` unless `accept` takes it (e.g. KFA's 404).
+ */
+async function call(
+  token: TokenProvider,
+  onStatus: (status: number) => void,
+  method: string,
+  url: string,
+  { body, accept = () => false, mediaType = 'application/fhir+json' }: { body?: unknown; accept?: (status: number) => boolean; mediaType?: string } = {},
+): Promise<{ status: number; body: unknown }> {
+  const send = (bearer: string) =>
+    fetch(url, {
       method,
       headers: {
         authorization: `Bearer ${bearer}`,
-        accept: 'application/fhir+json',
-        ...(body === undefined ? {} : { 'content-type': 'application/fhir+json' }),
+        accept: mediaType,
+        ...(body === undefined ? {} : { 'content-type': mediaType }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
+  const bearer = await token.get();
+  let res = await send(bearer);
+  if (res.status === 401) {
+    // The token was rejected (expired or revoked): one fresh token, one resend (#13).
+    token.invalidate(bearer);
+    res = await send(await token.get());
+  }
+  onStatus(res.status);
+  const text = await res.text();
+  let parsed: unknown = text;
+  try {
+    parsed = text === '' ? null : (JSON.parse(text) as unknown);
+  } catch {
+    // not JSON: keep the text
+  }
+  if (!res.ok && !accept(res.status)) throw new PlatformError(res.status, parsed, `${method} ${new URL(url).pathname}`);
+  return { status: res.status, body: parsed };
+}
 
-  const call = async (onStatus: (status: number) => void, method: string, path: string, body?: unknown): Promise<unknown> => {
-    const bearer = await token.get();
-    let res = await send(method, path, body, bearer);
-    if (res.status === 401) {
-      // The token was rejected (expired or revoked): one fresh token, one resend (#13).
-      token.invalidate(bearer);
-      res = await send(method, path, body, await token.get());
-    }
-    onStatus(res.status);
-    const text = await res.text();
-    const parsed = text === '' ? null : (JSON.parse(text) as unknown);
-    if (!res.ok) throw new PlatformError(res.status, parsed, `${method} ${path.split('?')[0]}`);
-    return parsed;
-  };
+export function createFhirClient(config: SatusehatConfig, clock: Clock, token: TokenProvider = createTokenProvider(config, clock)): FhirClient {
+  const fhirCall = async (onStatus: (status: number) => void, method: string, path: string, body?: unknown) =>
+    (await call(token, onStatus, method, `${config.fhirUrl}${path}`, { body })).body;
 
   const view = (onStatus: (status: number) => void): FhirClient => ({
     async search(type, params) {
-      const bundle = (await call(onStatus, 'GET', `/${type}?${new URLSearchParams(params)}`)) as {
+      const bundle = (await fhirCall(onStatus, 'GET', `/${type}?${new URLSearchParams(params)}`)) as {
         entry?: { resource: FhirResource }[];
       };
       return (bundle.entry ?? []).map((e) => e.resource).filter((r) => r.resourceType === type);
     },
     async create(type, body) {
-      return (await call(onStatus, 'POST', `/${type}`, body)) as FhirResource;
+      return (await fhirCall(onStatus, 'POST', `/${type}`, body)) as FhirResource;
     },
     observe: (next) =>
       view((status) => {
@@ -89,7 +116,12 @@ export function createFhirClient(config: SatusehatConfig, clock: Clock): FhirCli
  * until it expires or is rejected; concurrent callers share one request.
  * Early refresh at 80%, the 10s fetch floor and the throttle backoff are #35's.
  */
-function createTokenProvider(config: SatusehatConfig, clock: Clock): { get(): Promise<string>; invalidate(token: string): void } {
+export interface TokenProvider {
+  get(): Promise<string>;
+  invalidate(token: string): void;
+}
+
+function createTokenProvider(config: SatusehatConfig, clock: Clock): TokenProvider {
   let cached: { token: string; expiresAt: number } | undefined;
   let inFlight: Promise<string> | undefined;
 
@@ -125,4 +157,64 @@ function createTokenProvider(config: SatusehatConfig, clock: Clock): { get(): Pr
       if (cached?.token === token) cached = undefined;
     },
   };
+}
+
+/** A KFA product as KFA v2 describes it (#10): what the drug rules and the MedicationRequest need. */
+export interface KfaDetails {
+  code: string;
+  /** 91 ingredient, 92 product template, 93 product: the code's first two digits (KFA's numbering). */
+  level: number;
+  display: string;
+  /** For a 93: its 92 (`product_template.kfa_code`). */
+  parent92: string | null;
+  /** The set of active-ingredient (91) codes (`active_ingredients[].kfa_code`), sorted. */
+  ingredients: string[];
+  /** The dose form: the unit of a prescribed quantity (#6). */
+  doseForm: { code: string; name: string } | null;
+}
+
+/** KFA v2 product detail, `{kfa}/products?identifier=kfa&code=…`, with the FHIR client's token (#14). */
+export interface KfaClient {
+  /** The product, or undefined when KFA does not know the code (404 or no result). Network errors and 5xx throw (transient). */
+  product(code: string): Promise<KfaDetails | undefined>;
+  /** The same client, reporting every answer's HTTP status to `onStatus`. */
+  observe(onStatus: (status: number) => void): KfaClient;
+}
+
+interface KfaProductBody {
+  result?: {
+    kfa_code?: unknown;
+    name?: unknown;
+    dosage_form?: { code?: unknown; name?: unknown } | null;
+    product_template?: { kfa_code?: unknown } | null;
+    active_ingredients?: { kfa_code?: unknown }[] | null;
+  } | null;
+}
+
+function createKfaClient(config: SatusehatConfig, token: TokenProvider): KfaClient {
+  const view = (onStatus: (status: number) => void): KfaClient => ({
+    async product(code) {
+      const url = `${config.kfaUrl}/products?${new URLSearchParams({ identifier: 'kfa', code })}`;
+      const res = await call(token, onStatus, 'GET', url, { accept: (s) => s === 404, mediaType: 'application/json' });
+      const result = res.status === 404 ? undefined : (res.body as KfaProductBody | null)?.result;
+      if (!result || result.kfa_code !== code) return undefined;
+      const level = Number(code.slice(0, 2));
+      const form = result.dosage_form;
+      const ingredients = (result.active_ingredients ?? []).map((i) => i?.kfa_code).filter((c): c is string => typeof c === 'string');
+      return {
+        code,
+        level,
+        display: typeof result.name === 'string' ? result.name : code,
+        parent92: level === 93 && typeof result.product_template?.kfa_code === 'string' ? result.product_template.kfa_code : null,
+        ingredients: [...new Set(ingredients)].sort(),
+        doseForm: typeof form?.code === 'string' && typeof form.name === 'string' ? { code: form.code, name: form.name } : null,
+      };
+    },
+    observe: (next) =>
+      view((status) => {
+        onStatus(status);
+        next(status);
+      }),
+  });
+  return view(() => {});
 }

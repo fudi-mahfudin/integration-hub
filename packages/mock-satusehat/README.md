@@ -2,7 +2,10 @@
 
 A stateful, in-memory stand-in for the SATUSEHAT platform, used by the test suite, the big run and k6. **It has no authentication on `/__mock/*` and must never be deployed publicly**: it runs only in Vitest and in local/CI compose.
 
-- Platform surface: `POST /oauth2/v1/accesstoken?grant_type=client_credentials`, FHIR under `/fhir-r4/v1`.
+- Platform surface: `POST /oauth2/v1/accesstoken?grant_type=client_credentials`, FHIR under `/fhir-r4/v1`, KFA v2 under `/kfa-v2` (same token).
+  - Create (validated): `Encounter`, `MedicationRequest`. Search: Patient/Practitioner by NIK, Location by `_id`, Encounter by `encounter/{org}`, MedicationRequest by `prescription/{org}` identifier; anything else is 400.
+  - A MedicationRequest must reference an Encounter the mock holds, else `400` with code `REFERENCE_NOT_FOUND`; its Medication must be contained (`medicationReference: {reference: '#id'}`) with a catalogue KFA 92/93 code (91 → `KFA_LEVEL_INVALID`) and quantity codes equal to the product's dose form. Its log `visitKey` is its Encounter's visit, its business identifier the `prescription/{org}` one.
+  - KFA: `GET /kfa-v2/products?identifier=kfa&code=…` → `{ total: 1, result: { kfa_code, name, active, dosage_form {code,name}, product_template {kfa_code,name} | null, active_ingredients [{kfa_code, zat_aktif}] } }` from the world catalogue (plus `/__mock/seed` `kfaProducts`); unknown code → `404`. The envelope is assumed (no documented example).
 - Inspection and control: `/__mock/*`, used only through `MockClient` (`@integration-hub/mock-satusehat`).
 - Validation is the mock's own code (ADR 0006), stricter than the sandbox. It shares no code with the hub; `pnpm lint:boundaries` enforces that.
 - Fixtures are typed builders in `src/templates/`, each tagged with its provenance (#16). Every value is fake.

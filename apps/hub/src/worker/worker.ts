@@ -2,12 +2,14 @@ import type { WorkerConfig } from '../config.js';
 import type { AttemptRecord, ClaimedStep, Outbox } from '../outbox/outbox.js';
 import { PlatformError } from '../satusehat/fhir-client.js';
 import { createVisit } from '../steps/create-visit.js';
+import { submitPrescription } from '../steps/submit-prescription.js';
 import type { StepDeps, StepRunner } from '../steps/step-runner.js';
 import type { Clock } from '../tokens.js';
 
-/** Step name → its runner. Later steps register here as they land (#29-#31). */
+/** Step name → its runner. Later steps register here as they land (#30-#31). */
 const RUNNERS: Record<string, StepRunner> = {
   create_visit: createVisit,
+  submit_prescription: submitPrescription,
 };
 
 export interface Worker {
@@ -42,9 +44,11 @@ export function createWorkerLoop(opts: { config: WorkerConfig; outbox: Outbox; d
     const runner = RUNNERS[step.name];
     const used: Record<string, unknown> = {};
     let httpStatus: number | null = null;
-    const fhir = deps.fhir.observe((status) => {
+    const observe = (status: number) => {
       httpStatus = status;
-    });
+    };
+    const fhir = deps.fhir.observe(observe);
+    const kfa = deps.kfa.observe(observe);
     const record = (fields: Partial<AttemptRecord>): AttemptRecord => ({
       errorCode: null,
       httpStatus,
@@ -55,7 +59,7 @@ export function createWorkerLoop(opts: { config: WorkerConfig; outbox: Outbox; d
     });
     try {
       if (!runner) throw new Error(`no runner for step ${step.name} yet`);
-      const result = await runner(step, { ...deps, fhir }, { used });
+      const result = await runner(step, { ...deps, fhir, kfa }, { used });
       // A false return means the lease was lost: a newer claim owns the
       // step, and this result (and its attempt log row) is discarded (#8).
       if (result.outcome === 'completed') await outbox.complete(step, result.remote, result.pins, record({}));

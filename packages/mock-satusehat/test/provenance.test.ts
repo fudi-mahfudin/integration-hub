@@ -23,8 +23,10 @@ describe('fixture provenance (#16)', () => {
         'token response',
         'token-endpoint throttle 429',
         'search Bundle (0, 1, 2+ hits)',
-        '201 create / stored Encounter',
+        '201 create / stored Encounter or MedicationRequest',
         '400 OperationOutcome (validation)',
+        'KFA v2 product detail',
+        'KFA v2 product not found (404)',
       ]),
     );
   });

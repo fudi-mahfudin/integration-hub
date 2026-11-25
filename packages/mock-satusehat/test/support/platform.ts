@@ -61,6 +61,15 @@ export class Platform {
     return this.token;
   }
 
+  /** `GET {base}/kfa-v2/products?{query}`, with the same bearer token as FHIR (#14). */
+  async kfa(query: Record<string, string>, token?: string | null): Promise<Reply> {
+    const auth = token === null ? undefined : (token ?? (await this.bearer()));
+    const res = await fetch(`${this.baseUrl}/kfa-v2/products?${new URLSearchParams(query)}`, {
+      headers: auth ? { authorization: `Bearer ${auth}` } : {},
+    });
+    return toReply(res);
+  }
+
   async fhir(method: string, path: string, body?: unknown, token?: string | null): Promise<Reply> {
     const auth = token === null ? undefined : (token ?? (await this.bearer()));
     const headers: Record<string, string> = {};

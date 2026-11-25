@@ -244,3 +244,90 @@ describe('validation: PAYLOAD_INVALID for an Encounter', () => {
     ]);
   });
 });
+
+/** A submit prescription MedicationRequest with the mandatory-field union of #2 and the constants of #9. */
+const validMedicationRequest = (): Record<string, any> => ({
+  resourceType: 'MedicationRequest',
+  contained: [
+    {
+      resourceType: 'Medication',
+      id: 'med',
+      identifier: [{ system: `http://sys-ids.kemkes.go.id/medication/${ORG}`, value: 'RX-1-1' }],
+      code: { coding: [{ system: 'http://sys-ids.kemkes.go.id/kfa', code: '93000001' }] },
+      extension: [
+        {
+          url: 'https://fhir.kemkes.go.id/r4/StructureDefinition/MedicationType',
+          valueCodeableConcept: { coding: [{ system: 'http://terminology.kemkes.go.id/CodeSystem/medication-type', code: 'NC' }] },
+        },
+      ],
+    },
+  ],
+  identifier: [
+    { system: `http://sys-ids.kemkes.go.id/prescription/${ORG}`, value: 'RX-1' },
+    { system: `http://sys-ids.kemkes.go.id/prescription-item/${ORG}`, value: 'RX-1-1' },
+  ],
+  status: 'completed',
+  intent: 'order',
+  category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/medicationrequest-category', code: 'community' }] }],
+  medicationReference: { reference: '#med' },
+  subject: { reference: 'Patient/P02478375538' },
+  encounter: { reference: 'Encounter/2f6e5c3a-1d0b-4d5e-9a1b-0c9d8e7f6a5b' },
+  authoredOn: '2026-03-02T01:30:00+00:00',
+  requester: { reference: 'Practitioner/N10000001' },
+  dosageInstruction: [
+    {
+      text: '3 x 1',
+      timing: { repeat: { frequency: 3, period: 1, periodUnit: 'd' } },
+      route: { coding: [{ system: 'http://www.whocc.no/atc', code: 'O' }] },
+    },
+  ],
+  dispenseRequest: { quantity: { value: 10, unit: 'Tablet', code: 'TAB' }, performer: { reference: `Organization/${ORG}` } },
+  substitution: { allowedBoolean: true },
+});
+
+describe('validation: PAYLOAD_INVALID for a MedicationRequest', () => {
+  it('a valid submit prescription MedicationRequest has no violations', () => {
+    expect(validateStep({ organizationId: ORG, resource: validMedicationRequest() })).toEqual([]);
+  });
+
+  it.each<[string, Edit, { rule: string; path: string }[]]>([
+    ['no identifier', (m) => delete m.identifier, [{ rule: 'REQUIRED', path: 'MedicationRequest.identifier' }]],
+    ['no prescription/{org}', (m) => (m.identifier = [m.identifier[1]]), [{ rule: 'IDENTIFIER_SYSTEM', path: 'MedicationRequest.identifier' }]],
+    ['no prescription-item/{org}', (m) => (m.identifier = [m.identifier[0]]), [{ rule: 'IDENTIFIER_SYSTEM', path: 'MedicationRequest.identifier' }]],
+    ['prescription of another org', (m) => (m.identifier[0].system = 'http://sys-ids.kemkes.go.id/prescription/12345678'), [{ rule: 'IDENTIFIER_SYSTEM', path: 'MedicationRequest.identifier' }]],
+    ['prescription without a value', (m) => (m.identifier[0].value = ' '), [{ rule: 'REQUIRED', path: 'MedicationRequest.identifier[0].value' }]],
+    ['no status', (m) => delete m.status, [{ rule: 'REQUIRED', path: 'MedicationRequest.status' }]],
+    ['status outside the value set', (m) => (m.status = 'done'), [{ rule: 'VALUE_SET', path: 'MedicationRequest.status' }]],
+    ['intent outside the value set', (m) => (m.intent = 'wish'), [{ rule: 'VALUE_SET', path: 'MedicationRequest.intent' }]],
+    ['no medicationReference', (m) => delete m.medicationReference, [{ rule: 'REQUIRED', path: 'MedicationRequest.medicationReference.reference' }]],
+    ['medicationReference not contained', (m) => (m.medicationReference.reference = 'Medication/123'), [{ rule: 'REFERENCE', path: 'MedicationRequest.medicationReference.reference' }]],
+    ['Medication without a KFA code', (m) => (m.contained[0].code.coding[0].system = 'http://example.org'), [{ rule: 'REQUIRED', path: 'Medication.code' }]],
+    ['Medication without medication/{org}', (m) => delete m.contained[0].identifier, [{ rule: 'IDENTIFIER_SYSTEM', path: 'Medication.identifier' }]],
+    ['Medication without the NC type', (m) => delete m.contained[0].extension, [{ rule: 'REQUIRED', path: 'Medication.extension' }]],
+    ['no subject', (m) => delete m.subject, [{ rule: 'REQUIRED', path: 'MedicationRequest.subject.reference' }]],
+    ['no encounter', (m) => delete m.encounter, [{ rule: 'REQUIRED', path: 'MedicationRequest.encounter.reference' }]],
+    ['encounter is not an Encounter', (m) => (m.encounter.reference = 'Patient/P1'), [{ rule: 'REFERENCE', path: 'MedicationRequest.encounter.reference' }]],
+    ['no requester', (m) => delete m.requester, [{ rule: 'REQUIRED', path: 'MedicationRequest.requester.reference' }]],
+    ['no authoredOn', (m) => delete m.authoredOn, [{ rule: 'REQUIRED', path: 'MedicationRequest.authoredOn' }]],
+    ['authoredOn with +07:00', (m) => (m.authoredOn = '2026-03-02T08:30:00+07:00'), [{ rule: 'TIME_FORMAT', path: 'MedicationRequest.authoredOn' }]],
+    ['authoredOn before the floor', (m) => (m.authoredOn = '2014-06-02T23:59:59+00:00'), [{ rule: 'DATE_FLOOR', path: 'MedicationRequest.authoredOn' }]],
+    ['no dosageInstruction', (m) => (m.dosageInstruction = []), [{ rule: 'REQUIRED', path: 'MedicationRequest.dosageInstruction' }]],
+    ['no timing.repeat', (m) => delete m.dosageInstruction[0].timing, [{ rule: 'REQUIRED', path: 'MedicationRequest.dosageInstruction[0].timing.repeat' }]],
+    ['no route', (m) => delete m.dosageInstruction[0].route, [{ rule: 'REQUIRED', path: 'MedicationRequest.dosageInstruction[0].route' }]],
+    ['a quantity without a unit code', (m) => delete m.dispenseRequest.quantity.code, [{ rule: 'REQUIRED', path: 'MedicationRequest.dispenseRequest.quantity.code' }]],
+    ['no quantity', (m) => delete m.dispenseRequest.quantity, [
+      { rule: 'REQUIRED', path: 'MedicationRequest.dispenseRequest.quantity.value' },
+      { rule: 'REQUIRED', path: 'MedicationRequest.dispenseRequest.quantity.code' },
+    ]],
+    ['no performer', (m) => delete m.dispenseRequest.performer, [{ rule: 'REQUIRED', path: 'MedicationRequest.dispenseRequest.performer.reference' }]],
+    ['performer is another org', (m) => (m.dispenseRequest.performer.reference = 'Organization/12345678'), [{ rule: 'IDENTIFIER_SYSTEM', path: 'MedicationRequest.dispenseRequest.performer.reference' }]],
+    ['no substitution.allowedBoolean', (m) => delete m.substitution, [{ rule: 'REQUIRED', path: 'MedicationRequest.substitution.allowedBoolean' }]],
+  ])('%s', (_name, edit, expected) => {
+    const resource = validMedicationRequest();
+    edit(resource);
+    const violations = validateStep({ organizationId: ORG, resource });
+    expect(violations.map((v) => ({ code: v.code, rule: v.rule, path: v.path }))).toEqual(
+      expected.map((x) => ({ code: 'PAYLOAD_INVALID', ...x })),
+    );
+  });
+});

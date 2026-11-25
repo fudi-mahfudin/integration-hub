@@ -21,23 +21,37 @@ export interface LocationSeedEntry {
   locationId: string;
 }
 
+export interface DrugSeedEntry {
+  source: string;
+  drugCode: string;
+  kfaCode: string;
+}
+
+/** `world-source`'s local drug codes: `DRUG-{kfa code}` for every world KFA product (91s included, for KFA_LEVEL_INVALID). */
+export const WORLD_DRUGS = world.kfaProducts.map((p) => ({ code: `DRUG-${p.code}`, product: p }));
+/** A world KFA product of `level` and its `world-source` local code. */
+export const worldDrug = (level: 91 | 92 | 93) => WORLD_DRUGS.find((d) => d.product.level === level)!;
+
 /** Writes a mapping seed file to a temp dir and returns its path (for `MAPPING_SEED_PATH`). */
-export function writeMappingSeed(locations: LocationSeedEntry[]): string {
+export function writeMappingSeed(locations: LocationSeedEntry[], drugs: DrugSeedEntry[] = []): string {
   const path = join(mkdtempSync(join(tmpdir(), 'hub-seed-')), 'mappings.json');
-  writeFileSync(path, JSON.stringify({ locations }));
+  writeFileSync(path, JSON.stringify({ locations, drugs }));
   return path;
 }
 
-/** A seed mapping every `WORLD_LOCATIONS` code for `world-source`. */
-export function worldLocationSeed(): string {
-  return writeMappingSeed(WORLD_LOCATIONS.map((l) => ({ source: WORLD_SOURCE.id, locationCode: l.code, locationId: l.id })));
+const worldLocationEntries = () => WORLD_LOCATIONS.map((l) => ({ source: WORLD_SOURCE.id, locationCode: l.code, locationId: l.id }));
+const worldDrugEntries = () => WORLD_DRUGS.map((d) => ({ source: WORLD_SOURCE.id, drugCode: d.code, kfaCode: d.product.code }));
+
+/** A seed mapping every `WORLD_LOCATIONS` and `WORLD_DRUGS` code for `world-source`, plus `extraDrugs`. */
+export function worldMappingSeed(extraDrugs: DrugSeedEntry[] = []): string {
+  return writeMappingSeed(worldLocationEntries(), [...worldDrugEntries(), ...extraDrugs]);
 }
 
 /**
  * Env for a hub and a worker wired to the mock at `mockBaseUrl`, the database
  * at `databaseUrl` and the world source. Spread your overrides after it.
  */
-export function satusehatEnv(mockBaseUrl: string, databaseUrl: string, seedPath = worldLocationSeed()): Record<string, string> {
+export function satusehatEnv(mockBaseUrl: string, databaseUrl: string, seedPath = worldMappingSeed()): Record<string, string> {
   return {
     DATABASE_URL: databaseUrl,
     HUB_SOURCES: JSON.stringify([WORLD_SOURCE]),
@@ -70,6 +84,35 @@ export function worldVisitStarted(overrides: { visitId?: string; data?: Record<s
     },
   };
 }
+
+export const worldPharmacist = world.practitioners.find((p) => p.role === 'pharmacist') as (typeof world.practitioners)[number];
+
+/** A single-item `prescription.written` for `visitId` by a world physician, of a mapped 93 by default; `item` is shallow-merged. */
+export function worldPrescriptionWritten(visitId: string, item: Record<string, unknown> = {}, data: Record<string, unknown> = {}) {
+  return {
+    type: 'prescription.written',
+    visitId,
+    occurredAt: '2026-03-02T08:30:00+07:00',
+    data: {
+      prescriptionId: `RX-${visitId}`,
+      authoredAt: '2026-03-02T08:30:00+07:00',
+      requester: { nik: worldPhysician.nik },
+      items: [
+        {
+          itemId: `RX-${visitId}-1`,
+          drugCode: worldDrug(93).code,
+          quantity: 10,
+          dosage: { text: '3 x 1 sesudah makan', timesPerDay: 3, doseAmount: 1, routeCode: 'O' },
+          ...item,
+        },
+      ],
+      ...data,
+    },
+  };
+}
+
+/** The world organization's `prescription/{org}` identifier system. */
+export const PRESCRIPTION_SYSTEM = `http://sys-ids.kemkes.go.id/prescription/${world.organization.id}`;
 
 /** The world organization's `encounter/{org}` identifier system. */
 export const ENCOUNTER_SYSTEM = `http://sys-ids.kemkes.go.id/encounter/${world.organization.id}`;

@@ -60,6 +60,37 @@ export interface LocationMappingTable {
   updated_at: Timestamp;
 }
 
+/** Ingest rejections by (source, visitId) (#8): code, event type and time only, never the body. */
+export interface IngestRejectionTable {
+  id: Generated<string>;
+  source_id: string;
+  visit_id: string;
+  code: string;
+  event_type: string | null;
+  rejected_at: Timestamp;
+}
+
+export interface DrugMappingTable {
+  source_id: string;
+  /** The source's local drug code. */
+  drug_code: string;
+  kfa_code: string;
+  note: string | null;
+  updated_at: Timestamp;
+}
+
+/** KFA product details as KFA v2 gave them (#10); shared by all sources. */
+export interface KfaProductTable {
+  kfa_code: string;
+  level: number;
+  display: string;
+  parent_92: string | null;
+  ingredients: ColumnType<string[], string, string>;
+  dose_form_code: string | null;
+  dose_form_name: string | null;
+  fetched_at: ColumnType<Date, Date | undefined, Date>;
+}
+
 export interface SourceEventTable {
   id: Generated<string>;
   case_id: string;
@@ -89,6 +120,9 @@ export interface Database {
   idempotency_key: IdempotencyKeyTable;
   location_mapping: LocationMappingTable;
   step_attempt: StepAttemptTable;
+  ingest_rejection: IngestRejectionTable;
+  drug_mapping: DrugMappingTable;
+  kfa_product: KfaProductTable;
 }
 
 export function createDatabase(databaseUrl: string): Kysely<Database> {

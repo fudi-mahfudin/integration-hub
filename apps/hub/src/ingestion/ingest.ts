@@ -6,7 +6,8 @@ import type { HubConfig } from '../config.js';
 import type { Database } from '../db/database.js';
 import { Problem } from '../http/problem.js';
 import type { Clock } from '../tokens.js';
-import { parseBody, validateEvent, type ValidatedEvent } from './event-schema.js';
+import { EVENT_TYPES, type EventType } from '../cases/case-model.js';
+import { MAX_VISIT_ID_LENGTH, parseBody, validateEvent, type ParsedBody, type ValidatedEvent } from './event-schema.js';
 import { fingerprint } from './fingerprint.js';
 import { createNaiveRedisStore } from './naive-redis-store.js';
 import { createPostgresStore } from './postgres-store.js';
@@ -70,12 +71,39 @@ export function createIngest(deps: IngestDeps): Ingest {
       const known = await store.lookup(source, key);
       if (known) return replay(known, print);
 
-      const event = validateEvent(parsed);
-      const result = await store.record(source, key, print, (trx) => acceptEvent(trx, source, event, deps.clock()));
-      return 'raced' in result ? replay(result.raced, print) : result;
+      try {
+        const event = validateEvent(parsed);
+        const result = await store.record(source, key, print, (trx) => acceptEvent(trx, source, event, deps.clock()));
+        return 'raced' in result ? replay(result.raced, print) : result;
+      } catch (err) {
+        // A key reused for another body is about the key, not the visit: not logged.
+        if (err instanceof Problem && err.status < 500 && err.code !== 'IDEMPOTENCY_KEY_REUSED') await logRejection(deps.db, source, parsed, err.code, deps.clock());
+        throw err;
+      }
     },
     purgeExpiredKeys: () => store.purgeExpired(),
   };
+}
+
+/**
+ * Records a rejected event against its (source, visitId), when the body names
+ * one: code, event type and time, never the body (#8). It never changes state.
+ */
+async function logRejection(db: Kysely<Database>, source: SourceSystem, parsed: ParsedBody, code: string, now: Date): Promise<void> {
+  const body = parsed.ok ? (parsed.value as Record<string, unknown> | null) : null;
+  const visitId = typeof body === 'object' && body !== null ? body.visitId : undefined;
+  if (typeof visitId !== 'string' || visitId.trim() === '' || visitId.length > MAX_VISIT_ID_LENGTH) return;
+  const type = body?.type;
+  await db
+    .insertInto('ingest_rejection')
+    .values({
+      source_id: source.id,
+      visit_id: visitId,
+      code,
+      event_type: EVENT_TYPES.includes(type as EventType) ? (type as EventType) : null,
+      rejected_at: now,
+    })
+    .execute();
 }
 
 /** Same key and fingerprint: the original answer verbatim. Same key, other body: 422 (#7). */

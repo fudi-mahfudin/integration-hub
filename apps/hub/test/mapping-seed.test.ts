@@ -16,4 +16,14 @@ describe('committed mapping seed', () => {
     expect(seed.locations.map((l) => l.locationId).sort()).toEqual(world.locations.map((l) => l.id).sort());
     expect(new Set(seed.locations.map((l) => l.locationCode)).size).toBe(seed.locations.length);
   });
+
+  it('maps one local drug code to every world KFA 92 and 93 product, for the default dev source', () => {
+    const devSource = loadConfig({}).sources[0]!;
+    const drugs = (seed as unknown as { drugs: { source: string; drugCode: string; kfaCode: string }[] }).drugs;
+
+    expect(drugs.every((d) => d.source === devSource.id)).toBe(true);
+    const prescribable = world.kfaProducts.filter((p) => p.level === 92 || p.level === 93).map((p) => p.code);
+    expect(drugs.map((d) => d.kfaCode).sort()).toEqual(prescribable.sort());
+    expect(new Set(drugs.map((d) => d.drugCode)).size).toBe(drugs.length);
+  });
 });

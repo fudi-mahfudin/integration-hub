@@ -12,9 +12,9 @@ import { HealthController } from './health/health.controller.js';
 import { ProblemFilter } from './http/problem.js';
 import { createIngest, type Ingest } from './ingestion/ingest.js';
 import { EventsController } from './ingestion/events.controller.js';
-import { loadMappingSeed, readMappingSeed } from './mapping/location-mappings.js';
+import { loadMappingSeed, readMappingSeed } from './mapping/mappings.js';
 import { createOutbox } from './outbox/outbox.js';
-import { createFhirClient } from './satusehat/fhir-client.js';
+import { createSatusehatClients } from './satusehat/fhir-client.js';
 import { createWorkerLoop } from './worker/worker.js';
 import { CLOCK, CONFIG, DATABASE, INGEST, REDIS, SOURCE_SYSTEMS, type Clock } from './tokens.js';
 
@@ -135,7 +135,7 @@ export async function createWorker(config: HubConfig, options: HubOptions = {}):
   const loop = createWorkerLoop({
     config: config.worker,
     outbox: createOutbox({ db, clock, leaseMs: config.worker.leaseMs }),
-    deps: { db, fhir: createFhirClient(config.satusehat, clock) },
+    deps: { db, ...createSatusehatClients(config.satusehat, clock), clock },
     clock,
   });
   return {

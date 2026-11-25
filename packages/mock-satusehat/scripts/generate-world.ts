@@ -155,9 +155,11 @@ const virtuals: [string, string, string[]][] = [
   ['92000010', 'Ibuprofen 400 mg Tablet', ['91000007']],
 ];
 const brands = ['Merek Alfa', 'Merek Beta'];
+/** Dose form from the product name (v3-orderableDrugForm codes, synthetic). */
+const doseForm = (display: string) => (display.endsWith('Kapsul') ? { code: 'CAP', name: 'Kapsul' } : { code: 'TAB', name: 'Tablet' });
 const kfaProducts: KfaProduct[] = [
   ...ingredients.map(([code, display]): KfaProduct => ({ code, level: 91, display, ingredientCodes: [] })),
-  ...virtuals.map(([code, display, ingredientCodes]): KfaProduct => ({ code, level: 92, display, ingredientCodes })),
+  ...virtuals.map(([code, display, ingredientCodes]): KfaProduct => ({ code, level: 92, display, ingredientCodes, doseForm: doseForm(display) })),
 ];
 let actual = 1;
 for (const [parentCode, display, ingredientCodes] of virtuals) {
@@ -168,6 +170,7 @@ for (const [parentCode, display, ingredientCodes] of virtuals) {
       display: `${display} (${brand})`,
       parentCode,
       ingredientCodes,
+      doseForm: doseForm(display),
     });
   }
 }

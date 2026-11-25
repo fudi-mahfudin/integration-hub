@@ -1,7 +1,8 @@
 import type { Kysely } from 'kysely';
 import type { Database } from '../db/database.js';
 import type { ClaimedStep, Pins, RemoteIdentifier } from '../outbox/outbox.js';
-import type { FhirClient } from '../satusehat/fhir-client.js';
+import type { FhirClient, KfaClient } from '../satusehat/fhir-client.js';
+import type { Clock } from '../tokens.js';
 import { deadLetterReason, validateStep, type StepCheck, type Violation } from '../validation/validation.js';
 
 /** A permanent failure: the step dead-letters with this stable reason code (#8, #9). */
@@ -17,6 +18,9 @@ export interface StepDeps {
   db: Kysely<Database>;
   /** Already observed by the worker: every answer's status reaches the attempt log. */
   fhir: FhirClient;
+  /** KFA v2, observed like `fhir`. */
+  kfa: KfaClient;
+  clock: Clock;
 }
 
 /** The attempt in progress. */
@@ -48,15 +52,26 @@ export function checkStep(check: StepCheck): DeadLettered | undefined {
  * values earlier steps sent from here, never from the live mappings.
  */
 export async function stepPins<T extends Pins>(db: Kysely<Database>, caseId: string, stepName: string): Promise<T> {
+  return (await completedStep<T>(db, caseId, stepName)).pins;
+}
+
+/** A completed step of this case: its pins and its remote identifier (e.g. the visit's Encounter id). */
+export async function completedStep<T extends Pins>(
+  db: Kysely<Database>,
+  caseId: string,
+  stepName: string,
+): Promise<{ pins: T; remote: RemoteIdentifier }> {
   const row = await db
     .selectFrom('step')
-    .select('pins')
+    .select(['pins', 'remote_type', 'remote_id', 'remote_version'])
     .where('case_id', '=', caseId)
     .where('name', '=', stepName)
     .where('state', '=', 'completed')
     .executeTakeFirstOrThrow();
-  if (row.pins === null) throw new Error(`completed step ${stepName} of case ${caseId} has no pins`);
-  return row.pins as T;
+  if (row.pins === null || row.remote_type === null || row.remote_id === null) {
+    throw new Error(`completed step ${stepName} of case ${caseId} has no pins or remote identifier`);
+  }
+  return { pins: row.pins as T, remote: { type: row.remote_type, id: row.remote_id, version: row.remote_version } };
 }
 
 /** The source event envelope a step works from (stored by ingest, immutable). */
