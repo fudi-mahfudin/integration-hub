@@ -1,12 +1,13 @@
 # Integration Hub
 
-A hub that takes pharmacy events from a hospital's source system and delivers them to SATUSEHAT (HL7 FHIR R4), so that each visit's effects land exactly once and in order. Domain terms are in [GLOSSARY.md](GLOSSARY.md); decisions are in [docs/adr](docs/adr).
+A hub that takes pharmacy events from a hospital's source system and delivers them to SATUSEHAT (HL7 FHIR R4), so that each step of a visit has its effect at SATUSEHAT once (effect-once) and in order. Domain terms are in [GLOSSARY.md](GLOSSARY.md); decisions are in [docs/adr](docs/adr).
 
 ## Run it from a clean clone
 
-You need Node 24 (see `.nvmrc`), pnpm 11 (`corepack enable` picks up the pinned version), and Docker.
+You need Node 24 (see `.nvmrc`), pnpm 11, and Docker.
 
 ```sh
+corepack enable     # use the pnpm version pinned in package.json
 pnpm install        # install workspace dependencies
 pnpm deps:up        # start Postgres and Redis (compose), wait until healthy
 pnpm migrate        # one-shot: apply database migrations
