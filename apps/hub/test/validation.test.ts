@@ -331,3 +331,123 @@ describe('validation: PAYLOAD_INVALID for a MedicationRequest', () => {
     );
   });
 });
+
+const SUBSTITUTION_TYPE_SYSTEM = 'http://terminology.hl7.org/CodeSystem/v3-substanceAdminSubstitution';
+const ACT_REASON_SYSTEM = 'http://terminology.hl7.org/CodeSystem/v3-ActReason';
+
+/** A submit dispense MedicationDispense without substitution: the mandatory-field union of #2 and the constants of #9. */
+const validMedicationDispense = (): Record<string, any> => ({
+  resourceType: 'MedicationDispense',
+  contained: [
+    {
+      resourceType: 'Medication',
+      id: 'med',
+      identifier: [{ system: `http://sys-ids.kemkes.go.id/medication/${ORG}`, value: 'RX-1-1' }],
+      code: { coding: [{ system: 'http://sys-ids.kemkes.go.id/kfa', code: '93000001' }] },
+      extension: [
+        {
+          url: 'https://fhir.kemkes.go.id/r4/StructureDefinition/MedicationType',
+          valueCodeableConcept: { coding: [{ system: 'http://terminology.kemkes.go.id/CodeSystem/medication-type', code: 'NC' }] },
+        },
+      ],
+      batch: { lotNumber: 'LOT-1', expirationDate: '2028-01-31' },
+    },
+  ],
+  identifier: [
+    { system: `http://sys-ids.kemkes.go.id/prescription/${ORG}`, value: 'RX-1' },
+    { system: `http://sys-ids.kemkes.go.id/prescription-item/${ORG}`, value: 'RX-1-1' },
+  ],
+  status: 'completed',
+  medicationReference: { reference: '#med' },
+  subject: { reference: 'Patient/P02478375538' },
+  context: { reference: 'Encounter/2f6e5c3a-1d0b-4d5e-9a1b-0c9d8e7f6a5b' },
+  performer: [{ actor: { reference: 'Practitioner/N10000003' } }],
+  authorizingPrescription: [{ reference: 'MedicationRequest/7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f' }],
+  quantity: { value: 10, unit: 'Tablet', code: 'TAB' },
+  whenPrepared: '2026-03-02T02:00:00+00:00',
+  whenHandedOver: '2026-03-02T02:10:00+00:00',
+  substitution: { wasSubstituted: false },
+});
+
+/** The same dispense as a substitution: type G, a reason, the requester and the pharmacist responsible (#9). */
+const substitutedDispense = (): Record<string, any> => ({
+  ...validMedicationDispense(),
+  substitution: {
+    wasSubstituted: true,
+    type: { coding: [{ system: SUBSTITUTION_TYPE_SYSTEM, code: 'G' }] },
+    reason: [{ coding: [{ system: ACT_REASON_SYSTEM, code: 'OS' }] }],
+    responsibleParty: [{ reference: 'Practitioner/N10000001' }, { reference: 'Practitioner/N10000003' }],
+  },
+});
+
+describe('validation: PAYLOAD_INVALID for a MedicationDispense', () => {
+  it('a valid submit dispense MedicationDispense has no violations, with or without substitution and batch', () => {
+    expect(validateStep({ organizationId: ORG, resource: validMedicationDispense() })).toEqual([]);
+    expect(validateStep({ organizationId: ORG, resource: substitutedDispense() })).toEqual([]);
+    const noBatch = validMedicationDispense();
+    delete noBatch.contained[0].batch;
+    expect(validateStep({ organizationId: ORG, resource: noBatch })).toEqual([]);
+  });
+
+  it.each([
+    [ACT_REASON_SYSTEM, 'OS'],
+    [ACT_REASON_SYSTEM, 'FP'],
+    ['http://terminology.kemkes.go.id', 'TK000017'],
+    ['http://terminology.kemkes.go.id', 'TK000018'],
+    ['http://snomed.info/sct', '661000124108'],
+  ])('substitution reason %s %s is allowed', (system, code) => {
+    const resource = substitutedDispense();
+    resource.substitution.reason = [{ coding: [{ system, code }] }];
+    expect(validateStep({ organizationId: ORG, resource })).toEqual([]);
+  });
+
+  it.each<[string, Edit, { rule: string; path: string }[]]>([
+    ['no identifier', (m) => delete m.identifier, [{ rule: 'REQUIRED', path: 'MedicationDispense.identifier' }]],
+    ['no prescription/{org}', (m) => (m.identifier = [m.identifier[1]]), [{ rule: 'IDENTIFIER_SYSTEM', path: 'MedicationDispense.identifier' }]],
+    ['no prescription-item/{org}', (m) => (m.identifier = [m.identifier[0]]), [{ rule: 'IDENTIFIER_SYSTEM', path: 'MedicationDispense.identifier' }]],
+    ['no status', (m) => delete m.status, [{ rule: 'REQUIRED', path: 'MedicationDispense.status' }]],
+    ['status outside the value set', (m) => (m.status = 'active'), [{ rule: 'VALUE_SET', path: 'MedicationDispense.status' }]],
+    ['medicationReference not contained', (m) => (m.medicationReference.reference = 'Medication/123'), [{ rule: 'REFERENCE', path: 'MedicationDispense.medicationReference.reference' }]],
+    ['Medication without a KFA code', (m) => delete m.contained[0].code, [{ rule: 'REQUIRED', path: 'Medication.code' }]],
+    ['batch without a lot', (m) => delete m.contained[0].batch.lotNumber, [{ rule: 'REQUIRED', path: 'Medication.batch.lotNumber' }]],
+    ['batch without an expiry', (m) => delete m.contained[0].batch.expirationDate, [{ rule: 'REQUIRED', path: 'Medication.batch.expirationDate' }]],
+    ['expiry converted to a time', (m) => (m.contained[0].batch.expirationDate = '2028-01-31T00:00:00+00:00'), [{ rule: 'TIME_FORMAT', path: 'Medication.batch.expirationDate' }]],
+    ['expiry before the floor', (m) => (m.contained[0].batch.expirationDate = '2014-06-02'), [{ rule: 'DATE_FLOOR', path: 'Medication.batch.expirationDate' }]],
+    ['no subject', (m) => delete m.subject, [{ rule: 'REQUIRED', path: 'MedicationDispense.subject.reference' }]],
+    ['no context', (m) => delete m.context, [{ rule: 'REQUIRED', path: 'MedicationDispense.context.reference' }]],
+    ['context is not an Encounter', (m) => (m.context.reference = 'EpisodeOfCare/1'), [{ rule: 'REFERENCE', path: 'MedicationDispense.context.reference' }]],
+    ['no performer', (m) => delete m.performer, [{ rule: 'REQUIRED', path: 'MedicationDispense.performer[0].actor.reference' }]],
+    ['no authorizingPrescription', (m) => delete m.authorizingPrescription, [{ rule: 'REQUIRED', path: 'MedicationDispense.authorizingPrescription[0].reference' }]],
+    ['authorizingPrescription is not a MedicationRequest', (m) => (m.authorizingPrescription[0].reference = 'ServiceRequest/1'), [{ rule: 'REFERENCE', path: 'MedicationDispense.authorizingPrescription[0].reference' }]],
+    ['a quantity without a unit code', (m) => delete m.quantity.code, [{ rule: 'REQUIRED', path: 'MedicationDispense.quantity.code' }]],
+    ['no whenPrepared', (m) => delete m.whenPrepared, [{ rule: 'REQUIRED', path: 'MedicationDispense.whenPrepared' }]],
+    ['whenHandedOver with +07:00', (m) => (m.whenHandedOver = '2026-03-02T09:10:00+07:00'), [{ rule: 'TIME_FORMAT', path: 'MedicationDispense.whenHandedOver' }]],
+    ['whenPrepared before the floor', (m) => (m.whenPrepared = '2014-06-02T23:59:59+00:00'), [{ rule: 'DATE_FLOOR', path: 'MedicationDispense.whenPrepared' }]],
+    ['no substitution', (m) => delete m.substitution, [{ rule: 'REQUIRED', path: 'MedicationDispense.substitution.wasSubstituted' }]],
+    ['not substituted but with a type', (m) => (m.substitution.type = { coding: [{ system: SUBSTITUTION_TYPE_SYSTEM, code: 'G' }] }), [{ rule: 'VALUE_SET', path: 'MedicationDispense.substitution' }]],
+  ])('%s', (_name, edit, expected) => {
+    const resource = validMedicationDispense();
+    edit(resource);
+    const violations = validateStep({ organizationId: ORG, resource });
+    expect(violations.map((v) => ({ code: v.code, rule: v.rule, path: v.path }))).toEqual(
+      expected.map((x) => ({ code: 'PAYLOAD_INVALID', ...x })),
+    );
+  });
+
+  it.each<[string, Edit, { rule: string; path: string }[]]>([
+    ['no type', (m) => delete m.substitution.type, [{ rule: 'REQUIRED', path: 'MedicationDispense.substitution.type' }]],
+    ['type TG instead of G', (m) => (m.substitution.type.coding[0].code = 'TG'), [{ rule: 'VALUE_SET', path: 'MedicationDispense.substitution.type' }]],
+    ['no reason', (m) => delete m.substitution.reason, [{ rule: 'REQUIRED', path: 'MedicationDispense.substitution.reason' }]],
+    ['a reason outside the five', (m) => (m.substitution.reason[0].coding[0].code = 'CT'), [{ rule: 'VALUE_SET', path: 'MedicationDispense.substitution.reason' }]],
+    ['no responsibleParty', (m) => delete m.substitution.responsibleParty, [{ rule: 'REQUIRED', path: 'MedicationDispense.substitution.responsibleParty' }]],
+    ['only the pharmacist responsible', (m) => m.substitution.responsibleParty.shift(), [{ rule: 'REQUIRED', path: 'MedicationDispense.substitution.responsibleParty' }]],
+    ['a responsibleParty that is not a Practitioner', (m) => (m.substitution.responsibleParty[0].reference = 'Organization/1'), [{ rule: 'REFERENCE', path: 'MedicationDispense.substitution.responsibleParty[0].reference' }]],
+  ])('substituted: %s', (_name, edit, expected) => {
+    const resource = substitutedDispense();
+    edit(resource);
+    const violations = validateStep({ organizationId: ORG, resource });
+    expect(violations.map((v) => ({ code: v.code, rule: v.rule, path: v.path }))).toEqual(
+      expected.map((x) => ({ code: 'PAYLOAD_INVALID', ...x })),
+    );
+  });
+});
