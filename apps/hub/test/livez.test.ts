@@ -13,7 +13,7 @@ describe('liveness', () => {
   });
 
   it('GET /livez answers 200 {"status":"ok"}', async () => {
-    const res = await fetch(`${hub.baseUrl}/livez`);
+    const res = await fetch(new URL('livez', hub.baseUrl));
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: 'ok' });

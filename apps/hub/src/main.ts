@@ -1,10 +1,11 @@
 import { createHub } from './composition-root.js';
 import { loadConfig } from './config.js';
+import { log } from './observability/log.js';
 
 // Hub service entry point. It never migrates; run the `migrate` command first.
 const hub = await createHub(loadConfig(process.env));
-const url = await hub.listen();
-console.log(`hub service listening on ${url}`);
+const baseUrl = await hub.listen();
+log('info', 'hub service listening', { url: baseUrl.href });
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.once(signal, () => {

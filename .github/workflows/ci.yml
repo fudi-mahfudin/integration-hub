@@ -26,9 +26,6 @@ jobs:
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 2s --health-timeout 3s --health-retries 30
-    env:
-      DATABASE_URL: postgres://hub:hub@localhost:5432/hub
-      REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
