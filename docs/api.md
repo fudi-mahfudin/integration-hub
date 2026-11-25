@@ -28,7 +28,7 @@ Submits one source event. The hub accepts it and answers without waiting for SAT
 
 Headers: `Authorization`, `Idempotency-Key` (required, opaque, 1 to 255 characters, a UUID is fine but not required).
 
-Body, the envelope: `{ type, visitId, occurredAt, data }`. `visitId` is the source system's own visit number, unique per source system. Event types accepted so far: `visit.started`, `prescription.written`, `drug.dispensed`. Events of one visit may arrive in any order: an event whose predecessor is missing is stored and its step waits as `blocked`.
+Body, the envelope: `{ type, visitId, occurredAt, data }`. `visitId` is the source system's own visit number, unique per source system. Event types: `visit.started`, `prescription.written`, `drug.dispensed`, `visit.finished`. Events of one visit may arrive in any order: an event whose predecessor is missing is stored and its step waits as `blocked`.
 
 `visit.started` `data`:
 
@@ -63,6 +63,12 @@ Body, the envelope: `{ type, visitId, occurredAt, data }`. `visitId` is the sour
 | `batch` | optional `{ lot, expiry }`, both or neither (`BATCH_INCOMPLETE`); `expiry` is a plain `YYYY-MM-DD` date, sent as is, not before `2014-06-03` |
 | `substitution` | optional `{ reasonCode }`, one of `OS`, `FP`, `DRUG_INTERACTION`, `PATIENT_CHOICE`, `PRESCRIPTION_ERROR` (else `INVALID_SUBSTITUTION_REASON`). Declare it exactly when the product is neither the prescribed 93 nor a child of the prescribed 92; the hub decides from KFA and dead-letters a disagreement (`SUBSTITUTION_MISMATCH`) |
 
+`visit.finished` `data`:
+
+| Field | Rule |
+|---|---|
+| `finishedAt` | date-time with offset, not before the floor; must be after the visit's `startedAt` (`422 FINISHED_BEFORE_STARTED`, checked when the second of `visit.started` and `visit.finished` arrives, on whole seconds since times are sent truncated) |
+
 NIKs are 16 digits; `birthDate` is `YYYY-MM-DD`; `gender` is `male` or `female`.
 
 **Times** (`occurredAt`, `startedAt`) must be ISO 8601 date-times with an explicit offset (`Z` allowed), e.g. `2026-03-02T08:00:00+07:00`. A time without an offset, or a partial one, is `TIME_OFFSET_MISSING`. `startedAt` must not be before `2014-06-03T00:00:00+00:00`, compared on the UTC instant (so `2014-06-03T05:00+07:00` is `DATE_BEFORE_FLOOR`).
@@ -78,7 +84,8 @@ NIKs are 16 digits; `birthDate` is `YYYY-MM-DD`; `gender` is `male` or `female`.
 5. `422 UNSUPPORTED_MULTI_ITEM`: a prescription without exactly one item, or a second `prescription.written` for the visit naming another `prescriptionId`/`itemId` (one item per visit, ADR 0004).
 6. `409 EVENT_ALREADY_RECORDED`: the visit already has an event of this type, sent under another key (or under a key no longer retained, below).
 7. `422 PRESCRIPTION_MISMATCH`: the prescription and the dispense of the visit name different `prescriptionId`/`itemId`; the one arriving second is rejected, `errors[]` names the field(s).
-8. `202 Accepted`, body `{ visitId, type, caseStatus }`, header `Location: /v1/cases/{id}`.
+8. `422 FINISHED_BEFORE_STARTED`: the visit's `finishedAt` is not after its `startedAt`; the one arriving second is rejected, `errors[]` names its field.
+9. `202 Accepted`, body `{ visitId, type, caseStatus }`, header `Location: /v1/cases/{id}`.
 
 Only a `202` consumes the key: after any `4xx`/`5xx` nothing is recorded against it, and the same key may be sent again with a corrected body. Rejections from step 4 on are written to the visit's **rejection log** (code, event type, time; never the body), shown on the case as `rejections` and never changing its state. Concurrent identical requests get identical answers and open one case.
 
@@ -123,7 +130,7 @@ Per step: `attempts` counts claims by a worker (an attempt is counted when it st
 
 Before sending, every payload is checked by the hub's Validation module; a violation dead-letters the step and holds the rest of the case. When there are several, `deadLetterReason` is the first in rule order (`MAPPING_MISSING`, `KFA_LEVEL_INVALID`, `UNSUPPORTED_THERAPEUTIC_SUBSTITUTION`, `SUBSTITUTION_MISMATCH`, `PAYLOAD_INVALID`) and all of them are in the attempt's `violations`.
 
-`pins` are the values a completed step sent (create visit: `patientIhs`, `practitionerIhs`, `locationId`; submit prescription: `kfaCode`, `kfaLevel`, `parent92`, `ingredients` (the 91 set), `requesterIhs`; submit dispense: the dispensed `kfaCode`, `kfaLevel`, `parent92`, `ingredients`, `pharmacistIhs`, `wasSubstituted`), stored with its remote identifier; later steps use these, never the live mappings. `attemptLog` is append-only, one entry per finished attempt: `outcome` (`completed`, `dead_lettered`, `retry_wait`), `errorCode`, the last platform `httpStatus`, the values `used` with the patient/practitioner lookup `method` (and for a prescription `drug { localCode, kfaCode, kfa }` and `requester`, for a dispense `drug` and `pharmacist`), every validation violation (`code`, `path`, `message`, `rule`, and `mapping` for a missing mapping) and a `detail` message for transient failures.
+`pins` are the values a completed step sent (create visit: `patientIhs`, `practitionerIhs`, `locationId`; submit prescription: `kfaCode`, `kfaLevel`, `parent92`, `ingredients` (the 91 set), `requesterIhs`; submit dispense: the dispensed `kfaCode`, `kfaLevel`, `parent92`, `ingredients`, `pharmacistIhs`, `wasSubstituted`; update visit: `finishedAt`, the `period.end` sent), stored with its remote identifier; later steps use these, never the live mappings. `attemptLog` is append-only, one entry per finished attempt: `outcome` (`completed`, `dead_lettered`, `retry_wait`), `errorCode`, the last platform `httpStatus`, the values `used` with the patient/practitioner lookup `method` (and for a prescription `drug { localCode, kfaCode, kfa }` and `requester`, for a dispense `drug` and `pharmacist`, for a visit update the `encounter` id), every validation violation (`code`, `path`, `message`, `rule`, and `mapping` for a missing mapping) and a `detail` message for transient failures.
 
 `status` is `waiting` (with `waitingFor`, the earliest missing event type, and `waitingSince`), `active`, `dead_lettered`, `completed` or `abandoned`. Step states: `awaiting_event`, `blocked`, `ready`, `in_flight`, `retry_wait`, `completed`, `dead_lettered`.
 
@@ -139,5 +146,6 @@ Before sending, every payload is checked by the hub's Validation module; a viola
 | <a id="unsupported-multi-item"></a>`UNSUPPORTED_MULTI_ITEM` | 422 | A prescription must have exactly one item, and a visit one prescription item |
 | <a id="event-already-recorded"></a>`EVENT_ALREADY_RECORDED` | 409 | The visit already has this event type |
 | <a id="prescription-mismatch"></a>`PRESCRIPTION_MISMATCH` | 422 | The dispense and the visit's prescription name different `prescriptionId`/`itemId` |
+| <a id="finished-before-started"></a>`FINISHED_BEFORE_STARTED` | 422 | `finishedAt` is not after the visit's `startedAt` |
 | <a id="not-found"></a>`NOT_FOUND` | 404 | No such resource for this caller |
 | <a id="internal-error"></a>`INTERNAL_ERROR` | 500 | Unexpected server error |

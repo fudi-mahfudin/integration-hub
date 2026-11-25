@@ -4,14 +4,16 @@ import { PlatformError } from '../satusehat/fhir-client.js';
 import { createVisit } from '../steps/create-visit.js';
 import { submitDispense } from '../steps/submit-dispense.js';
 import { submitPrescription } from '../steps/submit-prescription.js';
+import { updateVisit } from '../steps/update-visit.js';
 import type { StepDeps, StepRunner } from '../steps/step-runner.js';
 import type { Clock } from '../tokens.js';
 
-/** Step name → its runner. Update visit registers here when it lands (#31). */
+/** Step name → its runner. */
 const RUNNERS: Record<string, StepRunner> = {
   create_visit: createVisit,
   submit_prescription: submitPrescription,
   submit_dispense: submitDispense,
+  update_visit: updateVisit,
 };
 
 export interface Worker {

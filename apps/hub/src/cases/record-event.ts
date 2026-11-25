@@ -2,6 +2,7 @@ import type { Transaction } from 'kysely';
 import type { SourceSystem } from '../auth/source-systems.js';
 import type { Database } from '../db/database.js';
 import { Problem, type FieldError } from '../http/problem.js';
+import { parseSourceTime } from '../time.js';
 import type { ValidatedEvent } from '../ingestion/event-schema.js';
 import { applyEventArrival, openingSteps, stepBySeq, stepForEvent, type DerivedStatus, type StepState } from './case-model.js';
 import { readSteps, writeDerivedStatus } from './case-status.js';
@@ -17,7 +18,8 @@ export interface RecordedEvent {
  * event, releases or blocks its step and re-derives the case status (#8).
  * @throws Problem 409 `EVENT_ALREADY_RECORDED` when the case already has this event type;
  *   422 `UNSUPPORTED_MULTI_ITEM` when it is a prescription for another item (#6);
- *   422 `PRESCRIPTION_MISMATCH` when the prescription and the dispense name different (prescriptionId, itemId) (#9).
+ *   422 `PRESCRIPTION_MISMATCH` when the prescription and the dispense name different (prescriptionId, itemId) (#9);
+ *   422 `FINISHED_BEFORE_STARTED` when the visit's `finishedAt` is not after its `startedAt` (#9).
  */
 export async function recordEvent(
   trx: Transaction<Database>,
@@ -81,6 +83,7 @@ export async function recordEvent(
     .executeTakeFirst();
   if (!stored) throw await alreadyRecorded(trx, kase.id, event);
   await checkPrescriptionPair(trx, kase.id, event);
+  await checkVisitTimes(trx, kase.id, event);
 
   const seq = stepForEvent(event.type).seq;
   const after = applyEventArrival(await readSteps(trx, kase.id), seq);
@@ -147,6 +150,44 @@ async function checkPrescriptionPair(trx: Transaction<Database>, caseId: string,
     errors.push({ path, code: 'PRESCRIPTION_MISMATCH', message: 'the prescription and the dispense name different itemIds' });
   }
   if (errors.length > 0) throw new Problem(422, 'PRESCRIPTION_MISMATCH', errors);
+}
+
+const VISIT_PAIR: Partial<Record<string, string>> = { 'visit.started': 'visit.finished', 'visit.finished': 'visit.started' };
+
+/**
+ * The time pair check (#9, dictionary rule 10121), run when the second of
+ * `visit.started` and `visit.finished` arrives (either order): `finishedAt`
+ * must be after `startedAt`. Compared on the whole seconds the platform will
+ * receive (times are truncated on the way out), so a sub-second difference
+ * that would arrive as equal is rejected here. The case row is locked.
+ */
+async function checkVisitTimes(trx: Transaction<Database>, caseId: string, event: ValidatedEvent): Promise<void> {
+  const other = VISIT_PAIR[event.type];
+  if (other === undefined) return;
+  const row = await trx
+    .selectFrom('source_event')
+    .select('envelope')
+    .where('case_id', '=', caseId)
+    .where('type', '=', other)
+    .executeTakeFirst();
+  if (!row) return;
+  const finishedSecond = event.type === 'visit.finished';
+  const started = ((finishedSecond ? row.envelope : event.envelope) as { data: { startedAt: string } }).data.startedAt;
+  const finished = ((finishedSecond ? event.envelope : row.envelope) as { data: { finishedAt: string } }).data.finishedAt;
+  if (wholeSeconds(finished) > wholeSeconds(started)) return;
+  throw new Problem(422, 'FINISHED_BEFORE_STARTED', [
+    {
+      path: finishedSecond ? '/data/finishedAt' : '/data/startedAt',
+      code: 'FINISHED_BEFORE_STARTED',
+      message: 'finishedAt must be after startedAt',
+    },
+  ]);
+}
+
+function wholeSeconds(sourceTime: string): number {
+  const parsed = parseSourceTime(sourceTime);
+  if (!parsed.ok) throw new Error(`stored source time is not valid: ${parsed.reason}`);
+  return Math.floor(parsed.instant.getTime() / 1000);
 }
 
 function prescriptionItemKey(envelope: unknown): string {

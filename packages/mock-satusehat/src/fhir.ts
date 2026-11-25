@@ -15,7 +15,7 @@ import {
   validationOutcome,
   type Violation,
 } from './templates/index.js';
-import { validateEncounter } from './validation/encounter.js';
+import { validateEncounter, validateEncounterUpdate } from './validation/encounter.js';
 import { validateMedicationDispense } from './validation/medication-dispense.js';
 import { validateMedicationRequest } from './validation/medication-request.js';
 
@@ -89,16 +89,20 @@ export function registerFhirRoutes(fhir: FastifyInstance, state: MockState): voi
     return send(req, reply, { status: 200, resourceType: type, ...visitOf(record), body: record });
   });
 
-  // Update. Only the 404 for a missing or deleted record and the versionId bump
-  // are built here; per-resource validation of the update comes with its step.
+  // Update: 404 for a missing or deleted record, validated (only Encounter is
+  // updatable: the update visit step), an applied one bumps versionId (#12).
   fhir.put('/:type/:id', async (req, reply) => {
     const { type, id } = req.params as { type: string; id: string };
     const records = state.recordsOf(type);
     const existing = records.get(id);
     if (!existing) return send(req, reply, notFound(type, id));
     const body = (req.body ?? {}) as Resource;
-    if (body.resourceType !== type) {
-      return send(req, reply, { status: 400, resourceType: type, body: simpleOutcome.build('invalid', `body must be a ${type}`) });
+    if (type !== 'Encounter') {
+      return send(req, reply, { status: 400, resourceType: type, ...visitOf(existing), body: simpleOutcome.build('not-supported', `update of ${type} is not supported`) });
+    }
+    const violations = validateEncounterUpdate(body, id, existing as Record<string, any>, { organizationIds: state.organizationIds });
+    if (violations.length > 0) {
+      return send(req, reply, { status: 400, resourceType: type, ...visitOf(existing), body: validationOutcome.build(violations) });
     }
     const stored = { ...body, id, meta: { versionId: state.nextVersionId(), lastUpdated: utcNow() } } as Resource;
     records.set(id, stored);

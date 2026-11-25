@@ -50,17 +50,47 @@ export const createVisit: StepRunner = async (step, { db, fhir }, { used }) => {
   if (practitioner === undefined) return { outcome: 'dead_lettered', reason: 'PRACTITIONER_NOT_FOUND' };
 
   const identifier = { system: encounterSystem(organizationId), value: step.visitId };
-  const start = sourceToPlatformTime(data.startedAt);
-  const encounter = {
+  const pins: CreateVisitPins = { patientIhs: patient.ihsNumber, practitionerIhs: practitioner.ihsNumber, locationId };
+  const encounter = visitEncounter({
+    organizationId,
+    visitId: step.visitId,
+    encounterClass: data.encounterClass,
+    pins,
+    start: sourceToPlatformTime(data.startedAt),
+  });
+  const invalid = checkStep({ organizationId, mappings, resource: encounter });
+  if (invalid) return invalid;
+
+  const result = await searchThenCreate(fhir, 'Encounter', identifier, encounter);
+  if (result.outcome !== 'completed') return result;
+  return { ...result, pins };
+};
+
+/**
+ * The visit's Encounter, as create visit sends it (`arrived`) and, with an
+ * `end`, as update visit sends it (`finished`, #9). Built only from the
+ * visit's own values: the pins and the stored `visit.started`.
+ */
+export function visitEncounter(v: {
+  organizationId: string;
+  visitId: string;
+  encounterClass: string;
+  pins: CreateVisitPins;
+  /** Platform times (`…+00:00`). */
+  start: string;
+  end?: string;
+}): Record<string, unknown> {
+  const finished = v.end !== undefined;
+  return {
     resourceType: 'Encounter',
-    identifier: [identifier],
-    status: 'arrived',
+    identifier: [{ system: encounterSystem(v.organizationId), value: v.visitId }],
+    status: finished ? 'finished' : 'arrived',
     class: {
       system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode',
-      code: data.encounterClass,
-      display: ENCOUNTER_CLASS_DISPLAY[data.encounterClass],
+      code: v.encounterClass,
+      display: ENCOUNTER_CLASS_DISPLAY[v.encounterClass],
     },
-    subject: { reference: `Patient/${patient.ihsNumber}` },
+    subject: { reference: `Patient/${v.pins.patientIhs}` },
     participant: [
       {
         type: [
@@ -70,19 +100,17 @@ export const createVisit: StepRunner = async (step, { db, fhir }, { used }) => {
             ],
           },
         ],
-        individual: { reference: `Practitioner/${practitioner.ihsNumber}` },
+        individual: { reference: `Practitioner/${v.pins.practitionerIhs}` },
       },
     ],
-    period: { start },
-    location: [{ location: { reference: `Location/${locationId}` } }],
-    statusHistory: [{ status: 'arrived', period: { start } }],
-    serviceProvider: { reference: `Organization/${organizationId}` },
+    period: finished ? { start: v.start, end: v.end } : { start: v.start },
+    location: [{ location: { reference: `Location/${v.pins.locationId}` } }],
+    statusHistory: finished
+      ? [
+          { status: 'arrived', period: { start: v.start, end: v.end } },
+          { status: 'finished', period: { start: v.end, end: v.end } },
+        ]
+      : [{ status: 'arrived', period: { start: v.start } }],
+    serviceProvider: { reference: `Organization/${v.organizationId}` },
   };
-  const invalid = checkStep({ organizationId, mappings, resource: encounter });
-  if (invalid) return invalid;
-
-  const result = await searchThenCreate(fhir, 'Encounter', identifier, encounter);
-  if (result.outcome !== 'completed') return result;
-  const pins: CreateVisitPins = { patientIhs: patient.ihsNumber, practitionerIhs: practitioner.ihsNumber, locationId };
-  return { ...result, pins };
-};
+}

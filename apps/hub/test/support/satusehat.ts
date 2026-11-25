@@ -142,6 +142,16 @@ export function worldDrugDispensed(visitId: string, data: Record<string, unknown
   };
 }
 
+/** A `visit.finished` for `visitId`, after `worldVisitStarted`'s `startedAt`; `data` is shallow-merged. */
+export function worldVisitFinished(visitId: string, data: Record<string, unknown> = {}) {
+  return {
+    type: 'visit.finished',
+    visitId,
+    occurredAt: '2026-03-02T09:30:00+07:00',
+    data: { finishedAt: '2026-03-02T09:30:00+07:00', ...data } as Record<string, unknown>,
+  };
+}
+
 /** The world organization's `prescription/{org}` identifier system. */
 export const PRESCRIPTION_SYSTEM = `http://sys-ids.kemkes.go.id/prescription/${world.organization.id}`;
 

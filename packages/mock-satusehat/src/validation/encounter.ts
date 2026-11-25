@@ -73,6 +73,37 @@ export function validateEncounter(body: unknown, ctx: EncounterRuleContext): Vio
     else if (ms < FLOOR_MS) v('DATE_FLOOR', path, 'time must not be before 2014-06-03T00:00:00+00:00');
   }
 
+  // Dictionary rule 10121: a visit ends after it starts.
+  if (isObject(e.period) && e.period.end !== undefined) {
+    const start = parseUtc(e.period.start);
+    const end = parseUtc(e.period.end);
+    if (start !== null && end !== null && end <= start) v('PERIOD_ORDER', 'Encounter.period.end', 'period.end must be after period.start');
+  }
+
+  return out;
+}
+
+/**
+ * An update (`PUT /Encounter/{id}`) of the stored record: every create rule,
+ * plus FHIR's update rule (the body's `id` is the URL's), the visit's
+ * identifier unchanged, and a `finished` visit has an end time.
+ */
+export function validateEncounterUpdate(body: unknown, id: string, stored: Record<string, any>, ctx: EncounterRuleContext): Violation[] {
+  const out = validateEncounter(body, ctx);
+  const v = (rule: string, path: string, message: string) => out.push({ code: STEP_CODE, rule, path, message });
+  const e = (isObject(body) ? body : {}) as Record<string, any>;
+
+  if (e.id !== id) v('ID_MISMATCH', 'Encounter.id', 'the body id must be the id in the URL');
+
+  const own = (stored.identifier ?? []).find((i: any) => typeof i?.system === 'string' && ENCOUNTER_SYSTEM.test(i.system));
+  const identifiers: any[] = Array.isArray(e.identifier) ? e.identifier : [];
+  if (own && !identifiers.some((i) => i?.system === own.system && i?.value === own.value)) {
+    v('IDENTIFIER_CHANGED', 'Encounter.identifier', `an update must keep the identifier ${own.system}|${own.value}`);
+  }
+
+  if (e.status === 'finished' && (!isObject(e.period) || e.period.end === undefined)) {
+    v('REQUIRED', 'Encounter.period.end', 'a finished Encounter needs period.end');
+  }
   return out;
 }
 
