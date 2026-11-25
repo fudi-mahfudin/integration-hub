@@ -1,0 +1,159 @@
+# Hub API contract
+
+The HTTP API the hub service offers to source systems. Domain terms are in [GLOSSARY.md](../GLOSSARY.md). This file grows as tickets land; it describes only what the hub does today.
+
+## Authentication
+
+Every request carries `Authorization: Bearer <api key>`. Each source system has one static API key. The source system's identity, and the SATUSEHAT organization it belongs to, come from the key, never from the request body. A missing, malformed or unknown key is [`401 UNAUTHENTICATED`](#unauthenticated).
+
+## `POST /v1/events`
+
+Sends one source event.
+
+### Headers
+
+| Header | Rules |
+|---|---|
+| `Authorization` | `Bearer <api key>` |
+| `Idempotency-Key` | Required. An opaque string of 1-255 characters; it doesn't have to be a UUID. Missing: [`400 IDEMPOTENCY_KEY_MISSING`](#idempotency_key_missing). Empty or longer than 255: [`400 IDEMPOTENCY_KEY_INVALID`](#idempotency_key_invalid). |
+
+### Order of checks
+
+1. Authenticate (`401`).
+2. `Idempotency-Key` present and valid (`400`).
+3. Key lookup: a key already accepted from this source system with the same body is a duplicate ingest and gets the original answer replayed; with a different body it is [`422 IDEMPOTENCY_KEY_REUSED`](#idempotency_key_reused).
+4. Event schema ([`422 VALIDATION_FAILED`](#validation_failed)).
+5. Checks against events already recorded for the visit ([`409 EVENT_ALREADY_RECORDED`](#event_already_recorded)).
+6. Accept (`202`).
+
+A true duplicate always gets its replay. It is never validated again into a different answer.
+
+### Envelope
+
+```json
+{
+  "type": "visit.started",
+  "visitId": "V-2026-000123",
+  "occurredAt": "2026-03-02T08:00:00+07:00",
+  "data": { }
+}
+```
+
+| Field | Rules |
+|---|---|
+| `type` | The event type. Only `visit.started` is accepted so far. |
+| `visitId` | The source system's own visit number, 1-64 characters, unique per source system. The case for the visit is keyed by (source system, `visitId`). |
+| `occurredAt` | When the event happened at the source. A time (see [Times](#times)). |
+| `data` | The event's payload, by `type`. |
+
+Unknown fields are ignored.
+
+### `visit.started`
+
+| Field | Rules |
+|---|---|
+| `patient` | `{ nik?, motherNik?, name?, birthDate?, gender?, mrn }`. Must carry one of: `nik`; `motherNik` + `birthDate`; `name` + `birthDate` + `gender`. `mrn` (the hospital's medical record number, 1-64 characters) is always required. |
+| `practitioner` | `{ nik }` or `{ name, birthDate, gender }`. |
+| `encounterClass` | `AMB`, `IMP` or `EMER`. |
+| `locationCode` | The hospital's local location code, 1-64 characters. |
+| `startedAt` | A time (see [Times](#times)), not before the date floor. |
+
+`nik` and `motherNik` are 16 digits. `birthDate` is a calendar date `YYYY-MM-DD`. `gender` is `male` or `female`. `name` is 1-200 characters.
+
+### Times
+
+- Times are ISO 8601 date-times with an explicit offset, for example `2026-03-02T08:00:00+07:00` or `2026-03-02T01:00:00Z`. Seconds and fractions are optional. A time without an offset, or only part of one (for example just a date), is `TIME_OFFSET_MISSING`.
+- The date floor is `2014-06-03T00:00:00+00:00`, compared on the UTC value. `2014-06-03T05:00:00+07:00` is before it (`DATE_BEFORE_FLOOR`). It applies to `startedAt`, not to `occurredAt`.
+
+### `202 Accepted`
+
+```json
+{ "visitId": "V-2026-000123", "type": "visit.started", "caseStatus": "active" }
+```
+
+`Location: /v1/cases/{caseId}` names the case. `caseStatus` is the case status at the moment the event was accepted. Ask [`GET /v1/cases/{id}`](#get-v1casesid) for the current status. Ingest never waits for SATUSEHAT.
+
+### Idempotency
+
+- **Duplicate ingest.** The same source system, the same `Idempotency-Key` and the same body get the original status and body back verbatim, plus `Idempotent-Replayed: true`. "Same body" means the same SHA-256 fingerprint of the RFC 8785 canonical JSON, so key order and whitespace don't matter.
+- **Same key, different body**: [`422 IDEMPOTENCY_KEY_REUSED`](#idempotency_key_reused). Nothing is recorded.
+- **Only a `202` consumes a key.** After a `400`, `401`, `409` or `422` nothing is recorded, and the same key may be sent again, for example with a corrected body.
+- **Concurrent identical requests** open exactly one case and all get the same answer.
+- **Retention.** An accepted key is kept for **at least 24 hours**, then deleted by a periodic purge (hourly by default). Until it is purged, it still replays. After that, an identical resend gets [`409 EVENT_ALREADY_RECORDED`](#event_already_recorded) instead of a replay. The event is still recorded once; only the answer differs.
+
+## `GET /v1/cases/{id}`
+
+A case's status and the state of its four steps, in order. A source system sees only its own cases; any other id is [`404 NOT_FOUND`](#not_found).
+
+```json
+{
+  "caseId": "0b6f6c1e-8a0e-4d55-9b4b-3f1f1d7f2a10",
+  "visitId": "V-2026-000123",
+  "status": "active",
+  "steps": [
+    { "step": "create_visit", "eventType": "visit.started", "state": "ready" },
+    { "step": "submit_prescription", "eventType": "prescription.written", "state": "awaiting_event" },
+    { "step": "submit_dispense", "eventType": "drug.dispensed", "state": "awaiting_event" },
+    { "step": "update_visit", "eventType": "visit.finished", "state": "awaiting_event" }
+  ]
+}
+```
+
+Case status: `waiting`, `active`, `dead_lettered`, `completed`, `abandoned`. Step state: `awaiting_event`, `blocked`, `ready`, `in_flight`, `retry_wait`, `completed`, `dead_lettered`.
+
+## Errors
+
+Every error is an RFC 9457 problem, `Content-Type: application/problem+json`:
+
+```json
+{
+  "type": "https://github.com/fudi-mahfudin/integration-hub/blob/main/docs/api.md#validation_failed",
+  "title": "The source event failed validation",
+  "status": 422,
+  "code": "VALIDATION_FAILED",
+  "errors": [
+    { "path": "/data/startedAt", "code": "TIME_OFFSET_MISSING", "message": "must carry an explicit offset, e.g. 2026-03-02T08:00:00+07:00" }
+  ]
+}
+```
+
+`code` is stable; match on it, not on `title` or `message`. `errors[]` is always present and may be empty. Its `path` is a JSON Pointer into the request body.
+
+### UNAUTHENTICATED
+
+`401`. The API key is missing, malformed or unknown. The response carries `WWW-Authenticate: Bearer`.
+
+### IDEMPOTENCY_KEY_MISSING
+
+`400`. The `Idempotency-Key` header is missing.
+
+### IDEMPOTENCY_KEY_INVALID
+
+`400`. The `Idempotency-Key` header is empty or longer than 255 characters.
+
+### IDEMPOTENCY_KEY_REUSED
+
+`422`. This source system already used the key for a different body. Nothing was recorded.
+
+### VALIDATION_FAILED
+
+`422`. The event breaks its schema. Every violation is listed in `errors[]`, each with one of these codes:
+
+| `errors[].code` | Meaning |
+|---|---|
+| `REQUIRED` | A required field, or a required combination of fields, is missing. |
+| `INVALID_FORMAT` | The value has the wrong type or format, or isn't one of the allowed values. A body that isn't JSON is reported at path `""`. |
+| `TIME_OFFSET_MISSING` | A time has no explicit offset, or is only part of a date-time. |
+| `DATE_BEFORE_FLOOR` | A time is before `2014-06-03T00:00:00+00:00` in UTC. |
+
+### EVENT_ALREADY_RECORDED
+
+`409`. The visit already has an event of this type under a different idempotency key, or under a key that has since been purged.
+
+### NOT_FOUND
+
+`404`. No such resource for this source system.
+
+### INTERNAL_ERROR
+
+`500`. An unexpected error. Retry with the same key: if the event was accepted after all, the retry gets its replay.

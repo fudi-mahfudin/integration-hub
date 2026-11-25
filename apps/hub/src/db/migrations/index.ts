@@ -1,8 +1,11 @@
 import type { Migration } from 'kysely/migration';
+import { ingestMigration } from './0001_ingest.js';
 
 /**
  * Every migration, in order. Keys are `NNNN_snake_case_name` and sort
  * lexically; never rename or edit one that has shipped. Static imports (not a
  * folder scan) so the same list works from `src` under tsx and from `dist`.
  */
-export const migrations: Record<string, Migration> = {};
+export const migrations: Record<string, Migration> = {
+  '0001_ingest': ingestMigration,
+};

@@ -1,3 +1,21 @@
+import { z } from 'zod';
+
+/** One registered source system and its static API key (#25). */
+export interface SourceSystemConfig {
+  /** Stable id; part of every case and idempotency key. */
+  id: string;
+  /** SATUSEHAT Organization id: the `{org}` in identifier systems. */
+  organizationId: string;
+  /** The static API key the source system sends as `Authorization: Bearer <key>`. */
+  apiKey: string;
+}
+
+/**
+ * Which idempotency store backs ingest. `naive-redis` is deliberately broken
+ * and exists only to show the race of ADR 0003.
+ */
+export type IdempotencyStoreKind = 'postgres' | 'naive-redis';
+
 /** Everything the hub reads from its environment, validated once at startup. */
 export interface HubConfig {
   /** Interface the HTTP server binds to. */
@@ -8,9 +26,35 @@ export interface HubConfig {
   databaseUrl: string;
   /** Redis connection URL (`redis://` or `rediss://`). */
   redisUrl: string;
+  /** The source systems allowed to post events, one static API key each. */
+  sources: SourceSystemConfig[];
+  /** Which idempotency store backs ingest (`IDEMPOTENCY_STORE`). */
+  idempotencyStore: IdempotencyStoreKind;
+  /** Idempotency keys are kept at least this many hours; never below 24 (API contract). */
+  idempotencyRetentionHours: number;
+  /** How often the hub service purges expired keys; `0` turns the timer off (tests trigger the purge). */
+  idempotencyPurgeIntervalMs: number;
 }
 
 type Env = Record<string, string | undefined>;
+
+/**
+ * The source system a clean clone runs with. Its key is public: production
+ * must set `HUB_SOURCES`.
+ */
+const DEV_SOURCES: SourceSystemConfig[] = [{ id: 'simulator', organizationId: '99000001', apiKey: 'dev-source-key' }];
+
+const sourcesSchema = z
+  .array(
+    z.object({
+      id: z.string().min(1),
+      organizationId: z.string().min(1),
+      apiKey: z.string().min(1),
+    }),
+  )
+  .min(1)
+  .refine((sources) => new Set(sources.map((s) => s.id)).size === sources.length, 'duplicate "id"')
+  .refine((sources) => new Set(sources.map((s) => s.apiKey)).size === sources.length, 'duplicate "apiKey"');
 
 /**
  * Reads and validates the hub's configuration. Defaults match compose.yaml,
@@ -26,6 +70,13 @@ export function loadConfig(env: Env): HubConfig {
       'postgresql:',
     ]),
     redisUrl: parseUrl('REDIS_URL', env.REDIS_URL ?? 'redis://localhost:6379', ['redis:', 'rediss:']),
+    sources: env.HUB_SOURCES === undefined ? DEV_SOURCES : parseSources(env.HUB_SOURCES),
+    idempotencyStore: parseStore(env.IDEMPOTENCY_STORE ?? 'postgres'),
+    idempotencyRetentionHours: parseRetention(env.IDEMPOTENCY_RETENTION_HOURS ?? '24'),
+    idempotencyPurgeIntervalMs: parseNonNegativeInt(
+      'IDEMPOTENCY_PURGE_INTERVAL_MS',
+      env.IDEMPOTENCY_PURGE_INTERVAL_MS ?? '3600000',
+    ),
   };
 }
 
@@ -56,4 +107,42 @@ function parseUrl(name: string, raw: string, protocols: readonly string[]): stri
     throw new Error(`${name} must use ${protocols.join(' or ')}, got "${url.protocol}"`);
   }
   return raw;
+}
+
+function parseSources(raw: string): SourceSystemConfig[] {
+  const expected = 'HUB_SOURCES must be a non-empty JSON array of {id, organizationId, apiKey}';
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    // The value holds API keys, so it is not echoed back.
+    throw new Error(`${expected}, got invalid JSON`);
+  }
+  const parsed = sourcesSchema.safeParse(json);
+  if (!parsed.success) {
+    const problems = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`);
+    throw new Error(`${expected}; ${problems.join('; ')}`);
+  }
+  return parsed.data;
+}
+
+function parseStore(raw: string): IdempotencyStoreKind {
+  if (raw === 'postgres' || raw === 'naive-redis') return raw;
+  throw new Error(`IDEMPOTENCY_STORE must be "postgres" or "naive-redis", got "${raw}"`);
+}
+
+function parseRetention(raw: string): number {
+  const hours = Number(raw);
+  if (!Number.isInteger(hours) || hours < 24) {
+    throw new Error(`IDEMPOTENCY_RETENTION_HOURS must be an integer of at least 24 (API contract), got "${raw}"`);
+  }
+  return hours;
+}
+
+function parseNonNegativeInt(name: string, raw: string): number {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new Error(`${name} must be a non-negative integer, got "${raw}"`);
+  }
+  return n;
 }
