@@ -1,7 +1,7 @@
 import type { SatusehatConfig } from '../config.js';
 import type { Clock } from '../tokens.js';
 
-/** A non-2xx platform answer. Classification into transient/permanent is #35's. */
+/** A non-2xx platform answer. `permanentReason` tells a permanent one from a transient one. */
 export class PlatformError extends Error {
   constructor(
     readonly status: number,
@@ -10,6 +10,26 @@ export class PlatformError extends Error {
   ) {
     super(`${what} -> HTTP ${status}`);
   }
+}
+
+/** 4xx answers that stay transient whatever their body (#8, #13): 401 after the resend, 408, 429. */
+const TRANSIENT_4XX = new Set([401, 408, 429]);
+/** 404/410 on a stored remote id means re-search (#13); that path is #35's, so they stay transient for now. */
+const DEFERRED_4XX = new Set([404, 410]);
+
+/**
+ * The dead-letter reason for a permanent platform answer, or undefined for a
+ * transient one. Permanent (#8): a 4xx with an OperationOutcome other than
+ * 401/408/429: `PLATFORM_FORBIDDEN` for a 403 (#13), else `PAYLOAD_INVALID`
+ * (the platform rejected what local validation let through: a hub bug, #9).
+ * The OperationOutcome is not parsed for a finer code (#20).
+ */
+export function permanentReason(err: unknown): 'PLATFORM_FORBIDDEN' | 'PAYLOAD_INVALID' | undefined {
+  if (!(err instanceof PlatformError)) return undefined;
+  const { status, body } = err;
+  if (status < 400 || status > 499 || TRANSIENT_4XX.has(status) || DEFERRED_4XX.has(status)) return undefined;
+  if ((body as { resourceType?: unknown } | null)?.resourceType !== 'OperationOutcome') return undefined;
+  return status === 403 ? 'PLATFORM_FORBIDDEN' : 'PAYLOAD_INVALID';
 }
 
 /** The fields of a FHIR resource the hub reads back. */

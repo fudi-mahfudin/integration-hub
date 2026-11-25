@@ -8,7 +8,11 @@ import { deadLetterReason, validateStep, type StepCheck, type Violation } from '
 /** A permanent failure: the step dead-letters with this stable reason code (#8, #9). */
 export type DeadLettered = { outcome: 'dead_lettered'; reason: string; violations?: Violation[] };
 
-/** What a step attempt ended with. A transient failure is a thrown error instead. */
+/**
+ * What a step attempt ended with. A failure is a thrown error instead: the
+ * worker dead-letters a permanent platform rejection (`permanentReason`) and
+ * retries anything else.
+ */
 export type StepResult =
   /** `pins`: the values it sent, stored with the remote identifier (#10). */
   | { outcome: 'completed'; remote: RemoteIdentifier; pins: Pins }
