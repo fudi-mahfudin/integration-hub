@@ -74,32 +74,18 @@ export function worldVisitStarted(overrides: { visitId?: string; data?: Record<s
 /** The world organization's `encounter/{org}` identifier system. */
 export const ENCOUNTER_SYSTEM = `http://sys-ids.kemkes.go.id/encounter/${world.organization.id}`;
 
-/**
- * Creates an Encounter for `visitId` straight through the mock's platform API,
- * as another client of the platform would (e.g. to set up an ambiguous search).
- */
-export async function createEncounterDirectly(mockBaseUrl: string, visitId: string): Promise<void> {
-  const tokenRes = await fetch(`${mockBaseUrl}/oauth2/v1/accesstoken?grant_type=client_credentials`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: world.organization.clientId, client_secret: world.organization.clientSecret }),
-  });
-  const { access_token } = (await tokenRes.json()) as { access_token: string };
+/** An Encounter for `visitId` as another platform client would have created it; plant with `MockClient.insertRecord`. */
+export function plantedEncounter(visitId: string) {
   const start = '2026-03-02T01:00:00+00:00';
-  const res = await fetch(`${mockBaseUrl}/fhir-r4/v1/Encounter`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${access_token}`, 'content-type': 'application/fhir+json' },
-    body: JSON.stringify({
-      resourceType: 'Encounter',
-      identifier: [{ system: ENCOUNTER_SYSTEM, value: visitId }],
-      status: 'arrived',
-      class: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB' },
-      subject: { reference: `Patient/${worldPatient.ihs}` },
-      participant: [{ individual: { reference: `Practitioner/${worldPhysician.ihs}` } }],
-      period: { start },
-      location: [{ location: { reference: `Location/${world.locations[0]!.id}` } }],
-      serviceProvider: { reference: `Organization/${world.organization.id}` },
-    }),
-  });
-  if (res.status !== 201) throw new Error(`direct Encounter create -> ${res.status}: ${await res.text()}`);
+  return {
+    resourceType: 'Encounter' as const,
+    identifier: [{ system: ENCOUNTER_SYSTEM, value: visitId }],
+    status: 'arrived' as const,
+    class: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB' },
+    subject: { reference: `Patient/${worldPatient.ihs}` },
+    participant: [{ individual: { reference: `Practitioner/${worldPhysician.ihs}` } }],
+    period: { start },
+    location: [{ location: { reference: `Location/${world.locations[0]!.id}` } }],
+    serviceProvider: { reference: `Organization/${world.organization.id}` },
+  };
 }

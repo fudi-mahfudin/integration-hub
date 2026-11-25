@@ -7,8 +7,8 @@ import { postEvent, waitForCase, type CaseView } from './support/events.js';
 import { createFreshDatabase, type FreshDatabase } from './support/fresh-database.js';
 import { expectAtMostOneStepInMotion } from './support/invariants.js';
 import {
-  createEncounterDirectly,
   ENCOUNTER_SYSTEM,
+  plantedEncounter,
   satusehatEnv,
   WORLD_LOCATIONS,
   WORLD_SOURCE_API_KEY,
@@ -121,8 +121,8 @@ describe('create visit: an accepted visit.started becomes an Encounter at the mo
 
   it('dead-letters with REMOTE_RECORD_AMBIGUOUS when the search finds more than one Encounter, creating nothing', async () => {
     const event = worldVisitStarted();
-    await createEncounterDirectly(mock.baseUrl, event.visitId);
-    await createEncounterDirectly(mock.baseUrl, event.visitId);
+    await mockClient.insertRecord(plantedEncounter(event.visitId));
+    await mockClient.insertRecord(plantedEncounter(event.visitId));
     const before = await mockClient.log({ visitKey: event.visitId, resourceType: 'Encounter' });
 
     const accepted = await send(event);
