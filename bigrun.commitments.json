@@ -1,0 +1,154 @@
+{
+  "$comment": "Numbers every evidence run is judged by, fixed before any result exists. Changing this file needs a reason in the commit message. Official runs refuse to start if the file changed since its own commit. Sources: issues #19 (big run, load test), #13 (fault scope), #20 (cache run, world dataset).",
+  "version": 1,
+
+  "world": {
+    "patients": 1000,
+    "patientDraw": "uniform",
+    "practitioners": 30
+  },
+
+  "bigRun": {
+    "seed": 20261125,
+    "events": {
+      "visits": 2000,
+      "eventsPerVisit": 4,
+      "uniqueEvents": 8000,
+      "duplicates": 2000,
+      "total": 10000,
+      "allValid": true
+    },
+    "duplicateTiming": {
+      "$comment": "Same Idempotency-Key, byte-identical body. Delayed = 0.5-10s after the original's 202. Late = after the case completed, still inside the 24h key retention.",
+      "concurrent": 0.5,
+      "delayed": 0.3,
+      "delayedWindowSeconds": { "min": 0.5, "max": 10 },
+      "late": 0.2
+    },
+    "eventMix": {
+      "$comment": "Seeded, fixed shares of visits; the rest is happy path. Out of order = one event sent before its predecessor. Fallback person lookup = mother's NIK or name+birthDate+gender.",
+      "outOfOrder": 0.1,
+      "substitution": 0.1,
+      "fallbackPersonLookup": 0.1
+    },
+    "faults": {
+      "$comment": "One PUT /__mock/faults with bigRun.seed. Weights are percent of every call in the group. Token endpoint excluded; http_400/http_401 never injected.",
+      "excludes": ["token"],
+      "reads": {
+        "match": "GET and search on FHIR, and every KFA call",
+        "totalPercent": 30,
+        "weights": {
+          "http_500": 6,
+          "http_503": 6,
+          "http_429": 6,
+          "timeout": 6,
+          "connection_reset": 6
+        },
+        "variants": {
+          "http_503": { "withRetryAfter": 0.5 },
+          "http_429": { "retryAfter": { "absent": 1, "seconds": 1, "httpDate": 1 } }
+        }
+      },
+      "writes": {
+        "match": "POST and PUT on FHIR",
+        "totalPercent": 30,
+        "weights": {
+          "timeout_after_apply": 7,
+          "http_500_after_apply": 7,
+          "http_500": 4,
+          "http_503": 4,
+          "http_429": 4,
+          "timeout": 2,
+          "connection_reset": 2
+        }
+      }
+    },
+    "mockProfile": {
+      "rateLimitRps": { "fhir": 100, "kfa": 50 },
+      "callTimeoutSeconds": 2
+    },
+    "arrival": {
+      "mode": "open-loop",
+      "eventsPerSecond": 50
+    },
+    "topology": {
+      "$comment": "CPU/memory limits per container. compose.yaml must carry exactly these once the services exist there; the report captures the limits it actually ran with.",
+      "hubServices": 1,
+      "workerProcesses": 2,
+      "composeLimits": {
+        "hub": { "cpus": 1, "memory": "512m" },
+        "worker": { "cpus": 1, "memory": "512m" },
+        "mock": { "cpus": 1, "memory": "512m" },
+        "postgres": { "cpus": 2, "memory": "1g" },
+        "redis": { "cpus": 0.5, "memory": "256m" },
+        "prometheus": { "cpus": 0.5, "memory": "512m" }
+      }
+    },
+    "reconciliation": {
+      "$comment": "Periodic reconciliation off. One on-demand run after the drain; its counts are information, not a pass criterion.",
+      "periodic": false,
+      "afterDrain": "information-only"
+    },
+    "completion": {
+      "pollIntervalSeconds": 5,
+      "noProgressFailFastMinutes": 10,
+      "hardDeadlineMinutes": 60
+    },
+    "invariants": {
+      "$comment": "PASS only if every invariant holds, checked hub side and mock side against the manifest written before the first send.",
+      "lostEvents": 0,
+      "duplicateSubmissions": 0,
+      "orderPerCase": "preserved",
+      "deadLetteredCases": 0,
+      "abandonedCases": 0,
+      "hubSide": {
+        "completedCases": 2000,
+        "waitingCases": 0,
+        "deadLetteredCases": 0,
+        "abandonedCases": 0,
+        "completedSteps": 8000
+      },
+      "mockSide": {
+        "effectsPerVisitInOrder": ["Encounter created", "MedicationRequest created", "MedicationDispense created", "Encounter updated"],
+        "mockReportSectionsEmpty": ["duplicates", "outOfOrder", "overlap"]
+      },
+      "responses": {
+        "original": "202",
+        "duplicate": "202 + Idempotent-Replayed"
+      }
+    }
+  },
+
+  "loadTest": {
+    "tool": "k6",
+    "executor": "constant-arrival-rate",
+    "eventsPerSecond": 200,
+    "durationSeconds": 300,
+    "warmUpSeconds": 30,
+    "faults": "none",
+    "duplicateShare": 0.2,
+    "thresholds": {
+      "ingestP95Ms": 200,
+      "ingestP99Ms": 500,
+      "non2xxRate": 0.001
+    }
+  },
+
+  "cacheRun": {
+    "$comment": "Big-run harness and event mix with faults off. Mock latencies are assumed constants, not sandbox measurements. A cache that misses any bar is removed from the code; its result stays published.",
+    "faults": "none",
+    "eventsPerSecond": 50,
+    "topology": "same as bigRun",
+    "mockLatencyMs": { "reads": 150, "writes": 300 },
+    "arms": ["off", "practitioner-only", "both"],
+    "runsPerArm": 3,
+    "order": "alternating",
+    "barToStay": {
+      "$comment": "Per cache, against the arm without it.",
+      "upstreamReadsPerCompletedCaseReduction": 0.2,
+      "medianE2eCaseP95Improvement": 0.1,
+      "e2eImprovementMustExceedArmSpread": true,
+      "officialBigRunPassesWithCacheOn": true
+    }
+  }
+}
