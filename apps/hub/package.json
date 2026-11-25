@@ -7,12 +7,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/main.js",
     "migrate": "tsx src/db/migrate-cli.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "demo:naive-race": "tsx scripts/naive-race-demo.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.6.0",
     "@nestjs/core": "^12.6.0",
     "@nestjs/platform-fastify": "^12.6.0",
+    "fastify": "5.12.8",
     "ioredis": "^6.1.0",
     "kysely": "^0.29.9",
     "pg": "^8.23.1",

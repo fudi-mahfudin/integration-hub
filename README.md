@@ -20,6 +20,8 @@ pnpm build
 node apps/hub/dist/main.js     # serves GET http://localhost:3000/livez
 ```
 
+The HTTP API (events, cases, error codes, idempotency key retention) is specified in [docs/api.md](docs/api.md). Without `HUB_SOURCES` the hub registers one development source system, `simulator`, with the public key `dev-source-key`; set `HUB_SOURCES` to a JSON array of `{ id, organizationId, apiKey }` anywhere else.
+
 `pnpm deps:down` stops the containers and deletes their data.
 
 Defaults match `compose.yaml`, so no `.env` is needed. If ports 5432 or 6379 are taken, start compose with `POSTGRES_PORT`/`REDIS_PORT` and point the hub and tests at them with `DATABASE_URL`/`REDIS_URL` (see `.env.example`).
@@ -71,6 +73,17 @@ Postgres, Redis, Prometheus, Grafana, OpenTelemetry with Jaeger, the mock SATUSE
 ### Effect-once, not exactly-once
 
 Source systems deliver at least once; the hub deduplicates on ingest and preserves order per case. No network path can promise exactly-once delivery, so the hub does not claim it. It claims **effect-once**: each step causes exactly one record at SATUSEHAT, which the mock SATUSEHAT verifies from the outside by counting submissions per identifier (ADR 0004, ADR 0005).
+
+### Naive versus real idempotency
+
+`IDEMPOTENCY_STORE=naive-redis` switches ingest to a deliberately broken, clearly labelled store (`apps/hub/src/ingestion/naive-redis-store.ts`) kept next to the real one to show why ADR 0003 exists. It does what looks obvious: GET the idempotency key from Redis, and if it is missing, accept the event and SET the key. Every sequential test passes. Under concurrent duplicates, though, all requests GET "missing" before the first one SETs, so all of them try to accept; one wins and the rest answer `409 EVENT_ALREADY_RECORDED` instead of replaying the original `202`. (Redis may also drop any key at any time, which produces the same wrong answer.)
+
+The real store (`IDEMPOTENCY_STORE=postgres`, the default) inserts the key row first, inside the same short transaction that opens the case. A concurrent duplicate blocks on that row's unique index until the first request commits, then finds it and replays its answer. The same race test (`apps/hub/test/ingest-race.test.ts`) runs against both stores, with the naive run marked `test.fails`. To watch it:
+
+```sh
+pnpm deps:up
+npm run demo:naive-race    # or pnpm demo:naive-race
+```
 
 ## Not supported
 
