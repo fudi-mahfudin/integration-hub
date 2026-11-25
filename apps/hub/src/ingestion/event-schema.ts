@@ -22,9 +22,13 @@ export function parseBody(rawBody: string): ParsedBody {
 
 /** SATUSEHAT's date floor, compared on the UTC instant (#9). */
 export const DATE_FLOOR = new Date('2014-06-03T00:00:00+00:00');
+/** The floor for plain dates (`batch.expiry`), compared as `YYYY-MM-DD` strings. */
+const DATE_FLOOR_DAY = '2014-06-03';
 
-/** Event types ingest accepts so far; the other two arrive with #30-#31. */
-const SUPPORTED_TYPES: readonly EventType[] = ['visit.started', 'prescription.written'];
+/** Event types ingest accepts so far; `visit.finished` arrives with #31. */
+const SUPPORTED_TYPES: readonly EventType[] = ['visit.started', 'prescription.written', 'drug.dispensed'];
+/** `drug.dispensed.substitution.reasonCode` (#9). */
+export const SUBSTITUTION_REASONS = ['OS', 'FP', 'DRUG_INTERACTION', 'PATIENT_CHOICE', 'PRESCRIPTION_ERROR'] as const;
 const ENCOUNTER_CLASSES = ['AMB', 'IMP', 'EMER'];
 const GENDERS = ['male', 'female'];
 export const MAX_VISIT_ID_LENGTH = 255;
@@ -57,6 +61,7 @@ export function validateEvent(body: ParsedBody): ValidatedEvent {
     if (!isObject(data)) c.add('/data', 'INVALID_FORMAT', 'must be an object');
     else if (type === 'visit.started') checkVisitStarted(c, data);
     else if (type === 'prescription.written') checkPrescriptionWritten(c, data);
+    else if (type === 'drug.dispensed') checkDrugDispensed(c, data);
   }
 
   c.throwIfAny();
@@ -102,6 +107,35 @@ function checkPrescriptionItem(c: Checker, path: string, item: unknown): void {
   c.positive(`${path}/dosage/timesPerDay`, dosage.timesPerDay, { integer: true });
   c.positive(`${path}/dosage/doseAmount`, dosage.doseAmount);
   c.string(`${path}/dosage/routeCode`, dosage.routeCode);
+}
+
+/** `prescriptionId`, `itemId`, `drugCode`, `quantity`, `preparedAt`, `handedOverAt`, `pharmacist`, `batch?`, `substitution?` (#6, #9). */
+function checkDrugDispensed(c: Checker, data: Record<string, unknown>): void {
+  c.string('/data/prescriptionId', data.prescriptionId);
+  c.string('/data/itemId', data.itemId);
+  c.string('/data/drugCode', data.drugCode);
+  c.positive('/data/quantity', data.quantity);
+  c.time('/data/preparedAt', data.preparedAt, { floor: true });
+  c.time('/data/handedOverAt', data.handedOverAt, { floor: true });
+  if (c.required('/data/pharmacist', data.pharmacist)) checkPractitioner(c, '/data/pharmacist', data.pharmacist);
+  c.optional('/data/batch', data.batch, (path, batch) => {
+    if (!isObject(batch)) return c.add(path, 'INVALID_FORMAT', 'must be an object');
+    // Both or neither (#6).
+    if ((batch.lot === undefined) !== (batch.expiry === undefined)) return c.add(path, 'BATCH_INCOMPLETE', 'needs both lot and expiry, or neither');
+    if (batch.lot === undefined) return;
+    c.string(`${path}/lot`, batch.lot);
+    // A plain date, no conversion; the floor applies to it (#9).
+    if (c.date(`${path}/expiry`, batch.expiry) && (batch.expiry as string) < DATE_FLOOR_DAY) {
+      c.add(`${path}/expiry`, 'DATE_BEFORE_FLOOR', 'must not be before 2014-06-03');
+    }
+  });
+  c.optional('/data/substitution', data.substitution, (path, substitution) => {
+    if (!isObject(substitution)) return c.add(path, 'INVALID_FORMAT', 'must be an object');
+    if (!c.required(`${path}/reasonCode`, substitution.reasonCode)) return;
+    if (!(SUBSTITUTION_REASONS as readonly unknown[]).includes(substitution.reasonCode)) {
+      c.add(`${path}/reasonCode`, 'INVALID_SUBSTITUTION_REASON', `must be one of ${SUBSTITUTION_REASONS.join(', ')}`);
+    }
+  });
 }
 
 /** `{ nik?, mrn, name?, birthDate?, gender?, motherNik? }`, identified by one of three combinations (#6). */
@@ -187,11 +221,14 @@ class Checker {
     if (typeof value !== 'string' || !/^\d{16}$/.test(value)) this.add(path, 'INVALID_FORMAT', 'must be 16 digits');
   }
 
-  date(path: string, value: unknown): void {
+  /** A calendar date `YYYY-MM-DD`; true when it is one. */
+  date(path: string, value: unknown): boolean {
     const m = typeof value === 'string' ? DATE.exec(value) : null;
     if (!m || !isRealDate(Number(m[1]), Number(m[2]), Number(m[3]))) {
       this.add(path, 'INVALID_FORMAT', 'must be a calendar date YYYY-MM-DD');
+      return false;
     }
+    return true;
   }
 
   /** An instant with an explicit offset; with `floor`, not before `DATE_FLOOR` in UTC (#9). */

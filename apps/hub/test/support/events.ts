@@ -59,6 +59,26 @@ export function prescriptionWritten(overrides: { visitId?: string; data?: Record
   };
 }
 
+/** A valid `drug.dispensed` envelope for the item `prescriptionWritten()` prescribes; `data` overrides are shallow-merged. */
+export function drugDispensed(overrides: { visitId?: string; data?: Record<string, unknown> } = {}) {
+  return {
+    type: 'drug.dispensed',
+    visitId: overrides.visitId ?? newVisitId(),
+    occurredAt: '2026-03-02T09:10:00+07:00',
+    data: {
+      prescriptionId: 'RX-1',
+      itemId: 'RX-1-1',
+      drugCode: 'PCT-500',
+      quantity: 10,
+      preparedAt: '2026-03-02T09:00:00+07:00',
+      handedOverAt: '2026-03-02T09:10:00+07:00',
+      pharmacist: { nik: '7209061211900002' },
+      batch: { lot: 'LOT-1', expiry: '2028-01-31' },
+      ...overrides.data,
+    } as Record<string, unknown>,
+  };
+}
+
 export interface PostOptions {
   /** `null` omits the header. Defaults to the test source's key. */
   apiKey?: string | null;
