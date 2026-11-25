@@ -1,5 +1,6 @@
 import type { EventType } from '../cases/case-model.js';
 import { Problem, type FieldError } from '../http/problem.js';
+import { isRealDate, parseSourceTime } from '../time.js';
 
 /** A source event that passed its own schema. `envelope` is the body as received. */
 export interface ValidatedEvent {
@@ -22,7 +23,7 @@ export function parseBody(rawBody: string): ParsedBody {
 /** SATUSEHAT's date floor, compared on the UTC instant (#9). */
 export const DATE_FLOOR = new Date('2014-06-03T00:00:00+00:00');
 
-/** Event types ingest accepts so far; the other three arrive with #27. */
+/** Event types ingest accepts so far; the other three arrive with #29-#31. */
 const SUPPORTED_TYPES: readonly EventType[] = ['visit.started'];
 const ENCOUNTER_CLASSES = ['AMB', 'IMP', 'EMER'];
 const GENDERS = ['male', 'female'];
@@ -97,10 +98,6 @@ function checkPractitioner(c: Checker, path: string, person: unknown): void {
   }
 }
 
-/** Full date-time with seconds and fraction optional, and an explicit offset (`Z` allowed). */
-const DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(Z|([+-])(\d{2}):(\d{2}))$/;
-/** A date-time, or any leading part of one, without an offset: naive or partial. */
-const NO_OFFSET = /^\d{4}(-\d{2}(-\d{2}(T\d{2}(:\d{2}(:\d{2}(\.\d+)?)?)?)?)?)?$/;
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 /** Collects violations in check order; paths are JSON Pointers (RFC 6901). */
@@ -157,43 +154,22 @@ class Checker {
   /** An instant with an explicit offset; with `floor`, not before `DATE_FLOOR` in UTC (#9). */
   time(path: string, value: unknown, { floor }: { floor: boolean }): Date | undefined {
     if (!this.required(path, value)) return undefined;
-    const text = typeof value === 'string' ? value : '';
-    const m = DATE_TIME.exec(text);
-    if (!m) {
-      if (NO_OFFSET.test(text)) this.add(path, 'TIME_OFFSET_MISSING', 'must be a full date-time with an offset, e.g. +07:00');
-      else this.add(path, 'INVALID_FORMAT', 'must be an ISO 8601 date-time with an offset');
+    const parsed = parseSourceTime(typeof value === 'string' ? value : '');
+    if (!parsed.ok) {
+      if (parsed.reason === 'offset_missing') {
+        this.add(path, 'TIME_OFFSET_MISSING', 'must be a full date-time with an offset, e.g. +07:00');
+      } else {
+        this.add(path, 'INVALID_FORMAT', 'must be an ISO 8601 date-time with an offset');
+      }
       return undefined;
     }
-    const [, y, mo, d, h, mi, s = '0', fraction = '0', , sign = '+', oh = '0', om = '0'] = m;
-    const valid =
-      isRealDate(Number(y), Number(mo), Number(d)) &&
-      Number(h) < 24 &&
-      Number(mi) < 60 &&
-      Number(s) < 60 &&
-      Number(oh) <= 14 &&
-      Number(om) < 60;
-    if (!valid) {
-      this.add(path, 'INVALID_FORMAT', 'is not a real date-time');
-      return undefined;
-    }
-    // Computed by hand rather than `new Date(text)`, whose parsing of
-    // fractions and hh:mm forms is implementation-defined.
-    const offsetMs = (sign === '-' ? -1 : 1) * (Number(oh) * 60 + Number(om)) * 60_000;
-    const ms = Number(fraction.slice(0, 3).padEnd(3, '0'));
-    const instant = new Date(
-      Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s), ms) - offsetMs,
-    );
+    const instant = parsed.instant;
     if (floor && instant < DATE_FLOOR) {
       this.add(path, 'DATE_BEFORE_FLOOR', 'must not be before 2014-06-03T00:00:00+00:00 (compared in UTC)');
       return undefined;
     }
     return instant;
   }
-}
-
-function isRealDate(year: number, month: number, day: number): boolean {
-  const d = new Date(Date.UTC(year, month - 1, day));
-  return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day;
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {

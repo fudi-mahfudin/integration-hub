@@ -60,3 +60,42 @@ export function postEvent(baseUrl: string, options: PostOptions = {}): Promise<R
 export function getCase(baseUrl: string, location: string, apiKey = SOURCE_API_KEY): Promise<Response> {
   return fetch(new URL(location, baseUrl), { headers: { authorization: `Bearer ${apiKey}` } });
 }
+
+/** The shape of `GET /v1/cases/{id}`. */
+export interface CaseView {
+  caseId: string;
+  source: string;
+  visitId: string;
+  status: string;
+  waitingFor: string | null;
+  waitingSince: string | null;
+  steps: {
+    step: string;
+    eventType: string;
+    state: string;
+    attempts: number;
+    deadLetterReason: string | null;
+    remote: { type: string; id: string; version: string | null } | null;
+  }[];
+}
+
+/**
+ * Reads the case at `location` until `done` holds (polling, no fake timers)
+ * and returns that view; fails with the last view after `timeoutMs`.
+ */
+export async function waitForCase(
+  baseUrl: string,
+  location: string,
+  done: (view: CaseView) => boolean,
+  { apiKey = SOURCE_API_KEY, timeoutMs = 10_000 } = {},
+): Promise<CaseView> {
+  const deadline = Date.now() + timeoutMs;
+  let last: unknown;
+  while (Date.now() < deadline) {
+    const res = await getCase(baseUrl, location, apiKey);
+    last = await res.json();
+    if (res.ok && done(last as CaseView)) return last as CaseView;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error(`case ${location} never reached the expected state; last view: ${JSON.stringify(last)}`);
+}

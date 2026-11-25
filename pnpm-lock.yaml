@@ -42,6 +42,9 @@ importers:
         specifier: ^7.8.2
         version: 7.8.2
     devDependencies:
+      '@integration-hub/mock-satusehat':
+        specifier: workspace:*
+        version: link:../../packages/mock-satusehat
       '@swc/core':
         specifier: ^1.16.22
         version: 1.16.22

@@ -74,13 +74,18 @@ The case and its step states. A source system's key sees only its own cases; any
   "waitingFor": null,
   "waitingSince": null,
   "steps": [
-    { "step": "create_visit", "eventType": "visit.started", "state": "ready" },
-    { "step": "submit_prescription", "eventType": "prescription.written", "state": "awaiting_event" },
-    { "step": "submit_dispense", "eventType": "drug.dispensed", "state": "awaiting_event" },
-    { "step": "update_visit", "eventType": "visit.finished", "state": "awaiting_event" }
+    {
+      "step": "create_visit", "eventType": "visit.started", "state": "completed", "attempts": 1, "deadLetterReason": null,
+      "remote": { "type": "Encounter", "id": "…", "version": "…" }
+    },
+    { "step": "submit_prescription", "eventType": "prescription.written", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null },
+    { "step": "submit_dispense", "eventType": "drug.dispensed", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null },
+    { "step": "update_visit", "eventType": "visit.finished", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null }
   ]
 }
 ```
+
+Per step: `attempts` counts claims by a worker (an attempt is counted when it starts); `remote` is the SATUSEHAT record the step created or adopted (its remote identifier), set only when the step completes; `deadLetterReason` is a stable code when the step is `dead_lettered`. Reasons so far: `MAPPING_MISSING` (no location mapping for the event's `locationCode`), `PATIENT_NOT_FOUND`, `PRACTITIONER_NOT_FOUND` (no single IHS number for the NIK), `REMOTE_RECORD_AMBIGUOUS` (the search by the step's local identifier found more than one record, so the hub will not guess).
 
 `status` is `waiting` (with `waitingFor`, the earliest missing event type, and `waitingSince`), `active`, `dead_lettered`, `completed` or `abandoned`. Step states: `awaiting_event`, `blocked`, `ready`, `in_flight`, `retry_wait`, `completed`, `dead_lettered`.
 

@@ -23,19 +23,28 @@ export class CasesController {
   async get(@Param('id') id: string, @Req() req: FastifyRequest) {
     const source = this.sources.authenticate(req.headers.authorization);
     if (!UUID.test(id)) throw new Problem(404, 'NOT_FOUND');
-    const kase = await this.db
-      .selectFrom('case')
-      .select(['id', 'source_id', 'visit_id', 'status', 'waiting_for', 'waiting_since'])
-      .where('id', '=', id)
-      .where('source_id', '=', source.id)
-      .executeTakeFirst();
+    // One snapshot: a completion committing between the two reads would
+    // otherwise show a completed step under the old case status.
+    const { kase, steps } = await this.db
+      .transaction()
+      .setIsolationLevel('repeatable read')
+      .setAccessMode('read only')
+      .execute(async (trx) => {
+        const kase = await trx
+          .selectFrom('case')
+          .select(['id', 'source_id', 'visit_id', 'status', 'waiting_for', 'waiting_since'])
+          .where('id', '=', id)
+          .where('source_id', '=', source.id)
+          .executeTakeFirst();
+        const steps = await trx
+          .selectFrom('step')
+          .select(['name', 'event_type', 'state', 'attempts', 'dead_letter_reason', 'remote_type', 'remote_id', 'remote_version'])
+          .where('case_id', '=', id)
+          .orderBy('seq')
+          .execute();
+        return { kase, steps };
+      });
     if (!kase) throw new Problem(404, 'NOT_FOUND');
-    const steps = await this.db
-      .selectFrom('step')
-      .select(['name', 'event_type', 'state'])
-      .where('case_id', '=', id)
-      .orderBy('seq')
-      .execute();
     return {
       caseId: kase.id,
       source: kase.source_id,
@@ -43,7 +52,17 @@ export class CasesController {
       status: kase.status,
       waitingFor: kase.waiting_for,
       waitingSince: kase.waiting_since?.toISOString() ?? null,
-      steps: steps.map((s) => ({ step: s.name, eventType: s.event_type, state: s.state })),
+      steps: steps.map((s) => ({
+        step: s.name,
+        eventType: s.event_type,
+        state: s.state,
+        attempts: s.attempts,
+        deadLetterReason: s.dead_letter_reason,
+        remote:
+          s.remote_type !== null && s.remote_id !== null
+            ? { type: s.remote_type, id: s.remote_id, version: s.remote_version }
+            : null,
+      })),
     };
   }
 }

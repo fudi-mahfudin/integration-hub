@@ -3,15 +3,8 @@ import type { SourceSystem } from '../auth/source-systems.js';
 import type { Database } from '../db/database.js';
 import { Problem } from '../http/problem.js';
 import type { ValidatedEvent } from '../ingestion/event-schema.js';
-import {
-  applyEventArrival,
-  deriveStatus,
-  openingSteps,
-  stepBySeq,
-  stepForEvent,
-  type DerivedStatus,
-  type StepState,
-} from './case-model.js';
+import { applyEventArrival, openingSteps, stepBySeq, stepForEvent, type DerivedStatus, type StepState } from './case-model.js';
+import { readSteps, writeDerivedStatus } from './case-status.js';
 
 export interface RecordedEvent {
   caseId: string;
@@ -86,11 +79,8 @@ export async function recordEvent(
     .executeTakeFirst();
   if (!stored) throw new Problem(409, 'EVENT_ALREADY_RECORDED');
 
-  const before = (
-    await trx.selectFrom('step').select(['seq', 'state']).where('case_id', '=', kase.id).orderBy('seq').execute()
-  ).map((s) => ({ seq: s.seq, state: s.state as StepState }));
   const seq = stepForEvent(event.type).seq;
-  const after = applyEventArrival(before, seq);
+  const after = applyEventArrival(await readSteps(trx, kase.id), seq);
   const newState = after.find((s) => s.seq === seq)?.state as StepState;
   await trx
     .updateTable('step')
@@ -99,18 +89,6 @@ export async function recordEvent(
     .where('seq', '=', seq)
     .execute();
 
-  const derived = deriveStatus(after);
-  const stillWaitingForSame = derived.status === 'waiting' && derived.waitingFor === kase.waiting_for;
-  await trx
-    .updateTable('case')
-    .set({
-      status: derived.status,
-      waiting_for: derived.waitingFor,
-      waiting_since: derived.status !== 'waiting' ? null : stillWaitingForSame ? kase.waiting_since : now,
-      updated_at: now,
-    })
-    .where('id', '=', kase.id)
-    .execute();
-
+  const derived = await writeDerivedStatus(trx, kase, after, now);
   return { caseId: kase.id, caseStatus: derived.status };
 }

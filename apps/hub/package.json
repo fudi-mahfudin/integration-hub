@@ -8,7 +8,8 @@
     "start": "node dist/main.js",
     "migrate": "tsx src/db/migrate-cli.ts",
     "test": "vitest run",
-    "demo:naive-race": "tsx scripts/naive-race-demo.ts"
+    "demo:naive-race": "tsx scripts/naive-race-demo.ts",
+    "start:worker": "node dist/worker-main.js"
   },
   "dependencies": {
     "@nestjs/common": "^12.6.0",
@@ -22,6 +23,7 @@
     "rxjs": "^7.8.2"
   },
   "devDependencies": {
+    "@integration-hub/mock-satusehat": "workspace:*",
     "@swc/core": "^1.16.22",
     "@types/node": "^24.19.2",
     "@types/pg": "^8.23.1",
