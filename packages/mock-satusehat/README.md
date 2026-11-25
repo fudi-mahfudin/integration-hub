@@ -9,3 +9,13 @@ A stateful, in-memory stand-in for the SATUSEHAT platform, used by the test suit
 - World dataset: `world/world.json`, regenerated with `pnpm world:generate` (sizes from `bigrun.commitments.json`).
 
 Run standalone: `pnpm --filter @integration-hub/mock-satusehat start` (env: `MOCK_PORT` 4010, `MOCK_HOST`, `MOCK_WORLD_PATH`, `MOCK_TOKEN_EXPIRES_IN` 3599, `MOCK_TOKEN_THROTTLE_WINDOW_MS` 60000).
+
+## Faults, holds and record mutation (#33)
+
+- `PUT /__mock/faults` `{ seed, rules: [{ id, match: { method?, resourceType?, path? }, kind, rate | everyNth | firstN, params? }] }` replaces all rules and restarts their counters (`MockClient.setFaults`). `path` is exact, or a prefix ending in `*`; the token endpoint is matched by `path: '/oauth2/v1/accesstoken'`. `/__mock/*` is never faulted.
+- Kinds and `params`: `http_500`, `http_401`, `http_503` / `http_429` (`retryAfter`: number = seconds, or with `retryAfterFormat: 'http-date'` an HTTP date that far ahead; string = sent verbatim; absent = no header), `http_400` (validation OperationOutcome, `rule` default `FAULT_INJECTED`, `code` default `PAYLOAD_INVALID`), `timeout` (held until the client hangs up, or `ms`, default 30000, then the socket is destroyed), `connection_reset`, `timeout_after_apply`, `http_500_after_apply`, `latency` (`ms`, or `minMs`/`maxMs`), `hold`.
+- Rules are checked in order. Each matching rule counts the request per (rule, method, business identifier); a firing `latency`/`hold` delays and checking goes on; the first firing terminal rule ends it. So a later rule's `rate` is conditional on the earlier ones not firing: for exact shares set `rate_i = p_i / (1 - sum of earlier p)`.
+- Decision = `faultDraw(seed, ruleId, method, key, nth) < rate` (exported). `key` is the business identifier (`encounter/{org}` system|value, resolved through the stored record for `/{type}/{id}`), else path + sorted query. Never server ids.
+- Log: faulted requests carry `fault: <rule id>`; dropped or reset connections are logged with `response.status: 0`, when the client hangs up. Pre-apply faults have `effect: none`; after-apply ones keep the real effect.
+- Holds: `GET /__mock/holds?wait=ms` long-polls for parked requests (`MockClient.nextHold(ms)`); `POST /__mock/holds/{id}/release` lets one carry on. Reset (and shutdown) drops parked requests unapplied and unlogged.
+- Records: `POST /__mock/records` (insert as-is, `id`/`meta` assigned if absent), `PATCH /__mock/records/{type}/{id}` (JSON merge patch, bumps `meta.versionId`), `DELETE /__mock/records/{type}/{id}` (then `GET`/`PUT /{type}/{id}` → 404). Logged as `admin` entries, never submissions.

@@ -3,3 +3,4 @@ export * from './provenance.js';
 export * from './token.js';
 export * from './outcome.js';
 export * from './resources.js';
+export * from './faults.js';
