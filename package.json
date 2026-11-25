@@ -1,0 +1,22 @@
+{
+  "name": "integration-hub",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "deps:up": "docker compose up -d --wait postgres redis",
+    "deps:down": "docker compose down -v",
+    "migrate": "pnpm --filter @integration-hub/hub migrate",
+    "build": "pnpm -r --if-present build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "demo:naive-race": "pnpm --filter @integration-hub/hub demo:naive-race",
+    "lint:boundaries": "depcruise apps packages --config .dependency-cruiser.cjs"
+  },
+  "devDependencies": {
+    "dependency-cruiser": "^18.9.0"
+  }
+}
