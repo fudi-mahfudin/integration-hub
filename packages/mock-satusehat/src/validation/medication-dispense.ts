@@ -22,6 +22,7 @@ export interface MedicationDispenseContext {
   organizationId: string;
   /** The mock's own KFA catalogue. */
   kfaProducts: readonly WorldKfaProduct[];
+  /** The ingredients (91) of its catalogue, so a dispensed ingredient is told apart from an unknown code. */
   kfaIngredients: readonly WorldKfaIngredient[];
   /** Whether the mock holds an Encounter with this id. */
   encounterExists(id: string): boolean;
@@ -43,7 +44,8 @@ export interface MedicationDispenseContext {
  * own catalogue (`KFA_LEVEL_INVALID`), whose relation to the prescribed
  * product agrees with `wasSubstituted` (`SUBSTITUTION_MISMATCH`) and is not a
  * therapeutic substitution (`UNSUPPORTED_THERAPEUTIC_SUBSTITUTION`). A
- * substitution names its type, reason and responsible practitioners.
+ * substitution names its type, reason and both responsible practitioners
+ * (the requester and the pharmacist).
  * Returns every violation; empty means valid.
  */
 export function validateMedicationDispense(body: unknown, context: MedicationDispenseContext): Violation[] {
@@ -80,6 +82,11 @@ export function validateMedicationDispense(body: unknown, context: MedicationDis
       fail('authorizingPrescription', `references MedicationRequest "${medicationRequestId}", which the platform does not hold`, 'REFERENCE_NOT_FOUND');
     }
   }
+  const prescribed = context.kfaProducts.find((p) => p.code === prescribedCode);
+  if (prescribedCode !== undefined && !prescribed) {
+    // Never skip the substitution rules: a prescription the dispense can't be judged against is rejected.
+    fail('authorizingPrescription', `prescribes KFA ${prescribedCode}, which is not a product in the catalogue, so the dispense can't be judged`);
+  }
 
   checkTime(body.whenPrepared, 'whenPrepared', fail);
   checkTime(body.whenHandedOver, 'whenHandedOver', fail);
@@ -90,7 +97,6 @@ export function validateMedicationDispense(body: unknown, context: MedicationDis
   if (typeof substitution.wasSubstituted !== 'boolean') {
     fail('substitution.wasSubstituted', `is required as a boolean, got ${describe(substitution.wasSubstituted)}`);
   } else {
-    const prescribed = context.kfaProducts.find((p) => p.code === prescribedCode);
     if (product?.level === 93 && prescribed) checkSubstitution(prescribed, product, substitution.wasSubstituted, fail);
     if (substitution.wasSubstituted) checkSubstitutionDetails(substitution, fail);
   }
@@ -135,8 +141,8 @@ function checkSubstitutionDetails(substitution: Json, fail: Fail): void {
     fail('substitution.reason', `needs at least one coded reason, got ${describe(substitution.reason)}`);
   }
   const parties = Array.isArray(substitution.responsibleParty) ? substitution.responsibleParty : [];
-  if (parties.length === 0 || !parties.every((p) => isReferenceTo(p, 'Practitioner'))) {
-    fail('substitution.responsibleParty', `needs references to "Practitioner/{ihs}", got ${describe(substitution.responsibleParty)}`);
+  if (parties.length < 2 || !parties.every((p) => isReferenceTo(p, 'Practitioner'))) {
+    fail('substitution.responsibleParty', `needs the requester and the pharmacist ("Practitioner/{ihs}"), got ${describe(substitution.responsibleParty)}`);
   }
 }
 

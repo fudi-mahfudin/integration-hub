@@ -135,7 +135,7 @@ A KFA code level that names a drug by ingredient, strength, and form, without a 
 A KFA code level that names a specific marketed product. Required on a dispense.
 
 **Substitution**:
-A dispense whose actual product is neither the prescribed actual product nor one derived from the prescribed virtual product, but has exactly the same active ingredients, such as a different strength or a different brand. It is flagged as such on the dispense. A dispense with different active ingredients (a therapeutic substitution) is not supported.
+A dispense whose actual product is neither the prescribed actual product nor one derived from the prescribed virtual product, but has exactly the same active ingredients, such as a different strength or a different brand. It is flagged as such on the dispense. A dispense with different active ingredients (a therapeutic substitution) is not supported. A dispense of the prescribed actual product, or of one derived from the prescribed virtual product, is *as prescribed*: no substitution.
 _Avoid_: Replacement, swap
 
 ## Test side

@@ -134,12 +134,12 @@ const expiryDate = z.string().superRefine((value, ctx) => {
   else if (value < DATE_FLOOR_DAY) ctx.addIssue(issue('DATE_BEFORE_FLOOR', `must not be before ${DATE_FLOOR_DAY}`));
 });
 
-/** `batch { lot, expiry }`: both or neither (#6). */
+/** `batch { lot, expiry }`: both or neither (#6); "neither" means no batch at all, so an empty one is incomplete too. */
 const batch = z
   .object({ lot: text(64).optional(), expiry: expiryDate.optional() })
   .superRefine(
     (b, ctx) => {
-      if (has(b.lot) !== has(b.expiry)) ctx.addIssue(issue('BATCH_INCOMPLETE', 'needs both lot and expiry, or neither'));
+      if (!has(b.lot) || !has(b.expiry)) ctx.addIssue(issue('BATCH_INCOMPLETE', 'needs both lot and expiry; send no batch when neither is known'));
     },
     { when: () => true },
   );
@@ -320,12 +320,17 @@ export function readPrescriptionWritten(storedEnvelope: unknown): PrescriptionWr
 
 /** The fields of a recorded `drug.dispensed` that the submit dispense step sends. */
 export interface DrugDispensedFacts {
+  /** The prescription this dispense fills; ingest checked it against the case's prescription. */
   prescriptionId: PrescriptionId;
+  /** The prescription item it fills. */
   itemId: PrescriptionItemId;
+  /** The local code of the product handed over. */
   drugCode: string;
+  /** How much was handed over, in the dispensed product's dose form. */
   quantity: number;
   preparedAt: Date;
   handedOverAt: Date;
+  /** How to find the pharmacist's IHS number. */
   pharmacist: { nik?: string | undefined };
   /** The batch handed over; null when the source sent none. `expiry` stays a plain date. */
   batch: { lot: string; expiry: string } | null;
@@ -344,8 +349,9 @@ export function readDrugDispensed(storedEnvelope: unknown): DrugDispensedFacts {
   }
   const { prescriptionId, itemId, drugCode, quantity, preparedAt, handedOverAt, pharmacist, batch, substitution } = parsed.data.data;
   const prepared = parseSourceTime(preparedAt);
+  if (!prepared.ok) throw new Error(`a stored preparedAt passed the schema but does not parse: ${prepared.reason}`);
   const handedOver = parseSourceTime(handedOverAt);
-  if (!prepared.ok || !handedOver.ok) throw new Error('a stored preparedAt or handedOverAt passed the schema but does not parse');
+  if (!handedOver.ok) throw new Error(`a stored handedOverAt passed the schema but does not parse: ${handedOver.reason}`);
   const { lot, expiry } = batch ?? {};
   return {
     prescriptionId,

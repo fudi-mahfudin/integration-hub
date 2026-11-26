@@ -178,6 +178,7 @@ const SUBSTITUTION_REASON_CODING: Record<SubstitutionReason, { system: string; c
 export interface DispenseRecord {
   /** The prescription it fills: its MedicationDispense reuses the prescription's identifiers (#9). */
   identifier: PrescriptionIdentifier;
+  /** The prescription item it fills: the `prescription-item/{org}` identifier's value. */
   itemId: PrescriptionItemId;
   /** The Encounter create visit stored. */
   encounter: RemoteIdentifier;
@@ -185,16 +186,24 @@ export interface DispenseRecord {
   medicationRequest: RemoteIdentifier;
   /** The patient create visit pinned. */
   patient: IhsNumber;
+  /** The pharmacist who dispensed: the performer, and responsible for a substitution. */
   pharmacist: IhsNumber;
   /** The KFA details of the dispensed drug code. */
   medication: KfaDetails;
+  /** How much was handed over, counted in the dispensed product's dose form. */
   quantity: number;
+  /** `whenPrepared`. */
   preparedAt: Date;
+  /** `whenHandedOver`. */
   handedOverAt: Date;
+  /** The batch handed over, on the contained Medication; null when the source sent none. */
   batch: Batch | null;
   /**
-   * Null when the dispense is no substitution; otherwise the source's reason
-   * (null when it declared none) and the requester submit prescription pinned.
+   * Null when the hub judged the dispense no substitution; otherwise the
+   * source's reason and the requester submit prescription pinned. The reason
+   * is null when the source declared none: that payload is built only so the
+   * attempt log shows what the hub decided, and SUBSTITUTION_MISMATCH keeps
+   * it from being sent.
    */
   substitution: { reasonCode: SubstitutionReason | null; requester: IhsNumber } | null;
 }

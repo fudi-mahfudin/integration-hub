@@ -109,7 +109,13 @@ describe('MedicationDispense validator', () => {
   });
 
   it('takes a batch with a lot number and a plain expiry date on or after the floor, or no batch', () => {
-    const batch = (value: unknown) => withChange((d) => ((d.contained as Draft[])[0] = { ...(d.contained as Draft[])[0], batch: value }));
+    const batch = (value: unknown) =>
+      withChange(
+        (d) =>
+          (d.contained = [
+            { resourceType: 'Medication', id: 'medication', code: { coding: [{ system: 'http://sys-ids.kemkes.go.id/kfa', code: '93000001' }] }, batch: value },
+          ]),
+      );
     expect(codesAt(batch(undefined))).toEqual([]);
     expect(codesAt(batch({ lotNumber: 'LOT-1', expirationDate: '2014-06-02' }))).toEqual([['PAYLOAD_INVALID', 'MedicationDispense.contained.Medication.batch.expirationDate']]);
     expect(codesAt(batch({ lotNumber: 'LOT-1', expirationDate: '2027-02-30' }))).toEqual([['PAYLOAD_INVALID', 'MedicationDispense.contained.Medication.batch.expirationDate']]);
@@ -139,6 +145,15 @@ describe('MedicationDispense validator', () => {
       ['PAYLOAD_INVALID', 'MedicationDispense.substitution.reason'],
       ['PAYLOAD_INVALID', 'MedicationDispense.substitution.responsibleParty'],
     ]);
+  });
+
+  it('needs both the requester and the pharmacist responsible for a substitution, as the hub sends them', () => {
+    const onlyPharmacist = { ...substituted, responsibleParty: [{ reference: PHARMACIST }] };
+    expect(codesAt(validDispense('93000003', onlyPharmacist))).toEqual([['PAYLOAD_INVALID', 'MedicationDispense.substitution.responsibleParty']]);
+  });
+
+  it('rejects a dispense whose held prescription names a product outside its catalogue, rather than skip the substitution check', () => {
+    expect(codesAt(validDispense(), '92999999')).toEqual([['PAYLOAD_INVALID', 'MedicationDispense.authorizingPrescription']]);
   });
 
   it('rejects an authorizingPrescription or a context it does not hold with REFERENCE_NOT_FOUND', () => {

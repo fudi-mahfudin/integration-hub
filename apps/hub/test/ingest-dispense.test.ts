@@ -79,6 +79,7 @@ describe('ingest: drug.dispensed', () => {
 
   it.each([
     ['an expiry without a lot', { expiry: '2027-04-24' }, 'BATCH_INCOMPLETE', '/data/batch'],
+    ['neither a lot nor an expiry (send no batch instead)', {}, 'BATCH_INCOMPLETE', '/data/batch'],
     ['an expiry before the date floor', { lot: 'LOT-1', expiry: '2014-06-02' }, 'DATE_BEFORE_FLOOR', '/data/batch/expiry'],
     ['an expiry that is not a calendar date', { lot: 'LOT-1', expiry: '2027-02-30' }, 'INVALID_FORMAT', '/data/batch/expiry'],
   ])('rejects a batch with %s', async (_, batch, code, path) => {

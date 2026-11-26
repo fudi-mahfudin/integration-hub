@@ -115,7 +115,8 @@ export async function recordEvent(
     .returning('id')
     .executeTakeFirst();
   if (!stored) throw await alreadyRecorded(trx, id, event);
-  if (event.prescriptionItem) await checkPair(trx, id, event.type, event.prescriptionItem);
+  // Postgres generated this uuid for the case; it is a case id by construction.
+  if (event.prescriptionItem) await checkPair(trx, id as CaseId, event.type, event.prescriptionItem);
 
   const steps = await readSteps(trx, id);
   const seq = stepForEvent(event.type).seq;
@@ -134,6 +135,12 @@ export async function recordEvent(
   return { caseId: id as CaseId, caseStatus };
 }
 
+/** Each event of the prescription/dispense pair: the other one, how messages name it, and where the event carries its itemId. */
+const PAIR = {
+  'prescription.written': { other: 'drug.dispensed', otherName: 'the dispense', itemIdPath: '/data/items/0/itemId' },
+  'drug.dispensed': { other: 'prescription.written', otherName: 'the prescription', itemIdPath: '/data/itemId' },
+} as const;
+
 /**
  * The cross-event check of #6 (amended by #9): when the second event of the
  * prescription/dispense pair arrives, it must name the prescription and item
@@ -141,18 +148,18 @@ export async function recordEvent(
  */
 async function checkPair(
   trx: Transaction<Database>,
-  caseId: string,
-  type: 'prescription.written' | 'drug.dispensed',
+  caseId: CaseId,
+  type: keyof typeof PAIR,
   item: PrescriptionItemKey,
 ): Promise<void> {
+  const { other: otherType, otherName, itemIdPath } = PAIR[type];
   const other = await trx
     .selectFrom('source_event')
     .select(['prescription_id', 'item_id'])
     .where('case_id', '=', caseId)
-    .where('type', '=', type === 'prescription.written' ? 'drug.dispensed' : 'prescription.written')
+    .where('type', '=', otherType)
     .executeTakeFirst();
   if (!other) return;
-  const otherName = type === 'prescription.written' ? 'the dispense' : 'the prescription';
   const errors: FieldError[] = [];
   if (other.prescription_id !== item.prescriptionId) {
     errors.push({
@@ -163,7 +170,7 @@ async function checkPair(
   }
   if (other.item_id !== item.itemId) {
     errors.push({
-      path: type === 'prescription.written' ? '/data/items/0/itemId' : '/data/itemId',
+      path: itemIdPath,
       code: 'PRESCRIPTION_MISMATCH',
       message: `must be "${other.item_id}", the itemId ${otherName} recorded for this visit named`,
     });

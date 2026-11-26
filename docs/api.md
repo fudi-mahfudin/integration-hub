@@ -89,7 +89,7 @@ A case supports one prescription with one drug item (ADR 0004). A second `prescr
 | `quantity` | How much was handed over, a number greater than 0, counted in the dispensed KFA product's dose form. |
 | `preparedAt`, `handedOverAt` | Times (see [Times](#times)), not before the date floor. |
 | `pharmacist` | The dispensing pharmacist: `{ nik }` or `{ name, birthDate, gender }`, as for `visit.started`. |
-| `batch` | Optional: `{ lot, expiry }`, both or neither (`BATCH_INCOMPLETE`). `lot` is 1-64 characters; `expiry` is a calendar date `YYYY-MM-DD`, sent on as written and not before `2014-06-03`. |
+| `batch` | Optional: `{ lot, expiry }`, both or neither (`BATCH_INCOMPLETE`); for neither, leave `batch` out, since an empty `batch` is incomplete too. `lot` is 1-64 characters; `expiry` is a calendar date `YYYY-MM-DD`, sent on as written and not before `2014-06-03`. |
 | `substitution` | Optional: `{ reasonCode }` when the source dispensed a substitute. `reasonCode` is one of `OS` (out of stock), `FP` (formulary policy), `DRUG_INTERACTION`, `PATIENT_CHOICE`, `PRESCRIPTION_ERROR`; anything else is `INVALID_SUBSTITUTION_REASON`. |
 
 A dispense and its prescription may arrive in either order. Whichever arrives second must name the same `prescriptionId` and `itemId` as the first, or it is [`422 PRESCRIPTION_MISMATCH`](#prescription_mismatch). A second `drug.dispensed` for the visit is `409 EVENT_ALREADY_RECORDED`. The dispense is submitted once the prescription's MedicationRequest exists.

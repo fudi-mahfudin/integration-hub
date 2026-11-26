@@ -96,7 +96,7 @@ export function readSubmitPrescriptionPins(stored: unknown): SubmitPrescriptionP
   if (!parsed.success) throw new Error(`stored submit prescription pins do not match their schema at ${pinProblems(parsed.error)}`);
   const { kfaCode, kfaLevel, parent92, activeIngredients, requesterIhsNumber } = parsed.data;
   return {
-    ...kfaProductPins(parseKfaProduct({ code: kfaCode, level: kfaLevel, parent92, activeIngredients })),
+    ...kfaProductPins(kfaProductOf({ kfaCode, kfaLevel, parent92, activeIngredients })),
     // Written only by lease-fenced completion, from the requester's IHS number the step sent.
     requesterIhsNumber: requesterIhsNumber as IhsNumber,
   };
@@ -111,7 +111,7 @@ export function readSubmitDispensePins(stored: unknown): SubmitDispensePins {
   if (!parsed.success) throw new Error(`stored submit dispense pins do not match their schema at ${pinProblems(parsed.error)}`);
   const { kfaCode, kfaLevel, parent92, activeIngredients, pharmacistIhsNumber } = parsed.data;
   return {
-    ...kfaProductPins(parseKfaProduct({ code: kfaCode, level: kfaLevel, parent92, activeIngredients })),
+    ...kfaProductPins(kfaProductOf({ kfaCode, kfaLevel, parent92, activeIngredients })),
     // Written only by lease-fenced completion, from the pharmacist's IHS number the step sent.
     pharmacistIhsNumber: pharmacistIhsNumber as IhsNumber,
   };
@@ -125,4 +125,9 @@ function pinProblems(error: z.ZodError): string {
 /** The pin fields of a KFA product a drug step sent. */
 export function kfaProductPins(product: KfaProduct): KfaProductPins {
   return { kfaCode: product.code, kfaLevel: product.level, parent92: product.parent92, activeIngredients: [...product.activeIngredients] };
+}
+
+/** The KFA product pins describe, as the KFA rules judge it. */
+export function kfaProductOf(pins: { kfaCode: string; kfaLevel: number; parent92: string | null; activeIngredients: readonly string[] }): KfaProduct {
+  return parseKfaProduct({ code: pins.kfaCode, level: pins.kfaLevel, parent92: pins.parent92, activeIngredients: pins.activeIngredients });
 }

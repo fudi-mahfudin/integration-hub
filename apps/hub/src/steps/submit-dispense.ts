@@ -1,11 +1,11 @@
 import type { Kysely } from 'kysely';
 import type { DeadLetterReason } from '../cases/case-model.js';
-import { kfaProductPins, type SubmitDispensePins } from '../cases/pins.js';
+import { kfaProductOf, kfaProductPins, type SubmitDispensePins } from '../cases/pins.js';
 import type { Clock } from '../clock.js';
 import type { Database } from '../db/database.js';
 import { readDrugDispensed } from '../ingestion/event-schema.js';
 import type { KfaClient } from '../kfa/kfa-client.js';
-import { judgeDispense, parseKfaProduct } from '../kfa/kfa-product.js';
+import { judgeDispense } from '../kfa/kfa-product.js';
 import { resolveKfaDetails } from '../kfa/kfa-products.js';
 import { findKfaCode } from '../mapping/drug-mappings.js';
 import type { ClaimedStep } from '../outbox/outbox.js';
@@ -59,12 +59,7 @@ async function attemptSubmitDispense(deps: SubmitDispenseDeps, step: ClaimedStep
   const visit = await readCompletedCreateVisit(db, step);
   const prescription = await readCompletedPrescription(db, step);
   const { pins: prescribedPins } = prescription;
-  const prescribed = parseKfaProduct({
-    code: prescribedPins.kfaCode,
-    level: prescribedPins.kfaLevel,
-    parent92: prescribedPins.parent92,
-    activeIngredients: prescribedPins.activeIngredients,
-  });
+  const prescribed = kfaProductOf(prescribedPins);
   const declaredSubstitution = dispensed.substitution !== null;
   const deadLettered = (reason: DeadLetterReason): StepOutcome => ({ deadLettered: reason, attempt });
   const mappingMissing = (mapping: MissingMapping): StepOutcome => {

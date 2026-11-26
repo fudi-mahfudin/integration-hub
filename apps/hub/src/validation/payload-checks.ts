@@ -1,4 +1,5 @@
 // Field checks shared by the Validation module's payload rules. Internal to the module.
+import type { OrganizationId } from '../auth/source-systems.js';
 
 /** Records one PAYLOAD_INVALID violation at `path`. */
 export type Fail = (path: string, message: string) => void;
@@ -74,7 +75,7 @@ export function describe(value: unknown): string {
  * `{prefix}{org}` (any organization's), that it is the case organization's,
  * and that it has a value. `path` names the identifier element.
  */
-export function checkBusinessIdentifier(identifier: unknown, path: string, prefix: string, organizationId: string, fail: Fail): void {
+export function checkBusinessIdentifier(identifier: unknown, path: string, prefix: string, organizationId: OrganizationId, fail: Fail): void {
   const expectedSystem = `${prefix}${organizationId}`;
   const matching = (nonEmptyArray(identifier) ?? []).filter(
     (id) => isObject(id) && typeof id.system === 'string' && id.system.startsWith(prefix) && /^\d+$/.test(id.system.slice(prefix.length)),
