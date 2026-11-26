@@ -33,6 +33,33 @@ export function visitStarted(overrides: { visitId?: string; data?: Record<string
   };
 }
 
+/** One drug item of a `prescription.written`, with fake values; overrides are shallow-merged. */
+export function prescriptionItem(overrides: Record<string, unknown> = {}) {
+  return {
+    itemId: 'ITEM-1',
+    drugCode: 'PCT500',
+    quantity: 10,
+    dosage: { text: '3 x 1 tablet sesudah makan', timesPerDay: 3, doseAmount: 1, routeCode: 'O' },
+    ...overrides,
+  };
+}
+
+/** A valid single-item `prescription.written` envelope with fake values; `data` overrides are shallow-merged. */
+export function prescriptionWritten(overrides: { visitId?: string; data?: Record<string, unknown> } = {}) {
+  return {
+    type: 'prescription.written',
+    visitId: overrides.visitId ?? newVisitId(),
+    occurredAt: '2026-03-02T08:10:00+07:00',
+    data: {
+      prescriptionId: 'RX-1',
+      authoredAt: '2026-03-02T08:10:00+07:00',
+      requester: { nik: '7209061211900001' },
+      items: [prescriptionItem()],
+      ...overrides.data,
+    },
+  };
+}
+
 /** What `postEvent` sends; every field defaults to a valid request. */
 export interface PostEventOptions {
   /** `null` sends no Idempotency-Key header; default is a fresh UUID. */
@@ -74,6 +101,7 @@ export const caseViewSchema = z.object({
   status: z.string(),
   waitingFor: z.string().nullable(),
   waitingSince: z.string().nullable(),
+  rejections: z.array(z.object({ code: z.string(), eventType: z.string(), rejectedAt: z.string() })),
   steps: z.array(
     z.object({
       step: z.string(),
@@ -82,7 +110,7 @@ export const caseViewSchema = z.object({
       attempts: z.number().int(),
       deadLetterReason: z.string().nullable(),
       remote: remoteSchema.nullable(),
-      pins: z.record(z.string(), z.string()).nullable(),
+      pins: z.record(z.string(), z.unknown()).nullable(),
       attemptLog: z.array(
         z.object({
           attempt: z.number().int(),
@@ -91,7 +119,7 @@ export const caseViewSchema = z.object({
           outcome: z.string(),
           errorCode: z.string().nullable(),
           httpStatus: z.number().int().nullable(),
-          valuesUsed: z.record(z.string(), z.string()),
+          valuesUsed: z.record(z.string(), z.unknown()),
           lookupMethods: z.record(z.string(), z.string()),
           violations: z.array(z.object({ code: z.string(), path: z.string().nullable(), message: z.string() })),
         }),

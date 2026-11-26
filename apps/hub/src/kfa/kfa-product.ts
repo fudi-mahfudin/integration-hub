@@ -45,3 +45,20 @@ export function parseKfaProduct(value: unknown): KfaProduct {
   }
   return parsed.data;
 }
+
+/** A KFA dose form: the unit a product is counted in, and so a prescription's quantity unit (#6). */
+export interface KfaDoseForm {
+  code: string;
+  display: string;
+}
+
+/**
+ * Everything the hub stores about a KFA code once fetched from KFA v2: the
+ * product as the KFA rules judge it, plus what a payload names it by.
+ */
+export interface KfaDetails {
+  product: KfaProduct;
+  display: string;
+  /** Null for a code without one, such as an ingredient (91). */
+  doseForm: KfaDoseForm | null;
+}

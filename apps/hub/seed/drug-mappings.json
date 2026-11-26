@@ -1,0 +1,22 @@
+[
+  { "source": "simulator", "drugCode": "PCT500", "kfaCode": "92000001", "note": "Parasetamol 500 mg Tablet" },
+  { "source": "simulator", "drugCode": "PCT500-FFA", "kfaCode": "93000001", "note": "Parasetamol 500 mg Tablet (Fiktif Farma A)" },
+  { "source": "simulator", "drugCode": "PCT500-FFB", "kfaCode": "93000002", "note": "Parasetamol 500 mg Tablet (Fiktif Farma B)" },
+  { "source": "simulator", "drugCode": "PCT650", "kfaCode": "92000002", "note": "Parasetamol 650 mg Tablet" },
+  { "source": "simulator", "drugCode": "PCT650-FFA", "kfaCode": "93000003", "note": "Parasetamol 650 mg Tablet (Fiktif Farma A)" },
+  { "source": "simulator", "drugCode": "AMX500", "kfaCode": "92000003", "note": "Amoksisilin 500 mg Kapsul" },
+  { "source": "simulator", "drugCode": "AMX500-FFC", "kfaCode": "93000004", "note": "Amoksisilin 500 mg Kapsul (Fiktif Farma C)" },
+  { "source": "simulator", "drugCode": "AMX500-FFD", "kfaCode": "93000005", "note": "Amoksisilin 500 mg Kapsul (Fiktif Farma D)" },
+  { "source": "simulator", "drugCode": "AMXCLV", "kfaCode": "92000004", "note": "Amoksisilin 500 mg / Asam klavulanat 125 mg Tablet" },
+  { "source": "simulator", "drugCode": "AMXCLV-FFC", "kfaCode": "93000006", "note": "Amoksisilin / Asam klavulanat 625 mg Tablet (Fiktif Farma C)" },
+  { "source": "simulator", "drugCode": "IBU400", "kfaCode": "92000005", "note": "Ibuprofen 400 mg Tablet" },
+  { "source": "simulator", "drugCode": "IBU400-FFB", "kfaCode": "93000007", "note": "Ibuprofen 400 mg Tablet (Fiktif Farma B)" },
+  { "source": "simulator", "drugCode": "MET500", "kfaCode": "92000006", "note": "Metformin hidroklorida 500 mg Tablet" },
+  { "source": "simulator", "drugCode": "MET500-FFD", "kfaCode": "93000008", "note": "Metformin hidroklorida 500 mg Tablet (Fiktif Farma D)" },
+  { "source": "simulator", "drugCode": "AML5", "kfaCode": "92000007", "note": "Amlodipin besilat 5 mg Tablet" },
+  { "source": "simulator", "drugCode": "AML5-FFA", "kfaCode": "93000009", "note": "Amlodipin besilat 5 mg Tablet (Fiktif Farma A)" },
+  { "source": "simulator", "drugCode": "AML10", "kfaCode": "92000008", "note": "Amlodipin besilat 10 mg Tablet" },
+  { "source": "simulator", "drugCode": "AML10-FFA", "kfaCode": "93000010", "note": "Amlodipin besilat 10 mg Tablet (Fiktif Farma A)" },
+  { "source": "simulator", "drugCode": "PCT-ZAT-AKTIF", "kfaCode": "91000001", "note": "Deliberately wrong: an ingredient (91), so a prescription of it is KFA_LEVEL_INVALID" },
+  { "source": "simulator", "drugCode": "OBAT-TANPA-KFA", "kfaCode": "93999999", "note": "Deliberately wrong: a code KFA does not know, so a prescription of it is MAPPING_MISSING" }
+]

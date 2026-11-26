@@ -62,6 +62,14 @@ _Avoid_: Error (ambiguous with failures), issue (that is an OperationOutcome's)
 How a person's IHS number was found for an attempt: by NIK, or one of the documented fallbacks. It is recorded in the attempt log.
 _Avoid_: Match type, strategy
 
+**Rejection log**:
+The hub's record of the source events it rejected at ingest for a visit, keyed by (source system, `visitId`): each rejection's code, event type and time, never its body. It explains why a waiting case is still waiting, and never changes a case.
+_Avoid_: Error log, attempt log (that is a step's record of its attempts), dead letter (that is a step's permanent failure)
+
+**KFA details**:
+What the hub knows about a KFA code: its level, its parent virtual product (for an actual product), its active ingredients as a set of 91 codes, its name and its dose form. Fetched from KFA v2 the first time a code is used and stored, shared by every source system.
+_Avoid_: KFA cache (a cache may lose a value; KFA details are kept), KFA mapping (a mapping is the operator's local code → KFA code)
+
 **Attempt log**:
 A step's append-only record of its attempts: when each started and ended, its outcome, error code and HTTP status, the values it used, how each person was found, and every validation violation.
 _Avoid_: Submission log (that is the mock SATUSEHAT's record of requests), history, audit log

@@ -83,9 +83,43 @@ export function worldVisitStarted(data: Record<string, unknown> = {}) {
   };
 }
 
-/** Creates an Encounter for `visitKey` straight at the mock, as another client of the platform would. */
-export async function createEncounterAtMock(mockBaseUrl: URL, visitKey: string): Promise<void> {
-  const { patient, physician, location } = worldVisit;
+/** The `prescription/{org}` identifier system of the world's organization. */
+export const PRESCRIPTION_SYSTEM = `http://sys-ids.kemkes.go.id/prescription/${world.organization.id}`;
+
+/**
+ * A single-item `prescription.written` for `visitId`, requested by the world's
+ * physician. The default drug code `PCT500` maps to KFA 92000001
+ * (Parasetamol 500 mg Tablet) in the drug mapping seed; `item` overrides are
+ * shallow-merged into the one item.
+ */
+export function worldPrescriptionWritten(
+  visitId: string,
+  overrides: { data?: Record<string, unknown>; item?: Record<string, unknown> } = {},
+) {
+  return {
+    type: 'prescription.written',
+    visitId,
+    occurredAt: '2026-03-02T08:10:00+07:00',
+    data: {
+      prescriptionId: `RX-${randomUUID()}`,
+      authoredAt: '2026-03-02T08:10:00.750+07:00',
+      requester: { nik: worldVisit.physician.nik },
+      items: [
+        {
+          itemId: 'ITEM-1',
+          drugCode: 'PCT500',
+          quantity: 10,
+          dosage: { text: '3 x 1 tablet sesudah makan', timesPerDay: 3, doseAmount: 1, routeCode: 'O' },
+          ...overrides.item,
+        },
+      ],
+      ...overrides.data,
+    },
+  };
+}
+
+/** POSTs a resource straight to the mock, as another client of the platform would; resolves to the 201 body's id. */
+async function createAtMock(mockBaseUrl: URL, resourceType: string, body: unknown): Promise<string> {
   const tokenRes = await fetch(new URL('oauth2/v1/accesstoken?grant_type=client_credentials', mockBaseUrl), {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -95,21 +129,56 @@ export async function createEncounterAtMock(mockBaseUrl: URL, visitKey: string):
   if (typeof token !== 'object' || token === null || !('access_token' in token)) {
     throw new Error(`the mock issued no token: ${JSON.stringify(token)}`);
   }
-  const res = await fetch(new URL('fhir-r4/v1/Encounter', mockBaseUrl), {
+  const res = await fetch(new URL(`fhir-r4/v1/${resourceType}`, mockBaseUrl), {
     method: 'POST',
     headers: { authorization: `Bearer ${String(token.access_token)}`, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      resourceType: 'Encounter',
-      identifier: [{ system: ENCOUNTER_SYSTEM, value: visitKey }],
-      status: 'arrived',
-      class: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB', display: 'ambulatory' },
-      subject: { reference: `Patient/${patient.ihsNumber}` },
-      participant: [{ individual: { reference: `Practitioner/${physician.ihsNumber}` } }],
-      period: { start: '2026-03-02T01:00:00+00:00' },
-      location: [{ location: { reference: `Location/${location.id}` } }],
-      statusHistory: [{ status: 'arrived', period: { start: '2026-03-02T01:00:00+00:00' } }],
-      serviceProvider: { reference: `Organization/${world.organization.id}` },
-    }),
+    body: JSON.stringify(body),
   });
-  if (res.status !== 201) throw new Error(`planting an Encounter answered ${res.status}: ${await res.text()}`);
+  const created: unknown = await res.json();
+  const id: unknown = typeof created === 'object' && created !== null && 'id' in created ? created.id : undefined;
+  if (res.status !== 201 || typeof id !== 'string') throw new Error(`planting a ${resourceType} answered ${res.status}: ${JSON.stringify(created)}`);
+  return id;
+}
+
+/** Creates an Encounter for `visitKey` straight at the mock, as another client of the platform would. */
+export async function createEncounterAtMock(mockBaseUrl: URL, visitKey: string): Promise<void> {
+  const { patient, physician, location } = worldVisit;
+  await createAtMock(mockBaseUrl, 'Encounter', {
+    resourceType: 'Encounter',
+    identifier: [{ system: ENCOUNTER_SYSTEM, value: visitKey }],
+    status: 'arrived',
+    class: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB', display: 'ambulatory' },
+    subject: { reference: `Patient/${patient.ihsNumber}` },
+    participant: [{ individual: { reference: `Practitioner/${physician.ihsNumber}` } }],
+    period: { start: '2026-03-02T01:00:00+00:00' },
+    location: [{ location: { reference: `Location/${location.id}` } }],
+    statusHistory: [{ status: 'arrived', period: { start: '2026-03-02T01:00:00+00:00' } }],
+    serviceProvider: { reference: `Organization/${world.organization.id}` },
+  });
+}
+
+/**
+ * Creates a MedicationRequest for prescription `prescriptionId` on Encounter
+ * `encounterId` straight at the mock, as another client of the platform
+ * would; resolves to its id.
+ */
+export function createMedicationRequestAtMock(mockBaseUrl: URL, encounterId: string, prescriptionId: string): Promise<string> {
+  const org = world.organization.id;
+  return createAtMock(mockBaseUrl, 'MedicationRequest', {
+    resourceType: 'MedicationRequest',
+    contained: [{ resourceType: 'Medication', id: 'medication', code: { coding: [{ system: 'http://sys-ids.kemkes.go.id/kfa', code: '92000001' }] } }],
+    identifier: [
+      { system: PRESCRIPTION_SYSTEM, value: prescriptionId },
+      { system: `http://sys-ids.kemkes.go.id/prescription-item/${org}`, value: 'ITEM-1' },
+    ],
+    status: 'completed',
+    intent: 'order',
+    category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/medicationrequest-category', code: 'community' }] }],
+    medicationReference: { reference: '#medication' },
+    subject: { reference: `Patient/${worldVisit.patient.ihsNumber}` },
+    encounter: { reference: `Encounter/${encounterId}` },
+    authoredOn: '2026-03-02T01:10:00+00:00',
+    requester: { reference: `Practitioner/${worldVisit.physician.ihsNumber}` },
+    dispenseRequest: { performer: { reference: `Organization/${org}` } },
+  });
 }

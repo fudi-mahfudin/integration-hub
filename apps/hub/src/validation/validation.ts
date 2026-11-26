@@ -8,6 +8,7 @@
 import type { OrganizationId } from '../auth/source-systems.js';
 import type { KfaProduct } from '../kfa/kfa-product.js';
 import { checkEncounter } from './encounter-rules.js';
+import { checkMedicationRequest } from './medication-request-rules.js';
 
 /** The step dead-letter codes this module reports, in rule order (#9). */
 export const RULE_ORDER = [
@@ -30,17 +31,28 @@ export interface Violation {
   message: string;
 }
 
-/** An operator mapping a step needed and did not find (#10). */
-export interface MissingMapping {
-  kind: 'location' | 'drug';
-  /** The source system's local code that has no mapping. */
-  localCode: string;
-}
+/**
+ * An operator mapping a step needed and did not find (#10): a local code with
+ * no mapping, or a drug code mapped to a KFA code KFA does not know.
+ */
+export type MissingMapping =
+  | {
+      kind: 'location' | 'drug';
+      /** The source system's local code that has no mapping. */
+      localCode: string;
+    }
+  | {
+      kind: 'kfa';
+      /** The source system's local drug code. */
+      localCode: string;
+      /** The KFA code it maps to, which KFA does not know. */
+      kfaCode: string;
+    };
 
 /**
  * What a step is about to send, as the Validation module checks it. The drug
- * steps carry the KFA details their rules judge; their FHIR resources join
- * them, with their PAYLOAD_INVALID rules, when those steps are built (#29, #30).
+ * steps carry the KFA details their rules judge; the dispense's FHIR
+ * resource joins it, with its PAYLOAD_INVALID rules, when that step is built (#30).
  */
 export type StepPayload =
   | {
@@ -53,9 +65,13 @@ export type StepPayload =
     }
   | {
       step: 'submit_prescription';
+      /** The case's organization: the `{org}` of its identifier systems and the dispense performer. */
+      organizationId: OrganizationId;
       missingMappings: readonly MissingMapping[];
       /** The prescribed drug's KFA details; null when its drug code has no mapping. */
       product: KfaProduct | null;
+      /** The MedicationRequest about to be sent; null when a missing mapping meant it could not be built. */
+      medicationRequest: unknown;
     }
   | {
       step: 'submit_dispense';
@@ -73,14 +89,17 @@ export function validateStepPayload(payload: StepPayload): Violation[] {
   const violations: Violation[] = payload.missingMappings.map((m) => ({
     code: 'MAPPING_MISSING',
     path: null,
-    message: `the ${m.kind} "${m.localCode}" has no mapping for this source system`,
+    message:
+      m.kind === 'kfa'
+        ? `the drug "${m.localCode}" maps to KFA ${m.kfaCode}, which KFA does not know`
+        : `the ${m.kind} "${m.localCode}" has no mapping for this source system`,
   }));
   const add = (code: RuleCode, message: string) => void violations.push({ code, path: null, message });
+  const fail = (path: string, message: string) =>
+    void violations.push({ code: 'PAYLOAD_INVALID', path, message: `${path} ${message}` });
 
   switch (payload.step) {
     case 'create_visit': {
-      const fail = (path: string, message: string) =>
-        void violations.push({ code: 'PAYLOAD_INVALID', path, message: `${path} ${message}` });
       if (payload.encounter !== null) checkEncounter(payload.encounter, payload.organizationId, fail);
       else if (payload.missingMappings.length === 0) add('PAYLOAD_INVALID', 'no Encounter was built, yet no mapping is missing');
       break;
@@ -90,6 +109,8 @@ export function validateStepPayload(payload: StepPayload): Violation[] {
       if (product && product.level !== 92 && product.level !== 93) {
         add('KFA_LEVEL_INVALID', `a prescription needs a KFA 92 or 93 product, got ${product.code} at level ${product.level}`);
       }
+      if (payload.medicationRequest !== null) checkMedicationRequest(payload.medicationRequest, payload.organizationId, fail);
+      else if (payload.missingMappings.length === 0) add('PAYLOAD_INVALID', 'no MedicationRequest was built, yet no mapping is missing');
       break;
     }
     case 'submit_dispense': {

@@ -1,8 +1,12 @@
+import type { Kysely } from 'kysely';
 import type { SourceSystem } from '../auth/source-systems.js';
 import type { Clock } from '../clock.js';
 import { recordEvent, type AcceptedEvent, type RecordedEvent } from '../cases/record-event.js';
+import { logRejection, type RejectionCode } from '../cases/rejection-log.js';
+import type { Database } from '../db/database.js';
 import { Problem } from '../http/problem.js';
-import { parseEvent } from './event-schema.js';
+import { log } from '../observability/log.js';
+import { parseEvent, rejectedEventOf } from './event-schema.js';
 import { fingerprint, type Fingerprint, type RequestBody } from './fingerprint.js';
 import type { IdempotencyKey, IdempotencyStore, IngestResponse, StoredKey } from './idempotency-store.js';
 
@@ -17,22 +21,50 @@ export interface Ingest {
   purgeExpiredKeys(): Promise<number>;
 }
 
-/** Builds ingest over an idempotency store. Only the composition root calls this. */
-export function createIngest(deps: { store: IdempotencyStore; clock: Clock }): Ingest {
-  const { store, clock } = deps;
+/** The rejections that judged a visit's event, and so go to its rejection log (#8). */
+const LOGGED_REJECTIONS: ReadonlySet<string> = new Set<RejectionCode>(['VALIDATION_FAILED', 'UNSUPPORTED_MULTI_ITEM', 'EVENT_ALREADY_RECORDED']);
+
+/** Builds ingest over an idempotency store and the hub database (for the rejection log). Only the composition root calls this. */
+export function createIngest(deps: { store: IdempotencyStore; db: Kysely<Database>; clock: Clock }): Ingest {
+  const { store, db, clock } = deps;
+
+  async function accept(source: SourceSystem, key: IdempotencyKey, body: RequestBody): Promise<IngestResponse> {
+    const bodyFingerprint = fingerprint(body);
+
+    const known = await store.lookup(source.id, key);
+    if (known) return answerDuplicate(known, bodyFingerprint);
+
+    const event = await parseEventAfterKeyLookup(store, source, key, body, bodyFingerprint);
+    const result = await store.record(source.id, key, bodyFingerprint, (trx) =>
+      recordEvent(trx, source, event, clock()).then((recorded) => accepted(event, recorded)),
+    );
+    return 'accepted' in result ? result.accepted : answerDuplicate(result.raced, bodyFingerprint);
+  }
+
+  /** Logs a rejection of a visit's event, when the body names the visit and the event type. */
+  async function noteRejection(source: SourceSystem, body: RequestBody, code: RejectionCode): Promise<void> {
+    const rejected = rejectedEventOf(body);
+    if (!rejected) return;
+    try {
+      await logRejection(db, { sourceSystemId: source.id, ...rejected }, code, clock());
+    } catch (err) {
+      // The log only explains a waiting case; the source still gets its answer, and no case changed.
+      log('error', 'logging an ingest rejection failed', { code, eventType: rejected.eventType, error: err });
+    }
+  }
+
   return {
     async ingest(source, key, rawBody) {
       const body = readBody(rawBody);
-      const bodyFingerprint = fingerprint(body);
-
-      const known = await store.lookup(source.id, key);
-      if (known) return answerDuplicate(known, bodyFingerprint);
-
-      const event = await parseEventAfterKeyLookup(store, source, key, body, bodyFingerprint);
-      const result = await store.record(source.id, key, bodyFingerprint, (trx) =>
-        recordEvent(trx, source, event, clock()).then((recorded) => accepted(event, recorded)),
-      );
-      return 'accepted' in result ? result.accepted : answerDuplicate(result.raced, bodyFingerprint);
+      try {
+        return await accept(source, key, body);
+      } catch (err) {
+        if (err instanceof Problem && LOGGED_REJECTIONS.has(err.code)) {
+          // Checked just above: the code is one of the logged rejection codes.
+          await noteRejection(source, body, err.code as RejectionCode);
+        }
+        throw err;
+      }
     },
     purgeExpiredKeys: () => store.purgeExpired(),
   };

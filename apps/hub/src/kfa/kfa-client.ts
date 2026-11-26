@@ -1,0 +1,83 @@
+import { z } from 'zod';
+import type { SatusehatConfig } from '../config.js';
+import { SatusehatRequestError, SatusehatResponseError, SatusehatTimeoutError } from '../satusehat/errors.js';
+import type { AccessTokens } from '../satusehat/token.js';
+import { parseKfaProduct, type KfaCode, type KfaDetails } from './kfa-product.js';
+
+/** The KFA v2 call the hub makes. It takes the same access token as FHIR (#14). */
+export interface KfaClient {
+  /**
+   * The KFA details of `code`, or `undefined` when KFA has no such code. Any
+   * status but 200 throws `SatusehatRequestError`; a body of the wrong shape
+   * throws `SatusehatResponseError`; no full answer within the time limit
+   * throws `SatusehatTimeoutError`.
+   */
+  findProduct(code: KfaCode): Promise<KfaDetails | undefined>;
+}
+
+const kfaRef = z.object({ kfa_code: z.string().min(1) });
+
+/** The fields of `GET products?identifier=kfa&code=` the hub reads (#10); everything else is ignored. */
+const lookupSchema = z.object({
+  result: z
+    .object({
+      kfa_code: z.string().min(1),
+      name: z.string().min(1),
+      dosage_form: z.object({ code: z.string().min(1), name: z.string().min(1) }).nullish(),
+      product_template: kfaRef.nullish(),
+      active_ingredients: z.array(kfaRef).nullish(),
+    })
+    .nullable(),
+});
+
+/** Builds the KFA v2 client over one process's access tokens. Only the composition root calls this. */
+export function createKfaClient(deps: { config: Pick<SatusehatConfig, 'kfaUrl' | 'kfaTimeoutMs'>; tokens: AccessTokens }): KfaClient {
+  const { config, tokens } = deps;
+
+  /** GETs `url` and reads the whole body, both within the time limit. */
+  async function get(url: URL): Promise<{ status: number; text: string }> {
+    const authorization = `Bearer ${await tokens.current()}`;
+    const signal = AbortSignal.timeout(config.kfaTimeoutMs);
+    try {
+      const res = await fetch(url, { headers: { authorization, accept: 'application/json' }, signal });
+      return { status: res.status, text: await res.text() };
+    } catch (err) {
+      if (signal.aborted) throw new SatusehatTimeoutError('GET', url, config.kfaTimeoutMs, { cause: err });
+      throw err;
+    }
+  }
+
+  return {
+    async findProduct(code) {
+      const url = new URL(`products?${new URLSearchParams({ identifier: 'kfa', code })}`, config.kfaUrl);
+      const res = await get(url);
+      const { text } = res;
+      if (res.status !== 200) throw new SatusehatRequestError('GET', url, res.status, text);
+      let json: unknown;
+      try {
+        json = JSON.parse(text);
+      } catch (err) {
+        throw new SatusehatResponseError('GET', url, 'a body that is not JSON', { cause: err });
+      }
+      const parsed = lookupSchema.safeParse(json);
+      if (!parsed.success) {
+        const problems = parsed.error.issues.slice(0, 5).map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`);
+        throw new SatusehatResponseError('GET', url, `an unexpected KFA body; ${problems.join('; ')}`);
+      }
+      const { result } = parsed.data;
+      if (result === null) return undefined;
+      if (result.kfa_code !== code) throw new SatusehatResponseError('GET', url, `KFA ${result.kfa_code} for the lookup of ${code}`);
+      return {
+        product: parseKfaProduct({
+          code: result.kfa_code,
+          // KFA v2 carries no level field: a code's level is its two-digit prefix (91 ingredient, 92 virtual, 93 actual product).
+          level: Number(result.kfa_code.slice(0, 2)),
+          parent92: result.product_template?.kfa_code ?? null,
+          activeIngredients: (result.active_ingredients ?? []).map((i) => i.kfa_code),
+        }),
+        display: result.name,
+        doseForm: result.dosage_form ? { code: result.dosage_form.code, display: result.dosage_form.name } : null,
+      };
+    },
+  };
+}

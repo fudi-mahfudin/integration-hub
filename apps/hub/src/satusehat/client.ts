@@ -4,7 +4,7 @@ import type { Brand } from '../brand.js';
 import type { RemoteId, RemoteIdentifier, VisitId } from '../cases/case-model.js';
 import type { SatusehatConfig } from '../config.js';
 import { SatusehatRequestError, SatusehatResponseError } from './errors.js';
-import { encounterSystem, type FhirResource } from './resources.js';
+import { encounterSystem, prescriptionSystem, type FhirResource } from './resources.js';
 import type { AccessTokens } from './token.js';
 
 /** A SATUSEHAT patient's or practitioner's IHS number. */
@@ -17,6 +17,12 @@ export type LocationId = Brand<string, 'LocationId'>;
 export interface VisitIdentifier {
   organizationId: OrganizationId;
   visitId: VisitId;
+}
+
+/** A prescription's business identifier (ADR 0005): `prescription/{org}|{prescriptionId}`. */
+export interface PrescriptionIdentifier {
+  organizationId: OrganizationId;
+  prescriptionId: string;
 }
 
 /**
@@ -33,6 +39,10 @@ export interface SatusehatClient {
   findEncounters(identifier: VisitIdentifier): Promise<RemoteIdentifier[]>;
   /** Sends a built Encounter (see `visitEncounterResource`); resolves to the record SATUSEHAT stored. */
   createEncounter(encounter: FhirResource): Promise<RemoteIdentifier>;
+  /** Every MedicationRequest under the prescription's business identifier. */
+  findMedicationRequests(identifier: PrescriptionIdentifier): Promise<RemoteIdentifier[]>;
+  /** Sends a built MedicationRequest (see `prescriptionMedicationRequestResource`); resolves to the record SATUSEHAT stored. */
+  createMedicationRequest(medicationRequest: FhirResource): Promise<RemoteIdentifier>;
 }
 
 const NIK_SYSTEM = 'https://fhir.kemkes.go.id/id/nik';
@@ -92,12 +102,16 @@ export function createSatusehatClient(deps: {
 
   // The resource id of a Patient or Practitioner is its IHS number.
   const ihsNumbers = (hits: { id: string }[]) => hits.map((h) => h.id as IhsNumber);
-  const encounterRecord = (r: z.infer<typeof storedRecordSchema>): RemoteIdentifier => ({
-    type: 'Encounter',
-    // SATUSEHAT assigned this id to the Encounter.
-    id: r.id as RemoteId,
-    version: r.meta?.versionId ?? null,
-  });
+  const record =
+    (type: RemoteIdentifier['type']) =>
+    (r: z.infer<typeof storedRecordSchema>): RemoteIdentifier => ({
+      type,
+      // SATUSEHAT assigned this id to the record.
+      id: r.id as RemoteId,
+      version: r.meta?.versionId ?? null,
+    });
+  const encounterRecord = record('Encounter');
+  const medicationRequestRecord = record('MedicationRequest');
 
   return {
     findPatientsByNik: async (nik) => ihsNumbers(await search('Patient', `${NIK_SYSTEM}|${nik}`)),
@@ -107,6 +121,12 @@ export function createSatusehatClient(deps: {
     async createEncounter(encounter) {
       const stored = parse(storedRecordSchema, 'POST', await call('POST', 'Encounter', 201, encounter));
       return encounterRecord(stored);
+    },
+    findMedicationRequests: async ({ organizationId, prescriptionId }) =>
+      (await search('MedicationRequest', `${prescriptionSystem(organizationId)}|${prescriptionId}`)).map(medicationRequestRecord),
+    async createMedicationRequest(medicationRequest) {
+      const stored = parse(storedRecordSchema, 'POST', await call('POST', 'MedicationRequest', 201, medicationRequest));
+      return medicationRequestRecord(stored);
     },
   };
 }

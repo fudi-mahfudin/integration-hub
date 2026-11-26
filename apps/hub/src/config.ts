@@ -30,6 +30,12 @@ export interface SatusehatConfig {
    * documents two different hosts for it (#14). Used from the prescription step on.
    */
   kfaUrl: URL;
+  /**
+   * How long a KFA v2 lookup may take before the attempt gives up on it
+   * (default 10s). A timeout is transient, like a 5xx (#10). The FHIR calls'
+   * own budget lands with the attempt budget (#13, #35).
+   */
+  kfaTimeoutMs: number;
   /** client_credentials pair; one client belongs to one organization. */
   clientId: string;
   clientSecret: string;
@@ -106,6 +112,7 @@ export function loadConfig(env: Env): HubConfig {
       authUrl: parseBaseUrl('SATUSEHAT_AUTH_URL', env.SATUSEHAT_AUTH_URL ?? 'http://localhost:3001/oauth2/v1/'),
       fhirUrl: parseBaseUrl('SATUSEHAT_FHIR_URL', env.SATUSEHAT_FHIR_URL ?? 'http://localhost:3001/fhir-r4/v1/'),
       kfaUrl: parseBaseUrl('SATUSEHAT_KFA_URL', env.SATUSEHAT_KFA_URL ?? 'http://localhost:3001/kfa-v2/'),
+      kfaTimeoutMs: parsePositiveInt('SATUSEHAT_KFA_TIMEOUT_MS', env.SATUSEHAT_KFA_TIMEOUT_MS ?? '10000'),
       // The mock's public development pair; a real platform needs its own (set up through a /wizard).
       clientId: parseNonEmpty('SATUSEHAT_CLIENT_ID', env.SATUSEHAT_CLIENT_ID ?? 'dev-satusehat-client'),
       clientSecret: parseNonEmpty('SATUSEHAT_CLIENT_SECRET', env.SATUSEHAT_CLIENT_SECRET ?? 'dev-satusehat-secret'),

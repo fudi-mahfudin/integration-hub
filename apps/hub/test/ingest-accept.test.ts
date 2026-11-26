@@ -40,6 +40,7 @@ describe('ingest: accepting visit.started', () => {
       status: 'active',
       waitingFor: null,
       waitingSince: null,
+      rejections: [],
       steps: [
         { step: 'create_visit', eventType: 'visit.started', state: 'ready', ...unworked },
         { step: 'submit_prescription', eventType: 'prescription.written', state: 'awaiting_event', ...unworked },

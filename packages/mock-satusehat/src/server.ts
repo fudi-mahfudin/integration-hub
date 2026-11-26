@@ -8,6 +8,7 @@ import { worldEntriesSchema } from './world/world.js';
 
 const FHIR_BASE = '/fhir-r4/v1';
 const TOKEN_PATH = '/oauth2/v1/accesstoken';
+const KFA_PRODUCTS_PATH = '/kfa-v2/products';
 const FHIR_JSON = 'application/fhir+json';
 const MAX_LOG_LIMIT = 10_000;
 
@@ -72,12 +73,30 @@ export function buildServer({ platform, log, clock }: ServerDeps): FastifyInstan
     }),
   );
 
+  app.get(
+    KFA_PRODUCTS_PATH,
+    platformRoute('application/json', (req) => {
+      // KFA v2 takes the same access token as FHIR (#14).
+      if (!platform.isAuthorized(req.headers.authorization)) return unauthorizedFor('KfaProduct', null);
+      return { ...platform.kfaProduct(queryOf(req)), requestBody: null };
+    }),
+  );
+
   app.post(
     `${FHIR_BASE}/Encounter`,
     platformRoute(FHIR_JSON, (req) => {
       const requestBody = parseJson(req.body);
       if (!platform.isAuthorized(req.headers.authorization)) return unauthorizedFor('Encounter', requestBody);
       return { ...platform.createEncounter(requestBody), requestBody };
+    }),
+  );
+
+  app.post(
+    `${FHIR_BASE}/MedicationRequest`,
+    platformRoute(FHIR_JSON, (req) => {
+      const requestBody = parseJson(req.body);
+      if (!platform.isAuthorized(req.headers.authorization)) return unauthorizedFor('MedicationRequest', requestBody);
+      return { ...platform.createMedicationRequest(requestBody), requestBody };
     }),
   );
 

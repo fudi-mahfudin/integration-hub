@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { AcceptedEvent } from '../cases/record-event.js';
-import type { VisitId } from '../cases/case-model.js';
+import { EVENT_TYPES, type EventType, type VisitId } from '../cases/case-model.js';
 import { Problem, type FieldError } from '../http/problem.js';
 import type { RequestBody } from './fingerprint.js';
 import { DATE_FLOOR, isCalendarDate, parseSourceTime } from './source-time.js';
@@ -83,39 +83,105 @@ const visitStartedData = z.object({
   startedAt: sourceTime({ floor: true }),
 });
 
-/** The envelope `{ type, visitId, occurredAt, data }` (#6); `visit.started` is the only type so far. */
+const positive = z.number('must be a number').positive('must be greater than 0');
+
+/** One drug item of a prescription (#6). */
+const prescriptionItem = z.object({
+  itemId: text(64),
+  drugCode: text(64),
+  quantity: positive,
+  dosage: z.object({
+    text: text(500),
+    timesPerDay: z.number('must be a number').int('must be a whole number').positive('must be greater than 0'),
+    doseAmount: positive,
+    routeCode: text(16),
+  }),
+});
+
+/** `items` takes any length here; a count other than one is judged after the schema (`UNSUPPORTED_MULTI_ITEM`). */
+const prescriptionWrittenData = z.object({
+  prescriptionId: text(64),
+  authoredAt: sourceTime({ floor: true }),
+  requester: practitioner,
+  items: z.array(prescriptionItem, 'must be an array'),
+});
+
+/** The event types ingest accepts so far, each with its `data` schema. */
+const DATA_SCHEMAS = {
+  'visit.started': visitStartedData,
+  'prescription.written': prescriptionWrittenData,
+} as const;
+
+const ACCEPTED_TYPES = Object.keys(DATA_SCHEMAS) as (keyof typeof DATA_SCHEMAS)[]; // the keys of the object just above
+const eventType = z.enum(ACCEPTED_TYPES, `must be one of ${ACCEPTED_TYPES.join(', ')}`);
+
+/** The envelope `{ type, visitId, occurredAt, data }` (#6); `data` is checked against its type's schema separately. */
 const envelope = z.object({
-  type: z.literal('visit.started', 'must be "visit.started"'),
+  type: eventType,
   visitId: text(64),
   occurredAt: sourceTime({ floor: false }),
-  data: visitStartedData,
+  data: z.looseObject({}),
 });
+
+const visitStartedEnvelope = envelope.extend({ type: z.literal('visit.started'), data: visitStartedData });
+const prescriptionWrittenEnvelope = envelope.extend({ type: z.literal('prescription.written'), data: prescriptionWrittenData });
 
 /**
  * Checks a request body against the source event schema and returns the event
- * to record. Reports every violation at once.
+ * to record. Reports every violation at once: the envelope's and, when its
+ * `type` is known, its `data`'s.
  * @throws Problem `VALIDATION_FAILED` (422) with one `errors[]` entry per violation.
+ * @throws Problem `UNSUPPORTED_MULTI_ITEM` (422) when a valid prescription does not have exactly one item (ADR 0004).
  */
 export function parseEvent(body: RequestBody): AcceptedEvent {
   if (!body.json) {
     throw new Problem('VALIDATION_FAILED', [{ path: '', code: 'INVALID_FORMAT', message: 'the body must be JSON' }]);
   }
-  const parsed = envelope.safeParse(body.value);
-  if (!parsed.success) {
+  const head = envelope.safeParse(body.value);
+  const issues = head.success ? [] : [...head.error.issues];
+  const type = eventType.safeParse(valueAt(body.value, ['type']));
+  const data = valueAt(body.value, ['data']);
+  if (type.success && typeof data === 'object' && data !== null && !Array.isArray(data)) {
+    const parsedData = DATA_SCHEMAS[type.data].safeParse(data);
+    if (!parsedData.success) issues.push(...parsedData.error.issues.map((i) => ({ ...i, path: ['data', ...i.path] })));
+  }
+  if (!head.success || issues.length > 0 || !type.success) {
     throw new Problem(
       'VALIDATION_FAILED',
-      parsed.error.issues.map((i) => fieldError(i, body.value)),
+      issues.map((i) => fieldError(i, body.value)),
     );
   }
-  const occurredAt = parseSourceTime(parsed.data.occurredAt);
+
+  const occurredAt = parseSourceTime(head.data.occurredAt);
   if (!occurredAt.ok) throw new Error(`occurredAt passed the schema but does not parse: ${occurredAt.reason}`);
-  return {
-    type: parsed.data.type,
+  const accepted = {
     // The schema checked it: a non-empty visit number of at most 64 characters.
-    visitId: parsed.data.visitId as VisitId,
+    visitId: head.data.visitId as VisitId,
     occurredAt: occurredAt.instant,
     envelope: body.value,
   };
+  if (type.data === 'visit.started') return { ...accepted, type: 'visit.started', prescriptionItem: null };
+
+  const { prescriptionId, items } = prescriptionWrittenData.parse(data);
+  const [item] = items;
+  if (items.length !== 1 || !item) {
+    throw new Problem('UNSUPPORTED_MULTI_ITEM', [
+      { path: '/data/items', code: 'UNSUPPORTED_MULTI_ITEM', message: `must hold exactly one drug item, got ${items.length}` },
+    ]);
+  }
+  return { ...accepted, type: 'prescription.written', prescriptionItem: { prescriptionId, itemId: item.itemId } };
+}
+
+/**
+ * The visit and event type a rejected body names, when both are readable as
+ * the envelope defines them; the rejection log is keyed by them (#8).
+ */
+export function rejectedEventOf(body: RequestBody): { visitId: VisitId; eventType: EventType } | undefined {
+  if (!body.json) return undefined;
+  const visitId = text(64).safeParse(valueAt(body.value, ['visitId']));
+  const type = z.enum(EVENT_TYPES).safeParse(valueAt(body.value, ['type']));
+  // Checked just above against the envelope's own visitId rule.
+  return visitId.success && type.success ? { visitId: visitId.data as VisitId, eventType: type.data } : undefined;
 }
 
 function fieldError(i: z.core.$ZodIssue, input: unknown): FieldError {
@@ -158,7 +224,7 @@ export interface VisitStartedFacts {
  * schema at ingest, so a failure here means the stored row was changed.
  */
 export function readVisitStarted(storedEnvelope: unknown): VisitStartedFacts {
-  const parsed = envelope.safeParse(storedEnvelope);
+  const parsed = visitStartedEnvelope.safeParse(storedEnvelope);
   if (!parsed.success) {
     throw new Error(`a stored visit.started no longer matches its schema: ${parsed.error.issues.map((i) => pointer(i.path)).join(', ')}`);
   }
@@ -166,4 +232,30 @@ export function readVisitStarted(storedEnvelope: unknown): VisitStartedFacts {
   const started = parseSourceTime(startedAt);
   if (!started.ok) throw new Error(`a stored startedAt passed the schema but does not parse: ${started.reason}`);
   return { patient, practitioner, encounterClass, locationCode, startedAt: started.instant };
+}
+
+/** The fields of a recorded `prescription.written` that the submit prescription step sends. */
+export interface PrescriptionWrittenFacts {
+  prescriptionId: string;
+  authoredAt: Date;
+  requester: { nik?: string | undefined };
+  item: z.infer<typeof prescriptionItem>;
+}
+
+/**
+ * Reads a recorded `prescription.written` envelope back from storage. It
+ * passed this schema and the one-item rule at ingest, so a failure here means
+ * the stored row was changed.
+ */
+export function readPrescriptionWritten(storedEnvelope: unknown): PrescriptionWrittenFacts {
+  const parsed = prescriptionWrittenEnvelope.safeParse(storedEnvelope);
+  if (!parsed.success) {
+    throw new Error(`a stored prescription.written no longer matches its schema: ${parsed.error.issues.map((i) => pointer(i.path)).join(', ')}`);
+  }
+  const { prescriptionId, authoredAt, requester, items } = parsed.data.data;
+  const [item] = items;
+  if (items.length !== 1 || !item) throw new Error(`a stored prescription.written has ${items.length} items, not the one ingest accepted`);
+  const authored = parseSourceTime(authoredAt);
+  if (!authored.ok) throw new Error(`a stored authoredAt passed the schema but does not parse: ${authored.reason}`);
+  return { prescriptionId, authoredAt: authored.instant, requester, item };
 }

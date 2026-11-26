@@ -1,9 +1,9 @@
-import { readFile } from 'node:fs/promises';
 import type { Kysely } from 'kysely';
 import { z } from 'zod';
 import type { SourceSystemId } from '../auth/source-systems.js';
 import type { Database } from '../db/database.js';
 import type { LocationId } from '../satusehat/client.js';
+import { readSeedFile } from './seed-file.js';
 
 /**
  * The location mapping seed in the repo: the operator's mappings for the
@@ -33,23 +33,12 @@ const seedSchema = z
  * it at boot. Throws naming the file if it is invalid.
  */
 export async function loadLocationMappingSeed(db: Kysely<Database>, now: Date): Promise<void> {
-  const path = LOCATION_MAPPING_SEED;
-  let json: unknown;
-  try {
-    json = JSON.parse(await readFile(path, 'utf8'));
-  } catch (err) {
-    throw new Error(`location mapping seed at "${path.pathname}" must be a readable JSON file`, { cause: err });
-  }
-  const parsed = seedSchema.safeParse(json);
-  if (!parsed.success) {
-    const problems = parsed.error.issues.slice(0, 5).map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`);
-    throw new Error(`location mapping seed at "${path.pathname}" is invalid; ${problems.join('; ')}`);
-  }
-  if (parsed.data.length === 0) return;
+  const rows = await readSeedFile(LOCATION_MAPPING_SEED, seedSchema);
+  if (rows.length === 0) return;
   await db
     .insertInto('location_mapping')
     .values(
-      parsed.data.map((r) => ({
+      rows.map((r) => ({
         source_system_id: r.source,
         location_code: r.locationCode,
         location_id: r.locationId,
