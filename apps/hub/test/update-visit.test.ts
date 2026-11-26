@@ -5,18 +5,15 @@ import { postEvent, waitForCase, type CaseView } from './support/events.js';
 import { createFreshDatabase, type FreshDatabase } from './support/fresh-database.js';
 import { expectAtMostOneStepInMotion } from './support/invariants.js';
 import {
+  type BootedMock,
   bootMock,
   ENCOUNTER_SYSTEM,
+  updateEncounterAtMock,
   world,
   WORLD_SOURCE_API_KEY,
-  worldDrugDispensed,
   worldEnv,
-  worldPrescriptionWritten,
   worldVisit,
-  worldVisitFinished,
-  worldVisitStarted,
-  updateEncounterAtMock,
-  type BootedMock,
+  worldVisitEvents,
 } from './support/satusehat.js';
 
 const settled = (v: CaseView) => ['completed', 'dead_lettered'].includes(v.status);
@@ -45,15 +42,9 @@ describe('update visit: a visit.finished closes the case’s Encounter, and the 
 
   const send = (body: unknown) => postEvent(hub.baseUrl, { apiKey: WORLD_SOURCE_API_KEY, body });
 
-  /** The four events of one visit, in order. */
-  function visitEvents() {
-    const visit = worldVisitStarted();
-    const prescription = worldPrescriptionWritten(visit.visitId);
-    return { visit, events: [visit, prescription, worldDrugDispensed(prescription), worldVisitFinished(visit)] };
-  }
 
   it('delivers four events as Encounter created → MedicationRequest created → MedicationDispense created → Encounter updated, each once', async () => {
-    const { visit, events } = visitEvents();
+    const { visit, events } = worldVisitEvents();
     let location: string | null = null;
     for (const event of events) location = (await send(event)).headers.get('location');
 
@@ -73,7 +64,7 @@ describe('update visit: a visit.finished closes the case’s Encounter, and the 
   });
 
   it('PUTs the same Encounter, finished, from the values create visit pinned, without a diagnosis, and stores its new version', async () => {
-    const { visit, events } = visitEvents();
+    const { visit, events } = worldVisitEvents();
     let location: string | null = null;
     for (const event of events) location = (await send(event)).headers.get('location');
     const view = await waitForCase(hub.baseUrl, location, settled, { apiKey: WORLD_SOURCE_API_KEY });
@@ -113,7 +104,7 @@ describe('update visit: a visit.finished closes the case’s Encounter, and the 
   });
 
   it('carries each earlier step’s remote identifiers in every later payload', async () => {
-    const { visit, events } = visitEvents();
+    const { visit, events } = worldVisitEvents();
     let location: string | null = null;
     for (const event of events) location = (await send(event)).headers.get('location');
     const view = await waitForCase(hub.baseUrl, location, settled, { apiKey: WORLD_SOURCE_API_KEY });
@@ -134,7 +125,7 @@ describe('update visit: a visit.finished closes the case’s Encounter, and the 
   });
 
   it('holds a visit.finished that arrives first, then completes the case after the other three steps', async () => {
-    const { visit, events } = visitEvents();
+    const { visit, events } = worldVisitEvents();
     const finished = events.at(-1);
     const first = await send(finished);
     for (const event of events.slice(0, -1)) await send(event);
@@ -152,7 +143,7 @@ describe('update visit: a visit.finished closes the case’s Encounter, and the 
   });
 
   it('adopts an update already at SATUSEHAT (the Encounter finished at the same end), sending no PUT of its own', async () => {
-    const { visit, events } = visitEvents();
+    const { visit, events } = worldVisitEvents();
     const finished = events.at(-1);
     let location: string | null = null;
     for (const event of events.slice(0, -1)) location = (await send(event)).headers.get('location');

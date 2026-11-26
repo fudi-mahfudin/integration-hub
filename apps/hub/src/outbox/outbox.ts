@@ -42,7 +42,8 @@ export interface Outbox {
   /**
    * Claims the longest-waiting claimable step (`ready`, or `in_flight` with
    * an expired lease), skipping rows other workers are claiming, under a new
-   * lease; `undefined` when there is none.
+   * lease; `undefined` when there is none. Taking over an expired lease logs
+   * the expired attempt as `lease_expired`, in the same statement.
    */
   claim(): Promise<ClaimedStep | undefined>;
   /**
@@ -52,12 +53,15 @@ export interface Outbox {
    * event is stored, else the case waits for it. Dead-lettering: the step and
    * its case become `dead_lettered` with the reason; the rest of the case is
    * held. Resolves to `false` when the claim no longer holds the lease: the
-   * step is unchanged and the attempt is logged as `discarded`.
+   * step is unchanged and nothing is logged, since only a claim that took the
+   * step over changes its token, and that claim logged this attempt as
+   * `lease_expired`.
    */
   storeOutcome(step: ClaimedStep, outcome: StepOutcome): Promise<boolean>;
   /**
-   * Logs an attempt that ended without an outcome. The step is unchanged: it
-   * stays `in_flight` until its lease expires (retries land with #35).
+   * Logs an attempt that ended without an outcome, unless a takeover already
+   * logged it as `lease_expired`. The step is unchanged: it stays `in_flight`
+   * until its lease expires (retries land with #35).
    */
   recordFailedAttempt(step: ClaimedStep, facts: AttemptFacts): Promise<void>;
 }
@@ -66,8 +70,8 @@ export interface Outbox {
 export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs: number }): Outbox {
   const { db, clock, leaseMs } = deps;
 
-  /** Appends the attempt's row to the attempt log. */
-  const logAttempt = (
+  /** The insert of the attempt's row in the attempt log; the caller executes it. */
+  const attemptRow = (
     // A transaction is a Kysely too: the row commits with whatever the caller's transaction changed.
     trx: Kysely<Database>,
     step: ClaimedStep,
@@ -88,8 +92,7 @@ export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs
         values_used: JSON.stringify(row.facts.valuesUsed),
         lookup_methods: JSON.stringify(row.facts.lookupMethods),
         violations: JSON.stringify(row.facts.violations),
-      })
-      .execute();
+      });
 
   /** The fence: this step, still in flight, still under this claim's token. */
   const holding = (trx: Transaction<Database>, step: ClaimedStep) =>
@@ -106,23 +109,32 @@ export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs
       // One statement: pick the oldest claimable row, skip rows another
       // worker has locked, and take it under a fresh lease token. An expired
       // lease is claimable again; the stale holder's outcome then fails the fence.
+      // Taking one over logs its attempt as `lease_expired` (#8), ended when
+      // the lease ran out, unless that attempt already logged its own failure.
       // The row type brands what the columns hold: ids Postgres generated or
       // ingest stored from a validated event, and the token gen_random_uuid() just issued.
       const { rows } = await sql<Omit<ClaimedStep, 'startedAt'>>`
         with picked as (
-          select case_id, seq
+          select case_id, seq, state, attempts, claimed_at, lease_expires_at
             from step
            where state = 'ready'
               or (state = 'in_flight' and lease_expires_at <= ${now})
            order by updated_at
            limit 1
              for update skip locked
+        ), expired as (
+          insert into attempt (case_id, seq, attempt, started_at, ended_at, outcome, values_used, lookup_methods, violations)
+          select case_id, seq, attempts, claimed_at, lease_expires_at, 'lease_expired', '{}', '{}', '[]'
+            from picked
+           where state = 'in_flight'
+          on conflict (case_id, seq, attempt) do nothing
         )
         update step s
            set state = 'in_flight',
                attempts = s.attempts + 1,
                lease_token = gen_random_uuid(),
                lease_expires_at = ${new Date(now.getTime() + leaseMs)},
+               claimed_at = ${now},
                updated_at = ${now}
           from picked, "case" c
          where s.case_id = picked.case_id
@@ -165,12 +177,9 @@ export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs
               };
         const updated = await holding(trx, step)
           .set(change)
-          .set({ lease_token: null, lease_expires_at: null, updated_at: now })
+          .set({ lease_token: null, lease_expires_at: null, claimed_at: null, updated_at: now })
           .executeTakeFirst();
-        if (updated.numUpdatedRows === 0n) {
-          await logAttempt(trx, step, now, { outcome: 'discarded', errorCode, facts: outcome.attempt });
-          return false;
-        }
+        if (updated.numUpdatedRows === 0n) return false;
 
         const next = after();
         for (const s of next) {
@@ -183,12 +192,15 @@ export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs
             .execute();
         }
         await writeCaseStatus(trx, step.caseId, next, now);
-        await logAttempt(trx, step, now, { outcome: logged, errorCode, facts: outcome.attempt });
+        await attemptRow(trx, step, now, { outcome: logged, errorCode, facts: outcome.attempt }).execute();
         return true;
       }),
 
     async recordFailedAttempt(step, facts) {
-      await logAttempt(db, step, clock(), { outcome: 'failed', errorCode: null, facts });
+      // A stale holder can fail after a takeover logged its attempt as `lease_expired`; that ending stands.
+      await attemptRow(db, step, clock(), { outcome: 'failed', errorCode: null, facts })
+        .onConflict((oc) => oc.columns(['case_id', 'seq', 'attempt']).doNothing())
+        .execute();
     },
   };
 }

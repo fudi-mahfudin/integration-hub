@@ -277,3 +277,10 @@ export function createMedicationDispenseAtMock(mockBaseUrl: URL, ids: { encounte
     substitution: { wasSubstituted: false },
   });
 }
+
+/** The four events of one fresh world visit, in step order, and its `visit.started`. */
+export function worldVisitEvents() {
+  const visit = worldVisitStarted();
+  const prescription = worldPrescriptionWritten(visit.visitId);
+  return { visit, events: [visit, prescription, worldDrugDispensed(prescription), worldVisitFinished(visit)] };
+}
