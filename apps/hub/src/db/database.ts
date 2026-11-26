@@ -35,6 +35,8 @@ export interface StepTable {
   lease_expires_at: Timestamp | null;
   /** When the current claim was taken: its attempt's start; null unless `in_flight`. */
   claimed_at: Timestamp | null;
+  /** From when a `retry_wait` step is claimable again; null otherwise. */
+  available_at: Timestamp | null;
   /** The record the step's completion stored at SATUSEHAT. */
   remote_type: RemoteIdentifier['type'] | null;
   remote_id: string | null;
@@ -48,10 +50,13 @@ export interface StepTable {
 /**
  * How an attempt ended. `failed`: it ended without an outcome. `lease_expired`:
  * its lease ran out before it stored an outcome, and another claim took the
- * step over (#8). `discarded`: no longer written; rows logged before #34
- * for an attempt whose late outcome the lease fence threw away.
+ * step over (#8). `attempt_budget_exceeded`: it had less time left than one
+ * call may take, so it stopped (#13). `discarded`: no longer written; rows
+ * logged before #34 for an attempt whose late outcome the lease fence threw away.
+ * `failed` and `attempt_budget_exceeded` are transient: the step waits in
+ * `retry_wait`, unless it was the last attempt allowed.
  */
-export type AttemptOutcome = 'completed' | 'dead_lettered' | 'discarded' | 'failed' | 'lease_expired';
+export type AttemptOutcome = 'completed' | 'dead_lettered' | 'discarded' | 'failed' | 'lease_expired' | 'attempt_budget_exceeded';
 
 /** One row of a step's append-only attempt log (#8); the database rejects updates and deletes. */
 export interface AttemptTable {
@@ -67,6 +72,8 @@ export interface AttemptTable {
   values_used: ColumnType<unknown, string, never>;
   lookup_methods: ColumnType<unknown, string, never>;
   violations: ColumnType<unknown, string, never>;
+  /** The attempt's read retries, as JSON `ReadRetry[]`: sub-entries, not attempts (#13). */
+  read_retries: ColumnType<unknown, string, never>;
 }
 
 /** An accepted source event, stored as received (after schema validation). */

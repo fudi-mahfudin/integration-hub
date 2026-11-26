@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { SatusehatConfig } from '../config.js';
-import { SatusehatRequestError, SatusehatResponseError, SatusehatTimeoutError } from '../satusehat/errors.js';
-import type { AccessTokens } from '../satusehat/token.js';
+import { SatusehatRequestError, SatusehatResponseError } from '../satusehat/errors.js';
+import type { AttemptCalls, SatusehatTransport } from '../satusehat/transport.js';
 import { parseKfaProduct, type KfaCode, type KfaDetails } from './kfa-product.js';
 
 /** What a KFA v2 lookup answered: the status read, and the details, or `undefined` when KFA has no such code. */
@@ -17,7 +17,7 @@ export interface KfaClient {
    * or 404 (which of the two the real KFA v2 sends is unverified). Any other
    * status throws `SatusehatRequestError`; a body of the wrong shape
    * throws `SatusehatResponseError`; no full answer within the time limit
-   * throws `SatusehatTimeoutError`.
+   * throws `SatusehatTimeoutError` (see `SatusehatTransport`).
    */
   findProduct(code: KfaCode): Promise<KfaLookup>;
 }
@@ -37,22 +37,14 @@ const lookupSchema = z.object({
     .nullable(),
 });
 
-/** Builds the KFA v2 client over one process's access tokens. Only the composition root calls this. */
-export function createKfaClient(deps: { config: Pick<SatusehatConfig, 'kfaUrl' | 'kfaTimeoutMs'>; tokens: AccessTokens }): KfaClient {
-  const { config, tokens } = deps;
-
-  /** GETs `url` and reads the whole body, both within the time limit. */
-  async function get(url: URL): Promise<{ status: number; text: string }> {
-    const authorization = `Bearer ${await tokens.current()}`;
-    const signal = AbortSignal.timeout(config.kfaTimeoutMs);
-    try {
-      const res = await fetch(url, { headers: { authorization, accept: 'application/json' }, signal });
-      return { status: res.status, text: await res.text() };
-    } catch (err) {
-      if (signal.aborted) throw new SatusehatTimeoutError('GET', url, config.kfaTimeoutMs, { cause: err });
-      throw err;
-    }
-  }
+/**
+ * Builds the KFA v2 client for one attempt, over the process's transport (the
+ * same token as FHIR, timeouts, read retries) and the attempt's `calls`.
+ * Only the composition root calls this.
+ */
+export function createKfaClient(deps: { config: Pick<SatusehatConfig, 'kfaUrl'>; transport: SatusehatTransport; calls: AttemptCalls }): KfaClient {
+  const { config, transport, calls } = deps;
+  const get = (url: URL) => transport.send(calls, { method: 'GET', url, accept: 'application/json' });
 
   return {
     async findProduct(code) {
@@ -60,7 +52,7 @@ export function createKfaClient(deps: { config: Pick<SatusehatConfig, 'kfaUrl' |
       const res = await get(url);
       const { text } = res;
       if (res.status === 404) return { httpStatus: 404, details: undefined };
-      if (res.status !== 200) throw new SatusehatRequestError('GET', url, res.status, text);
+      if (res.status !== 200) throw new SatusehatRequestError('GET', url, res.status, text, res.retryAfter);
       let json: unknown;
       try {
         json = JSON.parse(text);

@@ -60,7 +60,10 @@ export interface RemoteIdentifier {
  * Validation module's rule codes (#9), or a person lookup that found no one
  * (`*_NOT_FOUND`) or more than one (`*_AMBIGUOUS`) (#32).
  * `REMOTE_RECORD_AMBIGUOUS`: search-then-create found more than one record
- * under the step's business identifier (ADR 0005).
+ * under the step's business identifier (ADR 0005); `REMOTE_RECORD_MISSING`:
+ * a stored remote identifier is gone and a search finds no record (#10).
+ * `PLATFORM_FORBIDDEN`: SATUSEHAT answered 403 (#13). `RETRIES_EXHAUSTED`:
+ * the step's last allowed attempt failed transiently (#8, #13).
  */
 export type DeadLetterReason =
   | RuleCode
@@ -68,7 +71,10 @@ export type DeadLetterReason =
   | 'PATIENT_AMBIGUOUS'
   | 'PRACTITIONER_NOT_FOUND'
   | 'PRACTITIONER_AMBIGUOUS'
-  | 'REMOTE_RECORD_AMBIGUOUS';
+  | 'REMOTE_RECORD_AMBIGUOUS'
+  | 'REMOTE_RECORD_MISSING'
+  | 'PLATFORM_FORBIDDEN'
+  | 'RETRIES_EXHAUSTED';
 
 /** A step's position and state: all the state machine looks at. */
 export interface StepView {

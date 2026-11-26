@@ -74,6 +74,14 @@ describe('report', () => {
     ]);
   });
 
+  it('judges order by arrival: an applied request cut without an answer is logged late, yet its effect came first', () => {
+    // A create applied on arrival (t=10) but logged only when its connection was dropped (t=100),
+    // after the next step's create (t=50..55) was logged.
+    const next = entry('MedicationRequest', 'created', { at: [50, 55] });
+    const cut = entry('Encounter', 'created', { at: [10, 100] });
+    expect(computeReport([next, cut], null).outOfOrder).toEqual([]);
+  });
+
   it('judges order per visit', () => {
     const report = computeReport(
       [entry('Encounter', 'created', { visitKey: 'A' }), entry('Encounter', 'created', { visitKey: 'B', id: 'B' }), entry('MedicationRequest', 'created', { visitKey: 'A' })],

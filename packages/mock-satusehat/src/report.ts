@@ -38,6 +38,7 @@ export interface MockReport {
   /** Seed of the current fault rules, or null when none are set. */
   faultSeed: number | null;
   duplicates: DuplicateSubmission[];
+  /** Judged in the order requests arrived, which is not log order for a request applied and then cut. */
   outOfOrder: OutOfOrderEffect[];
   overlap: OverlappingRequests[];
 }
@@ -71,7 +72,9 @@ function findDuplicates(entries: readonly LogEntry[]): DuplicateSubmission[] {
 
 function findOutOfOrder(entries: readonly LogEntry[]): OutOfOrderEffect[] {
   const found: OutOfOrderEffect[] = [];
-  for (const [visitKey, visitEntries] of byVisit(entries)) {
+  for (const [visitKey, logged] of byVisit(entries)) {
+    // By arrival, not by log order: a request applied and then cut is logged only when its connection goes.
+    const visitEntries = [...logged].sort((a, b) => a.receivedAt.localeCompare(b.receivedAt) || a.seq - b.seq);
     const seen = new Set<number>();
     let furthest = -1;
     for (const e of visitEntries) {

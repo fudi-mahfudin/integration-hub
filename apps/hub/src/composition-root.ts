@@ -4,6 +4,7 @@ import { APP_FILTER, NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Redis } from 'ioredis';
 import { sql, type Kysely } from 'kysely';
+import { Agent } from 'undici';
 import type { MigrationResult } from 'kysely/migration';
 import { SourceSystems } from './auth/source-systems.js';
 import { CasesController } from './cases/cases.controller.js';
@@ -25,6 +26,8 @@ import { log } from './observability/log.js';
 import { createOutbox } from './outbox/outbox.js';
 import { createSatusehatClient } from './satusehat/client.js';
 import { createAccessTokens } from './satusehat/token.js';
+import { createRedisTokenBackoff } from './satusehat/token-backoff.js';
+import { createSatusehatTransport, type AttemptCalls } from './satusehat/transport.js';
 import { createVisit } from './steps/create-visit.js';
 import { submitDispense } from './steps/submit-dispense.js';
 import { submitPrescription } from './steps/submit-prescription.js';
@@ -135,7 +138,7 @@ export async function createHub(config: HubConfig, runtime: HubRuntime): Promise
 export interface HubWorker {
   /** Starts claiming steps. */
   start(): void;
-  /** Stops claiming, waits for the attempt in progress, then closes the Postgres pool. */
+  /** Stops claiming, waits for the attempt in progress, then closes the Postgres pool, the SATUSEHAT connections and Redis. */
   close(): Promise<void>;
 }
 
@@ -156,19 +159,35 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
     throw err;
   }
 
+  // One connection pool per process, with the connect timeout (#13).
+  const dispatcher = new Agent({ connect: { timeout: config.satusehat.connectTimeoutMs } });
   // KFA v2 takes the same access token as FHIR (#14), so both share the process's tokens.
-  const tokens = createAccessTokens({ config: config.satusehat, clock });
-  const satusehat = createSatusehatClient({ config: config.satusehat, tokens });
-  const kfa = createKfaClient({ config: config.satusehat, tokens });
+  // Redis only shares the token backoff; the worker runs without it (#13).
+  const redis = connectOptionalRedis(config.redisUrl);
+  const shared = createRedisTokenBackoff({ redis, authUrl: config.satusehat.authUrl, clock });
+  const tokens = createAccessTokens({ config: config.satusehat, dispatcher, clock, shared });
+  const transport = createSatusehatTransport({
+    tokens,
+    dispatcher,
+    callTimeoutMs: config.satusehat.callTimeoutMs,
+    connectTimeoutMs: config.satusehat.connectTimeoutMs,
+    clock,
+    random: Math.random,
+  });
+  const clientsFor = (calls: AttemptCalls) => ({
+    satusehat: createSatusehatClient({ config: config.satusehat, transport, calls }),
+    kfa: createKfaClient({ config: config.satusehat, transport, calls }),
+  });
   const worker = createWorkerLoop({
-    outbox: createOutbox({ db, clock, leaseMs: config.workerLeaseMs }),
+    outbox: createOutbox({ db, clock, leaseMs: config.workerLeaseMs, retry: config.retry, random: Math.random }),
     runners: {
-      create_visit: (step) => createVisit({ db, satusehat }, step),
-      submit_prescription: (step) => submitPrescription({ db, satusehat, kfa, clock }, step),
-      submit_dispense: (step) => submitDispense({ db, satusehat, kfa, clock }, step),
-      update_visit: (step) => updateVisit({ db, satusehat }, step),
+      create_visit: (step, calls) => createVisit({ db, ...clientsFor(calls) }, step),
+      submit_prescription: (step, calls) => submitPrescription({ db, ...clientsFor(calls), clock }, step),
+      submit_dispense: (step, calls) => submitDispense({ db, ...clientsFor(calls), clock }, step),
+      update_visit: (step, calls) => updateVisit({ db, ...clientsFor(calls) }, step),
     },
     pollIntervalMs: config.workerPollIntervalMs,
+    attemptBudgetMs: config.attemptBudgetMs,
   });
 
   return {
@@ -176,6 +195,8 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
     async close() {
       await worker.stop();
       await db.destroy();
+      await dispatcher.close();
+      redis.disconnect();
     },
   };
 }
@@ -212,6 +233,21 @@ async function connectRedis(redisUrl: string): Promise<Redis> {
     redis.disconnect();
     throw new Error(`Redis is not reachable at ${hostOf(redisUrl)}; run \`pnpm deps:up\``, { cause: err });
   }
+}
+
+/**
+ * A Redis connection the process can run without: it connects in the
+ * background and keeps reconnecting, and commands fail at once while it is
+ * down instead of queueing, so their callers fall back.
+ */
+function connectOptionalRedis(redisUrl: string): Redis {
+  const redis = new Redis(redisUrl, { lazyConnect: true, enableOfflineQueue: false, maxRetriesPerRequest: 1 });
+  redis.on('error', (err: Error) => log('warn', 'redis connection error', { error: err }));
+  redis.connect().catch((err: unknown) => {
+    // Safe: callers fall back while it is down, and ioredis keeps reconnecting.
+    log('warn', `Redis is not reachable at ${hostOf(redisUrl)}; the worker runs without it until it is`, { error: err });
+  });
+  return redis;
 }
 
 /** Host and port only: connection URLs may carry a password. */

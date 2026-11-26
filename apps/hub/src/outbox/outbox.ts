@@ -5,6 +5,7 @@ import {
   applyCompletion,
   type CaseId,
   type DeadLetterReason,
+  type RemoteIdentifier,
   type StepName,
   type StepView,
   type VisitId,
@@ -12,7 +13,9 @@ import {
 import { readSteps, writeCaseStatus } from '../cases/case-status.js';
 import type { Clock } from '../clock.js';
 import type { AttemptOutcome, Database } from '../db/database.js';
-import type { AttemptFacts, StepOutcome } from '../steps/step-outcome.js';
+import type { AttemptFacts, FinalOutcome } from '../steps/step-outcome.js';
+import type { ReadRetry } from '../satusehat/transport.js';
+import { nextAttemptAt, type RetryPolicy } from './retry-policy.js';
 
 /** The token of one claim on a step. An outcome is applied only while it still matches (#8). */
 export type LeaseToken = Brand<string, 'LeaseToken'>;
@@ -33,6 +36,23 @@ export interface ClaimedStep {
   visitId: VisitId;
 }
 
+/** An attempt that ended transiently: how, what it saw, and the answer's `Retry-After`, if any. */
+export interface TransientEnd {
+  /** How the attempt ended, for its row in the attempt log. */
+  outcome: 'failed' | 'attempt_budget_exceeded';
+  /** What it used and saw. */
+  facts: AttemptFacts;
+  /** Its read retries. */
+  readRetries: readonly ReadRetry[];
+  /** The instant the `Retry-After` of the answer that ended the attempt named; null when there was none. */
+  retryAfter: Date | null;
+  /** A stale remote identifier of an earlier step, replaced by the one a search found (#10); null when none. */
+  refreshed: { step: StepName; remote: RemoteIdentifier } | null;
+}
+
+/** What storing a transient end did: the step waits to be retried, its retries are exhausted, or the claim had lost its lease. */
+export type TransientStored = 'retry_wait' | 'exhausted' | 'lease_lost';
+
 /**
  * The Postgres outbox (ADR 0002). A step row is its own outbox entry: the
  * transaction that makes a step eligible sets it `ready`, and workers take it
@@ -40,15 +60,17 @@ export interface ClaimedStep {
  */
 export interface Outbox {
   /**
-   * Claims the longest-waiting claimable step (`ready`, or `in_flight` with
-   * an expired lease), skipping rows other workers are claiming, under a new
-   * lease; `undefined` when there is none. Taking over an expired lease logs
-   * the expired attempt as `lease_expired`, in the same statement.
+   * Claims the longest-waiting claimable step (`ready`, `retry_wait` whose
+   * `available_at` has come, or `in_flight` with an expired lease), skipping
+   * rows other workers are claiming, under a new lease; `undefined` when
+   * there is none. Taking over an expired lease logs the expired attempt as
+   * `lease_expired`; when that was the last attempt allowed, the step is
+   * dead-lettered `RETRIES_EXHAUSTED` instead of claimed (#8).
    */
   claim(): Promise<ClaimedStep | undefined>;
   /**
    * Stores an attempt's outcome, fenced by its lease (#8), in one transaction
-   * with its row in the attempt log. Completion: the step becomes `completed`
+   * with its row in the attempt log, read retries included. Completion: the step becomes `completed`
    * with its remote identifier and pins, and the next step `ready` if its
    * event is stored, else the case waits for it. Dead-lettering: the step and
    * its case become `dead_lettered` with the reason; the rest of the case is
@@ -57,18 +79,27 @@ export interface Outbox {
    * step over changes its token, and that claim logged this attempt as
    * `lease_expired`.
    */
-  storeOutcome(step: ClaimedStep, outcome: StepOutcome): Promise<boolean>;
+  storeOutcome(step: ClaimedStep, outcome: FinalOutcome, readRetries: readonly ReadRetry[]): Promise<boolean>;
   /**
-   * Logs an attempt that ended without an outcome, unless a takeover already
-   * logged it as `lease_expired`. The step is unchanged: it stays `in_flight`
-   * until its lease expires (retries land with #35).
+   * Stores an attempt that ended transiently, fenced by its lease, with its
+   * row in the attempt log: the step waits in `retry_wait` until the retry
+   * policy's next attempt time, or, if this was the last attempt allowed, it
+   * and its case are dead-lettered `RETRIES_EXHAUSTED`. A claim that lost its
+   * lease changes and logs nothing, as for `storeOutcome`.
    */
-  recordFailedAttempt(step: ClaimedStep, facts: AttemptFacts): Promise<void>;
+  storeTransient(step: ClaimedStep, end: TransientEnd): Promise<TransientStored>;
 }
 
 /** Builds the outbox over the hub database. Only the composition root calls this. */
-export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs: number }): Outbox {
-  const { db, clock, leaseMs } = deps;
+export function createOutbox(deps: {
+  db: Kysely<Database>;
+  clock: Clock;
+  leaseMs: number;
+  retry: RetryPolicy;
+  /** Draws from [0, 1), for the backoff's jitter. */
+  random: () => number;
+}): Outbox {
+  const { db, clock, leaseMs, retry, random } = deps;
 
   /** The insert of the attempt's row in the attempt log; the caller executes it. */
   const attemptRow = (
@@ -76,7 +107,7 @@ export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs
     trx: Kysely<Database>,
     step: ClaimedStep,
     endedAt: Date,
-    row: { outcome: AttemptOutcome; errorCode: DeadLetterReason | null; facts: AttemptFacts },
+    row: { outcome: AttemptOutcome; errorCode: DeadLetterReason | null; facts: AttemptFacts; readRetries: readonly ReadRetry[] },
   ) =>
     trx
       .insertInto('attempt')
@@ -92,6 +123,7 @@ export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs
         values_used: JSON.stringify(row.facts.valuesUsed),
         lookup_methods: JSON.stringify(row.facts.lookupMethods),
         violations: JSON.stringify(row.facts.violations),
+        read_retries: JSON.stringify(row.readRetries),
       });
 
   /** The fence: this step, still in flight, still under this claim's token. */
@@ -103,51 +135,106 @@ export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs
       .where('state', '=', 'in_flight')
       .where('lease_token', '=', step.leaseToken);
 
-  return {
-    async claim() {
+  /** Ends a claim's hold on its step. */
+  const released = { lease_token: null, lease_expires_at: null, claimed_at: null };
+
+  /**
+   * Writes the steps of `next` that differ from `before`, other than `seq`
+   * (which the caller changed through the fence), and the case status.
+   */
+  async function writeRest(trx: Transaction<Database>, caseId: CaseId, seq: number, before: readonly StepView[], next: readonly StepView[], now: Date) {
+    for (const s of next) {
+      if (s.seq === seq || before.find((b) => b.seq === s.seq)?.state === s.state) continue;
+      await trx.updateTable('step').set({ state: s.state, updated_at: now }).where('case_id', '=', caseId).where('seq', '=', s.seq).execute();
+    }
+    await writeCaseStatus(trx, caseId, next, now);
+  }
+
+  const withState = (steps: readonly StepView[], seq: number, state: StepView['state']) =>
+    steps.map((s): StepView => (s.seq === seq ? { seq, state } : s));
+
+  /**
+   * One claim try in one transaction: `undefined` when nothing is claimable,
+   * `'again'` when the row picked was dead-lettered (or its case was busy) instead.
+   */
+  const claimOnce = () =>
+    db.transaction().execute(async (trx): Promise<ClaimedStep | 'again' | undefined> => {
       const now = clock();
-      // One statement: pick the oldest claimable row, skip rows another
-      // worker has locked, and take it under a fresh lease token. An expired
-      // lease is claimable again; the stale holder's outcome then fails the fence.
-      // Taking one over logs its attempt as `lease_expired` (#8), ended when
-      // the lease ran out, unless that attempt already logged its own failure.
+      // Pick the oldest claimable row and lock it, skipping rows another worker has locked.
+      const { rows: picked } = await sql<{ case_id: string; seq: number; state: string; attempts: number }>`
+        select case_id, seq, state, attempts
+          from step
+         where state = 'ready'
+            or (state = 'retry_wait' and available_at <= ${now})
+            or (state = 'in_flight' and lease_expires_at <= ${now})
+         order by updated_at
+         limit 1
+           for update skip locked
+      `.execute(trx);
+      const [row] = picked;
+      if (!row) return undefined;
+      // Read back from the row the select just locked.
+      const caseId = row.case_id as CaseId;
+
+      if (row.state === 'in_flight') {
+        // Taking an expired lease over logs its attempt as `lease_expired` (#8), ended when the
+        // lease ran out, unless that attempt already logged its own ending.
+        await sql`
+          insert into attempt (case_id, seq, attempt, started_at, ended_at, outcome, values_used, lookup_methods, violations, read_retries)
+          select case_id, seq, attempts, claimed_at, lease_expires_at, 'lease_expired', '{}', '{}', '[]', '[]'
+            from step where case_id = ${caseId} and seq = ${row.seq}
+          on conflict (case_id, seq, attempt) do nothing
+        `.execute(trx);
+        if (row.attempts >= retry.maxAttempts) {
+          // Lock the case as storeOutcome does; a case another transaction holds is left for the next try.
+          const kase = await trx.selectFrom('case').select('id').where('id', '=', caseId).forUpdate().skipLocked().executeTakeFirst();
+          if (!kase) return 'again';
+          const before = await readSteps(trx, caseId);
+          await trx
+            .updateTable('step')
+            .set({ state: 'dead_lettered', dead_letter_reason: 'RETRIES_EXHAUSTED', ...released, updated_at: now })
+            .where('case_id', '=', caseId)
+            .where('seq', '=', row.seq)
+            .execute();
+          await writeRest(trx, caseId, row.seq, before, withState(before, row.seq, 'dead_lettered'), now);
+          return 'again';
+        }
+      }
+
       // The row type brands what the columns hold: ids Postgres generated or
       // ingest stored from a validated event, and the token gen_random_uuid() just issued.
       const { rows } = await sql<Omit<ClaimedStep, 'startedAt'>>`
-        with picked as (
-          select case_id, seq, state, attempts, claimed_at, lease_expires_at
-            from step
-           where state = 'ready'
-              or (state = 'in_flight' and lease_expires_at <= ${now})
-           order by updated_at
-           limit 1
-             for update skip locked
-        ), expired as (
-          insert into attempt (case_id, seq, attempt, started_at, ended_at, outcome, values_used, lookup_methods, violations)
-          select case_id, seq, attempts, claimed_at, lease_expires_at, 'lease_expired', '{}', '{}', '[]'
-            from picked
-           where state = 'in_flight'
-          on conflict (case_id, seq, attempt) do nothing
-        )
         update step s
            set state = 'in_flight',
                attempts = s.attempts + 1,
                lease_token = gen_random_uuid(),
                lease_expires_at = ${new Date(now.getTime() + leaseMs)},
                claimed_at = ${now},
+               available_at = null,
                updated_at = ${now}
-          from picked, "case" c
-         where s.case_id = picked.case_id
-           and s.seq = picked.seq
+          from "case" c
+         where s.case_id = ${caseId}
+           and s.seq = ${row.seq}
            and c.id = s.case_id
         returning s.case_id as "caseId", s.seq, s.name, s.attempts as attempt, s.lease_token as "leaseToken",
                   c.source_system_id as "sourceSystemId", c.organization_id as "organizationId", c.visit_id as "visitId"
-      `.execute(db);
-      const [row] = rows;
-      return row && { ...row, startedAt: now };
+      `.execute(trx);
+      const [claimed] = rows;
+      if (!claimed) throw new Error(`invariant broken: step ${caseId}/${row.seq}, locked for the claim, was not updated`);
+      return { ...claimed, startedAt: now };
+    });
+
+  return {
+    async claim() {
+      // Rows dead-lettered on the way are skipped; a few tries bound the loop when a case stays busy.
+      for (let tries = 0; tries < 10; tries++) {
+        const claimed = await claimOnce();
+        if (claimed !== 'again') return claimed;
+      }
+      return undefined;
     },
 
-    storeOutcome: (step, outcome) =>
+    storeOutcome: (step, outcome, readRetries) =>
       // Lock the case row (as ingest does, so an arriving event and an outcome
       // apply one at a time), change the step only if the claim still holds
       // its lease, store the re-derived case status, and log the attempt.
@@ -155,7 +242,7 @@ export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs
         const now = clock();
         await trx.selectFrom('case').select('id').where('id', '=', step.caseId).forUpdate().executeTakeFirstOrThrow();
         const before = await readSteps(trx, step.caseId);
-        const { change, after, outcome: logged, errorCode } =
+        const { change, next, outcome: logged, errorCode } =
           'completed' in outcome
             ? {
                 change: {
@@ -165,42 +252,52 @@ export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs
                   remote_version: outcome.completed.version,
                   pins: JSON.stringify(outcome.pins),
                 },
-                after: () => applyCompletion(before, step.seq),
+                next: () => applyCompletion(before, step.seq),
                 outcome: 'completed' as const,
                 errorCode: null,
               }
             : {
                 change: { state: 'dead_lettered' as const, dead_letter_reason: outcome.deadLettered },
-                after: () => before.map((s): StepView => (s.seq === step.seq ? { seq: s.seq, state: 'dead_lettered' } : s)),
+                next: () => withState(before, step.seq, 'dead_lettered'),
                 outcome: 'dead_lettered' as const,
                 errorCode: outcome.deadLettered,
               };
-        const updated = await holding(trx, step)
-          .set(change)
-          .set({ lease_token: null, lease_expires_at: null, claimed_at: null, updated_at: now })
-          .executeTakeFirst();
+        const updated = await holding(trx, step).set(change).set({ ...released, updated_at: now }).executeTakeFirst();
         if (updated.numUpdatedRows === 0n) return false;
-
-        const next = after();
-        for (const s of next) {
-          if (s.seq === step.seq || before.find((b) => b.seq === s.seq)?.state === s.state) continue;
-          await trx
-            .updateTable('step')
-            .set({ state: s.state, updated_at: now })
-            .where('case_id', '=', step.caseId)
-            .where('seq', '=', s.seq)
-            .execute();
-        }
-        await writeCaseStatus(trx, step.caseId, next, now);
-        await attemptRow(trx, step, now, { outcome: logged, errorCode, facts: outcome.attempt }).execute();
+        await writeRest(trx, step.caseId, step.seq, before, next(), now);
+        await attemptRow(trx, step, now, { outcome: logged, errorCode, facts: outcome.attempt, readRetries }).execute();
         return true;
       }),
 
-    async recordFailedAttempt(step, facts) {
-      // A stale holder can fail after a takeover logged its attempt as `lease_expired`; that ending stands.
-      await attemptRow(db, step, clock(), { outcome: 'failed', errorCode: null, facts })
-        .onConflict((oc) => oc.columns(['case_id', 'seq', 'attempt']).doNothing())
-        .execute();
-    },
+    storeTransient: (step, end) =>
+      db.transaction().execute(async (trx): Promise<TransientStored> => {
+        const now = clock();
+        await trx.selectFrom('case').select('id').where('id', '=', step.caseId).forUpdate().executeTakeFirstOrThrow();
+        const before = await readSteps(trx, step.caseId);
+        const retryAt = nextAttemptAt(retry, { attempt: step.attempt, endedAt: now, retryAfter: end.retryAfter }, random);
+        const exhausted = retryAt === 'exhausted';
+        const updated = await holding(trx, step)
+          .set(
+            exhausted
+              ? { state: 'dead_lettered', dead_letter_reason: 'RETRIES_EXHAUSTED' }
+              : { state: 'retry_wait', available_at: retryAt },
+          )
+          .set({ ...released, updated_at: now })
+          .executeTakeFirst();
+        if (updated.numUpdatedRows === 0n) return 'lease_lost';
+        if (end.refreshed) {
+          const { step: name, remote } = end.refreshed;
+          await trx
+            .updateTable('step')
+            .set({ remote_type: remote.type, remote_id: remote.id, remote_version: remote.version, updated_at: now })
+            .where('case_id', '=', step.caseId)
+            .where('name', '=', name)
+            .where('state', '=', 'completed')
+            .execute();
+        }
+        await writeRest(trx, step.caseId, step.seq, before, withState(before, step.seq, exhausted ? 'dead_lettered' : 'retry_wait'), now);
+        await attemptRow(trx, step, now, { outcome: end.outcome, errorCode: exhausted ? 'RETRIES_EXHAUSTED' : null, facts: end.facts, readRetries: end.readRetries }).execute();
+        return exhausted ? 'exhausted' : 'retry_wait';
+      }),
   };
 }

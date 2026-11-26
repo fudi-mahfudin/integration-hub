@@ -19,14 +19,14 @@ export interface BootedMock {
   close(): Promise<void>;
 }
 
-/** Boots the mock SATUSEHAT through its composition root on a random port. */
-export async function bootMock(): Promise<BootedMock> {
+/** Boots the mock SATUSEHAT through its composition root on a random port; its tokens last `tokenExpiresInSeconds` (default 3599). */
+export async function bootMock(options: { tokenExpiresInSeconds?: number } = {}): Promise<BootedMock> {
   const mock = await createMockSatusehat(
     {
       host: '127.0.0.1',
       port: 0,
       worldPath: DEFAULT_WORLD_PATH,
-      tokenExpiresInSeconds: 3599,
+      tokenExpiresInSeconds: options.tokenExpiresInSeconds ?? 3599,
       tokenThrottleWindowSeconds: 60,
     },
     { clock: () => new Date() },

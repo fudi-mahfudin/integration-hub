@@ -1,9 +1,11 @@
 import type { Kysely } from 'kysely';
+import type { RemoteIdentifier } from '../cases/case-model.js';
 import type { UpdateVisitPins } from '../cases/pins.js';
 import type { Database } from '../db/database.js';
 import { readVisitFinished, readVisitStarted } from '../ingestion/event-schema.js';
 import type { ClaimedStep } from '../outbox/outbox.js';
-import type { SatusehatClient } from '../satusehat/client.js';
+import type { FoundEncounter, SatusehatClient, VisitIdentifier } from '../satusehat/client.js';
+import { SatusehatRequestError } from '../satusehat/errors.js';
 import { platformTime } from '../satusehat/platform-time.js';
 import { finishedEncounterResource } from '../satusehat/resources.js';
 import { validateStepPayload } from '../validation/validation.js';
@@ -27,7 +29,9 @@ type UpdateVisitAttempt = AttemptFacts & { valuesUsed: Partial<UpdateVisitPins> 
  * stored Encounter; if it is already `finished` at this end, a previous
  * attempt's PUT landed and is adopted, otherwise the Encounter is PUT.
  * Either way the step stores the Encounter's new `meta.versionId` and pins
- * the values it re-sent.
+ * the values it re-sent. A stored id SATUSEHAT no longer holds (the search
+ * finds another, or the PUT answers 404/410 and a re-search finds one) is
+ * refreshed and the step retried; none found is `REMOTE_RECORD_MISSING` (#10).
  */
 export async function updateVisit(deps: UpdateVisitDeps, step: ClaimedStep): Promise<StepOutcome> {
   const attempt: UpdateVisitAttempt = { httpStatus: null, valuesUsed: {}, lookupMethods: {}, violations: [] };
@@ -76,21 +80,46 @@ async function attemptUpdateVisit(deps: UpdateVisitDeps, step: ClaimedStep, atte
   });
   if (attempt.violations.length > 0) return rejected(attempt);
 
-  const found = await satusehat.findEncounters(identifier);
-  // The client resolves a search only on 200 and an update only on 200; any other status throws.
-  attempt.httpStatus = 200;
-  if (found.length > 1) return { deadLettered: 'REMOTE_RECORD_AMBIGUOUS', attempt };
-  const [current] = found;
-  if (current?.remote.id !== stored.id) {
-    // A stale or missing stored id is re-searched and classified with #35; until then the attempt fails.
-    throw new Error(`the visit's Encounter at SATUSEHAT is ${current ? `"${current.remote.id}"` : 'missing'}, not the stored "${stored.id}"`);
-  }
+  // Search-then-update: the search also checks the stored id is still SATUSEHAT's.
+  const current = await reSearch(satusehat, identifier, stored, attempt);
+  if (!('remote' in current)) return current;
   if (current.status === 'finished' && endsAt(current.periodEnd, finishedAt)) {
     return { completed: current.remote, pins, attempt };
   }
 
-  const updated = await satusehat.updateEncounter(stored.id, encounter);
-  return { completed: updated, pins, attempt };
+  try {
+    const updated = await satusehat.updateEncounter(stored.id, encounter);
+    attempt.httpStatus = 200;
+    return { completed: updated, pins, attempt };
+  } catch (err) {
+    // A 404/410 on the stored id: it went stale between the search and the PUT (#10).
+    if (!(err instanceof SatusehatRequestError) || (err.status !== 404 && err.status !== 410)) throw err;
+    const found = await reSearch(satusehat, identifier, stored, attempt);
+    // The search still finds the stored id: it is refreshed all the same, and the PUT tried again.
+    return 'remote' in found ? { staleRemote: { step: 'create_visit', was: stored, now: found.remote }, attempt } : found;
+  }
+}
+
+/**
+ * Searches the visit's Encounters by its business identifier (#10): the
+ * stored one, if found alone; else none is `REMOTE_RECORD_MISSING`, more than
+ * one `REMOTE_RECORD_AMBIGUOUS`, and exactly one other means the stored id is
+ * stale.
+ */
+async function reSearch(
+  satusehat: SatusehatClient,
+  identifier: VisitIdentifier,
+  stored: RemoteIdentifier,
+  attempt: UpdateVisitAttempt,
+): Promise<FoundEncounter | StepOutcome> {
+  const found = await satusehat.findEncounters(identifier);
+  // The client resolves a search only on 200; any other status throws.
+  attempt.httpStatus = 200;
+  const [current] = found;
+  if (found.length > 1) return { deadLettered: 'REMOTE_RECORD_AMBIGUOUS', attempt };
+  if (!current) return { deadLettered: 'REMOTE_RECORD_MISSING', attempt };
+  if (current.remote.id !== stored.id) return { staleRemote: { step: 'create_visit', was: stored, now: current.remote }, attempt };
+  return current;
 }
 
 /**

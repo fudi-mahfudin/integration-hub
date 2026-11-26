@@ -1,4 +1,4 @@
-import type { DeadLetterReason, RemoteIdentifier } from '../cases/case-model.js';
+import type { DeadLetterReason, RemoteIdentifier, StepName } from '../cases/case-model.js';
 import type { CreateVisitPins, StepPins, SubmitDispensePins, SubmitPrescriptionPins, UpdateVisitPins } from '../cases/pins.js';
 import type { Violation } from '../validation/validation.js';
 
@@ -21,12 +21,31 @@ export interface AttemptFacts {
 }
 
 /**
- * How an attempt at a step ended: with the record it stored at SATUSEHAT and
- * the values it pins, or permanently failed; either way with its attempt facts.
+ * How an attempt at a step ended for good: with the record it stored at
+ * SATUSEHAT and the values it pins, or permanently failed; either way with
+ * its attempt facts.
  */
-export type StepOutcome =
+export type FinalOutcome =
   | { completed: RemoteIdentifier; pins: StepPins; attempt: AttemptFacts }
   | { deadLettered: DeadLetterReason; attempt: AttemptFacts };
+
+/**
+ * A remote identifier an earlier step stored is stale (#10): SATUSEHAT no
+ * longer holds it, and a search by the business identifier found exactly one
+ * record, `now`. The stored id is refreshed to it (the old one, `was`, is
+ * logged) and the attempt ends transient.
+ */
+export interface StaleRemote {
+  /** The step that stored the identifier. */
+  step: StepName;
+  /** The stored identifier SATUSEHAT no longer holds. */
+  was: RemoteIdentifier;
+  /** The one record the search found. */
+  now: RemoteIdentifier;
+}
+
+/** How an attempt at a step ended: for good, or on a stale remote identifier, which is retried. */
+export type StepOutcome = FinalOutcome | { staleRemote: StaleRemote; attempt: AttemptFacts };
 
 /**
  * An attempt that ended without an outcome (a request failed, a lookup could
@@ -44,7 +63,7 @@ export class AttemptFailed extends Error {
 }
 
 /** Dead-letters a payload the Validation module rejected, with its first violation in rule order. */
-export function rejected(attempt: AttemptFacts): StepOutcome {
+export function rejected(attempt: AttemptFacts): FinalOutcome {
   const [first] = attempt.violations;
   if (!first) throw new Error('rejected() needs at least one violation');
   return { deadLettered: first.code, attempt };

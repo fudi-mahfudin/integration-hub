@@ -98,6 +98,7 @@ describe('create visit: an accepted visit.started becomes an Encounter at the mo
         valuesUsed: sent,
         lookupMethods: { patient: 'nik', practitioner: 'nik' },
         violations: [],
+        readRetries: [],
       },
     ]);
     const [attempt] = createVisitStep?.attemptLog ?? [];
@@ -205,11 +206,20 @@ describe('create visit: an accepted visit.started becomes an Encounter at the mo
     expectAtMostOneStepInMotion(view);
   });
 
-  it('logs an attempt that fails without an outcome with what it had resolved, and leaves the step in flight', async () => {
-    // The practitioner search answers 500 once, after the patient was found: the attempt ends without an outcome.
+  it('logs an attempt that fails without an outcome with what it had resolved, and sends the step to retry_wait', async () => {
+    // The practitioner search answers 503 on all three tries, after the patient was found: the attempt ends
+    // without an outcome. Its Retry-After keeps the step waiting while the test reads it.
     await mock.client.setFaults({
       seed: 32,
-      rules: [{ id: 'practitioner-search-fails', match: { method: 'GET', resourceType: 'Practitioner' }, firstN: 1, kind: 'http_500' }],
+      rules: [
+        {
+          id: 'practitioner-search-fails',
+          match: { method: 'GET', resourceType: 'Practitioner' },
+          firstN: 3,
+          kind: 'http_503',
+          params: { retryAfter: { form: 'seconds', seconds: 30 } },
+        },
+      ],
     });
     const event = worldVisitStarted();
 
@@ -218,13 +228,13 @@ describe('create visit: an accepted visit.started becomes an Encounter at the mo
     });
     await mock.client.setFaults({ seed: 32, rules: [] });
 
-    expect(view.steps[0]).toMatchObject({ state: 'in_flight', deadLetterReason: null, pins: null });
+    expect(view.steps[0]).toMatchObject({ state: 'retry_wait', deadLetterReason: null, pins: null });
     expect(view.steps[0]?.attemptLog).toEqual([
       expect.objectContaining({
         attempt: 1,
         outcome: 'failed',
         errorCode: null,
-        httpStatus: 500,
+        httpStatus: 503,
         valuesUsed: { locationId: worldVisit.location.id, patientIhsNumber: worldVisit.patient.ihsNumber },
         lookupMethods: { patient: 'nik' },
       }),

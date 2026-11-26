@@ -36,7 +36,7 @@ async function bootWithKfaAt(kfaPath: string) {
   const mock = await bootMock();
   const kfa = await bootBrokenKfa();
   const database = await createFreshDatabase();
-  const env = { ...worldEnv(mock.baseUrl, database.url), SATUSEHAT_KFA_URL: new URL(kfaPath, kfa.baseUrl).href, SATUSEHAT_KFA_TIMEOUT_MS: '200' };
+  const env = { ...worldEnv(mock.baseUrl, database.url), SATUSEHAT_KFA_URL: new URL(kfaPath, kfa.baseUrl).href, SATUSEHAT_CALL_TIMEOUT_MS: '200' };
   const hub = await bootHub(env);
   const worker = await bootWorker(env);
   return {
@@ -90,14 +90,23 @@ describe.each([
   });
   afterAll(async () => booted?.close());
 
-  it('ends the attempt without an outcome (transient): the step stays in flight, is not dead-lettered, and sends nothing', async () => {
+  it('retries the read in-process, then ends the attempt transient: the step waits to be retried, is not dead-lettered, and sends nothing', async () => {
     const { visit, view } = await booted.run((v) => (v.steps[1]?.attemptLog.length ?? 0) > 0);
 
     expect(view.status).toBe('active');
-    expect(view.steps[1]).toMatchObject({ state: 'in_flight', deadLetterReason: null, pins: null });
-    expect(view.steps[1]?.attemptLog).toEqual([
-      expect.objectContaining({ outcome: 'failed', errorCode: null, httpStatus, valuesUsed: { kfaCode: '92000001' } }),
-    ]);
+    // The first backoff is drawn from [0, 1s): the next attempt may already have been claimed.
+    expect(view.steps[1]).toMatchObject({ state: expect.stringMatching(/^(retry_wait|in_flight)$/), deadLetterReason: null, pins: null });
+    const failure = httpStatus === null ? 'timeout' : 'status';
+    expect(view.steps[1]?.attemptLog[0]).toEqual(
+      expect.objectContaining({
+        attempt: 1,
+        outcome: 'failed',
+        errorCode: null,
+        httpStatus,
+        valuesUsed: { kfaCode: '92000001' },
+        readRetries: [1, 2].map((n) => ({ call: expect.stringMatching(/^GET \/.*products$/), try: n, failure, httpStatus })),
+      }),
+    );
     expect(await booted.mock.client.log({ visitKey: visit.visitId, resourceType: 'MedicationRequest' })).toEqual([]);
   });
 });

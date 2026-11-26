@@ -48,7 +48,7 @@ Use it through the typed client, `@integration-hub/mock-satusehat/client`.
 |---|---|
 | `GET /__mock/log?visitKey=&resourceType=&afterSeq=&limit=` | Submission log entries (`limit` 1-10000) |
 | `GET /__mock/log.ndjson` | The whole log, one entry per line |
-| `GET /__mock/report` | Duplicate submissions (more than one create per business identifier, or more than one applied update of one record), out-of-order effects and overlapping in-flight requests per visit, and the fault seed |
+| `GET /__mock/report` | Duplicate submissions (more than one create per business identifier, or more than one applied update of one record), out-of-order effects (in arrival order: a request applied then cut is logged late) and overlapping in-flight requests per visit, and the fault seed |
 | `POST /__mock/reset` | Clears records, log, fault rules, tokens and throttle state; drops every parked or delayed request unanswered and unlogged; reloads the world |
 | `POST /__mock/seed` | Adds world entries until the next reset |
 | `POST /__mock/tokens/revoke` | Invalidates every issued token |
