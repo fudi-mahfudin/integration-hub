@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node", "fhir"],
+    "resolveJsonModule": true
+  },
+  "include": ["src", "test", "scripts", "vitest.config.ts"]
+}

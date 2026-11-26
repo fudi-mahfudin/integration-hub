@@ -112,6 +112,10 @@ _Avoid_: Replacement, swap
 A synthetic response that the mock SATUSEHAT sends in place of the real platform, success or error, filled with fake values. Each fixture records where its shape came from and whether that shape has been confirmed against the sandbox.
 _Avoid_: Replay fixture (replay is an operator action on a dead-lettered case), recording (that is a real sandbox response, which is never committed)
 
+**World dataset**:
+The one synthetic set of fake national records (KFA products, patients, practitioners, locations and the organization) that the mock SATUSEHAT answers from, the source simulator draws visits from, and the hub's mapping seed points at. It includes deliberate near-miss patients for the lookup fallbacks and canary values for redaction tests. Its size is a big-run commitment.
+_Avoid_: Test data, fixtures (a fixture is a response, not a record), seed data (seeding adds to the world until the next reset)
+
 **Contract check**:
 A manual comparison of how the real SATUSEHAT sandbox and the mock SATUSEHAT answer the same requests, by shape only (status, headers, fields and their types), never by value. It is how a change in the real platform is noticed.
 _Avoid_: Drift check (drift is avoided for divergence), integration test
