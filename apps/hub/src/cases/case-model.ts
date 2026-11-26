@@ -1,5 +1,6 @@
 /** The case and step state machine of #8, as pure functions over a case's steps. */
 import type { Brand } from '../brand.js';
+import type { RuleCode } from '../validation/validation.js';
 
 /** The hub's id for a case. */
 export type CaseId = Brand<string, 'CaseId'>;
@@ -49,11 +50,12 @@ export interface RemoteIdentifier {
 }
 
 /**
- * Why a step was dead-lettered: a stable code on the step (#8, #10).
+ * Why a step was dead-lettered: a stable code on the step (#8, #10): the
+ * Validation module's rule codes (#9), or a lookup that found no one.
  * `REMOTE_RECORD_AMBIGUOUS`: search-then-create found more than one record
  * under the step's business identifier (ADR 0005).
  */
-export type DeadLetterReason = 'MAPPING_MISSING' | 'PATIENT_NOT_FOUND' | 'PRACTITIONER_NOT_FOUND' | 'REMOTE_RECORD_AMBIGUOUS';
+export type DeadLetterReason = RuleCode | 'PATIENT_NOT_FOUND' | 'PRACTITIONER_NOT_FOUND' | 'REMOTE_RECORD_AMBIGUOUS';
 
 /** A step's position and state: all the state machine looks at. */
 export interface StepView {

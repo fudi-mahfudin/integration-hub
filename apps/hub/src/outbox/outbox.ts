@@ -5,14 +5,14 @@ import {
   applyCompletion,
   type CaseId,
   type DeadLetterReason,
-  type RemoteIdentifier,
   type StepName,
   type StepView,
   type VisitId,
 } from '../cases/case-model.js';
 import { readSteps, writeCaseStatus } from '../cases/case-status.js';
 import type { Clock } from '../clock.js';
-import type { Database } from '../db/database.js';
+import type { AttemptOutcome, Database } from '../db/database.js';
+import type { AttemptFacts, StepOutcome } from '../steps/step-outcome.js';
 
 /** The token of one claim on a step. An outcome is applied only while it still matches (#8). */
 export type LeaseToken = Brand<string, 'LeaseToken'>;
@@ -24,6 +24,8 @@ export interface ClaimedStep {
   name: StepName;
   /** This claim's attempt number: the counter increments on claim (#8). */
   attempt: number;
+  /** When the claim was taken: the attempt's start. */
+  startedAt: Date;
   leaseToken: LeaseToken;
   sourceSystemId: SourceSystemId;
   /** The case's organization, from its source system's registration (#10). */
@@ -44,52 +46,50 @@ export interface Outbox {
    */
   claim(): Promise<ClaimedStep | undefined>;
   /**
-   * Lease-fenced completion (#8), one transaction: the step becomes
-   * `completed` with its remote identifier, and the next step `ready` if its
-   * event is stored, else the case waits for it. Resolves to `false`, having
-   * changed nothing, when the claim no longer holds the lease.
+   * Stores an attempt's outcome, fenced by its lease (#8), in one transaction
+   * with its row in the attempt log. Completion: the step becomes `completed`
+   * with its remote identifier and pins, and the next step `ready` if its
+   * event is stored, else the case waits for it. Dead-lettering: the step and
+   * its case become `dead_lettered` with the reason; the rest of the case is
+   * held. Resolves to `false` when the claim no longer holds the lease: the
+   * step is unchanged and the attempt is logged as `discarded`.
    */
-  complete(step: ClaimedStep, remote: RemoteIdentifier): Promise<boolean>;
+  storeOutcome(step: ClaimedStep, outcome: StepOutcome): Promise<boolean>;
   /**
-   * Lease-fenced permanent failure: the step and its case become
-   * `dead_lettered` with `reason`; the rest of the case is held. Resolves to
-   * `false`, having changed nothing, when the claim no longer holds the lease.
+   * Logs an attempt that ended without an outcome. The step is unchanged: it
+   * stays `in_flight` until its lease expires (retries land with #35).
    */
-  deadLetter(step: ClaimedStep, reason: DeadLetterReason): Promise<boolean>;
+  recordFailedAttempt(step: ClaimedStep, facts: AttemptFacts): Promise<void>;
 }
 
 /** Builds the outbox over the hub database. Only the composition root calls this. */
 export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs: number }): Outbox {
   const { db, clock, leaseMs } = deps;
 
-  /**
-   * Locks the case row (as ingest does, so an arriving event and an outcome
-   * apply one at a time), applies `change` to the step only if the claim still
-   * holds its lease, then stores the re-derived case status.
-   */
-  const fenced = (
+  /** Appends the attempt's row to the attempt log. */
+  const logAttempt = (
+    // A transaction is a Kysely too: the row commits with whatever the caller's transaction changed.
+    trx: Kysely<Database>,
     step: ClaimedStep,
-    change: (trx: Transaction<Database>, now: Date) => Promise<boolean>,
-    nextSteps: (steps: StepView[]) => StepView[],
-  ): Promise<boolean> =>
-    db.transaction().execute(async (trx) => {
-      const now = clock();
-      await trx.selectFrom('case').select('id').where('id', '=', step.caseId).forUpdate().executeTakeFirstOrThrow();
-      const before = await readSteps(trx, step.caseId);
-      if (!(await change(trx, now))) return false;
-      const after = nextSteps(before);
-      for (const s of after) {
-        if (s.seq === step.seq || before.find((b) => b.seq === s.seq)?.state === s.state) continue;
-        await trx
-          .updateTable('step')
-          .set({ state: s.state, updated_at: now })
-          .where('case_id', '=', step.caseId)
-          .where('seq', '=', s.seq)
-          .execute();
-      }
-      await writeCaseStatus(trx, step.caseId, after, now);
-      return true;
-    });
+    endedAt: Date,
+    row: { outcome: AttemptOutcome; errorCode: DeadLetterReason | null; facts: AttemptFacts },
+  ) =>
+    trx
+      .insertInto('attempt')
+      .values({
+        case_id: step.caseId,
+        seq: step.seq,
+        attempt: step.attempt,
+        started_at: step.startedAt,
+        ended_at: endedAt,
+        outcome: row.outcome,
+        error_code: row.errorCode,
+        http_status: row.facts.httpStatus,
+        values_used: JSON.stringify(row.facts.valuesUsed),
+        lookup_methods: JSON.stringify(row.facts.lookupMethods),
+        violations: JSON.stringify(row.facts.violations),
+      })
+      .execute();
 
   /** The fence: this step, still in flight, still under this claim's token. */
   const holding = (trx: Transaction<Database>, step: ClaimedStep) =>
@@ -108,7 +108,7 @@ export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs
       // lease is claimable again; the stale holder's outcome then fails the fence.
       // The row type brands what the columns hold: ids Postgres generated or
       // ingest stored from a validated event, and the token gen_random_uuid() just issued.
-      const { rows } = await sql<ClaimedStep>`
+      const { rows } = await sql<Omit<ClaimedStep, 'startedAt'>>`
         with picked as (
           select case_id, seq
             from step
@@ -131,39 +131,64 @@ export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs
         returning s.case_id as "caseId", s.seq, s.name, s.attempts as attempt, s.lease_token as "leaseToken",
                   c.source_system_id as "sourceSystemId", c.organization_id as "organizationId", c.visit_id as "visitId"
       `.execute(db);
-      return rows[0];
+      const [row] = rows;
+      return row && { ...row, startedAt: now };
     },
 
-    complete: (step, remote) =>
-      fenced(
-        step,
-        async (trx, now) => {
-          const updated = await holding(trx, step)
-            .set({
-              state: 'completed',
-              remote_type: remote.type,
-              remote_id: remote.id,
-              remote_version: remote.version,
-              lease_token: null,
-              lease_expires_at: null,
-              updated_at: now,
-            })
-            .executeTakeFirst();
-          return updated.numUpdatedRows > 0n;
-        },
-        (steps) => applyCompletion(steps, step.seq),
-      ),
+    storeOutcome: (step, outcome) =>
+      // Lock the case row (as ingest does, so an arriving event and an outcome
+      // apply one at a time), change the step only if the claim still holds
+      // its lease, store the re-derived case status, and log the attempt.
+      db.transaction().execute(async (trx) => {
+        const now = clock();
+        await trx.selectFrom('case').select('id').where('id', '=', step.caseId).forUpdate().executeTakeFirstOrThrow();
+        const before = await readSteps(trx, step.caseId);
+        const { change, after, outcome: logged, errorCode } =
+          'completed' in outcome
+            ? {
+                change: {
+                  state: 'completed' as const,
+                  remote_type: outcome.completed.type,
+                  remote_id: outcome.completed.id,
+                  remote_version: outcome.completed.version,
+                  pins: JSON.stringify(outcome.pins),
+                },
+                after: () => applyCompletion(before, step.seq),
+                outcome: 'completed' as const,
+                errorCode: null,
+              }
+            : {
+                change: { state: 'dead_lettered' as const, dead_letter_reason: outcome.deadLettered },
+                after: () => before.map((s): StepView => (s.seq === step.seq ? { seq: s.seq, state: 'dead_lettered' } : s)),
+                outcome: 'dead_lettered' as const,
+                errorCode: outcome.deadLettered,
+              };
+        const updated = await holding(trx, step)
+          .set(change)
+          .set({ lease_token: null, lease_expires_at: null, updated_at: now })
+          .executeTakeFirst();
+        if (updated.numUpdatedRows === 0n) {
+          await logAttempt(trx, step, now, { outcome: 'discarded', errorCode, facts: outcome.attempt });
+          return false;
+        }
 
-    deadLetter: (step, reason) =>
-      fenced(
-        step,
-        async (trx, now) => {
-          const updated = await holding(trx, step)
-            .set({ state: 'dead_lettered', dead_letter_reason: reason, lease_token: null, lease_expires_at: null, updated_at: now })
-            .executeTakeFirst();
-          return updated.numUpdatedRows > 0n;
-        },
-        (steps) => steps.map((s) => (s.seq === step.seq ? { seq: s.seq, state: 'dead_lettered' } : s)),
-      ),
+        const next = after();
+        for (const s of next) {
+          if (s.seq === step.seq || before.find((b) => b.seq === s.seq)?.state === s.state) continue;
+          await trx
+            .updateTable('step')
+            .set({ state: s.state, updated_at: now })
+            .where('case_id', '=', step.caseId)
+            .where('seq', '=', s.seq)
+            .execute();
+        }
+        await writeCaseStatus(trx, step.caseId, next, now);
+        await logAttempt(trx, step, now, { outcome: logged, errorCode, facts: outcome.attempt });
+        return true;
+      }),
+
+    async recordFailedAttempt(step, facts) {
+      await logAttempt(db, step, clock(), { outcome: 'failed', errorCode: null, facts });
+    },
   };
 }

@@ -50,6 +50,26 @@ _Avoid_: Task, job, stage
 One try at carrying out a step. A step may take several attempts; a worker crashing mid-attempt still counts as one.
 _Avoid_: Try, run, execution
 
+**Step-time validation**:
+The check the hub's Validation module makes on what a step has built, just before the step sends it. A payload with any violation is not sent: the step is dead-lettered with the first violation in rule order (`MAPPING_MISSING`, `KFA_LEVEL_INVALID`, `UNSUPPORTED_THERAPEUTIC_SUBSTITUTION`, `SUBSTITUTION_MISMATCH`, `PAYLOAD_INVALID`), and every violation goes to the attempt log.
+_Avoid_: Ingest validation (that checks the source event and answers `422`), mock validation (that is the mock SATUSEHAT's own check, ADR 0006)
+
+**Violation**:
+One rule a step's payload breaks, found by step-time validation: a rule code, the FHIR path it concerns (if any), and a message naming the bad value.
+_Avoid_: Error (ambiguous with failures), issue (that is an OperationOutcome's)
+
+**Lookup method**:
+How a person's IHS number was found for an attempt: by NIK, or one of the documented fallbacks. It is recorded in the attempt log.
+_Avoid_: Match type, strategy
+
+**Attempt log**:
+A step's append-only record of its attempts: when each started and ended, its outcome, error code and HTTP status, the values it used, how each person was found, and every validation violation.
+_Avoid_: Submission log (that is the mock SATUSEHAT's record of requests), history, audit log
+
+**Pin**:
+A value a completed step sent, such as a patient's IHS number or a Location ID, stored with its remote identifier in the same transaction. Later steps of the case read pins, never the live mappings or lookups.
+_Avoid_: Snapshot, cache (a cache may lose a value; a pin is part of the case)
+
 **Lease**:
 A worker's time-limited claim on one step, taken when it starts an attempt. Only the worker holding the current lease may store the step's outcome; when a lease runs out, another worker may claim the step, and the first worker's late outcome is discarded.
 _Avoid_: Lock (that is the database's, and lasts one transaction), reservation

@@ -75,6 +75,36 @@ describe('create visit: an accepted visit.started becomes an Encounter at the mo
     expectAtMostOneStepInMotion(view);
   });
 
+  it('logs the attempt and pins the IHS numbers and Location ID it sent', async () => {
+    const event = worldVisitStarted();
+
+    const view = await settled(await send(event));
+
+    const sent = {
+      patientIhsNumber: worldVisit.patient.ihsNumber,
+      practitionerIhsNumber: worldVisit.physician.ihsNumber,
+      locationId: worldVisit.location.id,
+    };
+    const [createVisitStep, ...later] = view.steps;
+    expect(createVisitStep).toMatchObject({ state: 'completed', pins: sent });
+    expect(createVisitStep?.attemptLog).toEqual([
+      {
+        attempt: 1,
+        startedAt: expect.any(String),
+        endedAt: expect.any(String),
+        outcome: 'completed',
+        errorCode: null,
+        httpStatus: 201,
+        valuesUsed: sent,
+        lookupMethods: { patient: 'nik', practitioner: 'nik' },
+        violations: [],
+      },
+    ]);
+    const [attempt] = createVisitStep?.attemptLog ?? [];
+    expect(Date.parse(attempt?.startedAt ?? '')).toBeLessThanOrEqual(Date.parse(attempt?.endedAt ?? ''));
+    for (const step of later) expect(step).toMatchObject({ pins: null, attemptLog: [] });
+  });
+
   it('sends +00:00 times truncated to the second on the UTC date, with the mapped Location, the source organization and the IHS numbers', async () => {
     const location = world.locations[2];
     // 05:00:00.987 at +07:00 on 1 January is 22:00:00 UTC on 31 December.
@@ -159,7 +189,41 @@ describe('create visit: an accepted visit.started becomes an Encounter at the mo
     const view = await settled(await send(event));
 
     expect(view.status).toBe('dead_lettered');
-    expect(view.steps[0]).toMatchObject({ state: 'dead_lettered', deadLetterReason: 'MAPPING_MISSING' });
+    expect(view.steps.map((s) => s.state)).toEqual(['dead_lettered', 'awaiting_event', 'awaiting_event', 'awaiting_event']);
+    expect(view.steps[0]).toMatchObject({ state: 'dead_lettered', deadLetterReason: 'MAPPING_MISSING', pins: null, remote: null });
+    expect(view.steps[0]?.attemptLog).toEqual([
+      expect.objectContaining({
+        attempt: 1,
+        outcome: 'dead_lettered',
+        errorCode: 'MAPPING_MISSING',
+        httpStatus: null,
+        valuesUsed: {},
+        violations: [{ code: 'MAPPING_MISSING', path: null, message: expect.stringContaining('"NOT-MAPPED"') }],
+      }),
+    ]);
+    expect(await mock.client.log({ visitKey: event.visitId })).toEqual([]);
+    expectAtMostOneStepInMotion(view);
+  });
+
+  it('logs an attempt that fails without an outcome with what it had resolved, and leaves the step in flight', async () => {
+    // A patient named without a NIK can't be looked up until the fallbacks land (#32), so the attempt fails.
+    const event = worldVisitStarted({ patient: { name: 'Pasien Contoh', birthDate: '1990-01-01', gender: 'female', mrn: 'MRN-0003' } });
+
+    const view = await waitForCase(hub.baseUrl, (await send(event)).headers.get('location'), (v) => (v.steps[0]?.attemptLog.length ?? 0) > 0, {
+      apiKey: WORLD_SOURCE_API_KEY,
+    });
+
+    expect(view.steps[0]).toMatchObject({ state: 'in_flight', deadLetterReason: null, pins: null });
+    expect(view.steps[0]?.attemptLog).toEqual([
+      expect.objectContaining({
+        attempt: 1,
+        outcome: 'failed',
+        errorCode: null,
+        httpStatus: null,
+        valuesUsed: { locationId: worldVisit.location.id },
+        lookupMethods: {},
+      }),
+    ]);
     expect(await mock.client.log({ visitKey: event.visitId })).toEqual([]);
   });
 
@@ -169,7 +233,17 @@ describe('create visit: an accepted visit.started becomes an Encounter at the mo
     const view = await settled(await send(event));
 
     expect(view.status).toBe('dead_lettered');
-    expect(view.steps[0]).toMatchObject({ state: 'dead_lettered', deadLetterReason: 'PATIENT_NOT_FOUND' });
+    expect(view.steps[0]).toMatchObject({ state: 'dead_lettered', deadLetterReason: 'PATIENT_NOT_FOUND', pins: null });
+    expect(view.steps[0]?.attemptLog).toEqual([
+      expect.objectContaining({
+        outcome: 'dead_lettered',
+        errorCode: 'PATIENT_NOT_FOUND',
+        httpStatus: 200,
+        valuesUsed: { locationId: worldVisit.location.id },
+        lookupMethods: {},
+        violations: [],
+      }),
+    ]);
     expect(await mock.client.log({ visitKey: event.visitId })).toEqual([]);
   });
 });

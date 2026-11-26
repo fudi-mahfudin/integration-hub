@@ -37,7 +37,28 @@ export interface StepTable {
   remote_id: string | null;
   remote_version: string | null;
   dead_letter_reason: DeadLetterReason | null;
+  /** The values a completed step sent (#10); null until it completes. Read through `cases/pins.ts`. */
+  pins: ColumnType<unknown, string | null, string | null>;
   updated_at: Timestamp;
+}
+
+/** How an attempt ended. `discarded`: it lost its lease before storing its outcome; `failed`: it ended without an outcome. */
+export type AttemptOutcome = 'completed' | 'dead_lettered' | 'discarded' | 'failed';
+
+/** One row of a step's append-only attempt log (#8); the database rejects updates and deletes. */
+export interface AttemptTable {
+  case_id: string;
+  seq: number;
+  attempt: number;
+  started_at: Timestamp;
+  ended_at: Timestamp;
+  outcome: AttemptOutcome;
+  /** The dead-letter reason the attempt reached; null otherwise. */
+  error_code: DeadLetterReason | null;
+  http_status: number | null;
+  values_used: ColumnType<unknown, string, never>;
+  lookup_methods: ColumnType<unknown, string, never>;
+  violations: ColumnType<unknown, string, never>;
 }
 
 /** An accepted source event, stored as received (after schema validation). */
@@ -72,6 +93,7 @@ export interface LocationMappingTable {
 export interface Database {
   case: CaseTable;
   step: StepTable;
+  attempt: AttemptTable;
   source_event: SourceEventTable;
   idempotency_key: IdempotencyKeyTable;
   location_mapping: LocationMappingTable;

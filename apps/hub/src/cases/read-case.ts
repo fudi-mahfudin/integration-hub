@@ -1,6 +1,7 @@
 import type { Kysely } from 'kysely';
 import type { SourceSystemId } from '../auth/source-systems.js';
-import type { Database } from '../db/database.js';
+import type { AttemptOutcome, Database } from '../db/database.js';
+import { readPins, type StepPins } from './pins.js';
 import type {
   CaseId,
   CaseStatus,
@@ -24,6 +25,26 @@ export interface CaseStepView {
   deadLetterReason: DeadLetterReason | null;
   /** The record the step's completion stored at SATUSEHAT; null until it completes. */
   remote: RemoteIdentifier | null;
+  /** The values the step's completion pinned; null until it completes. */
+  pins: StepPins | null;
+  /** Every attempt at the step, oldest first. */
+  attemptLog: AttemptView[];
+}
+
+/** One row of a step's attempt log as the case view shows it. */
+export interface AttemptView {
+  attempt: number;
+  /** ISO 8601 UTC. */
+  startedAt: string;
+  /** ISO 8601 UTC. */
+  endedAt: string;
+  outcome: AttemptOutcome;
+  /** The dead-letter reason the attempt reached; null otherwise. */
+  errorCode: DeadLetterReason | null;
+  httpStatus: number | null;
+  valuesUsed: unknown;
+  lookupMethods: unknown;
+  violations: unknown;
 }
 
 /** A case as `GET /v1/cases/{id}` shows it: its status, what a waiting case waits for, and its steps in order. */
@@ -66,9 +87,16 @@ export async function readCase(
       if (!kase) return undefined;
       const steps = await trx
         .selectFrom('step')
-        .select(['name', 'event_type', 'state', 'attempts', 'dead_letter_reason', 'remote_type', 'remote_id', 'remote_version'])
+        .select(['seq', 'name', 'event_type', 'state', 'attempts', 'dead_letter_reason', 'remote_type', 'remote_id', 'remote_version', 'pins'])
         .where('case_id', '=', caseId)
         .orderBy('seq')
+        .execute();
+      const attempts = await trx
+        .selectFrom('attempt')
+        .selectAll()
+        .where('case_id', '=', caseId)
+        .orderBy('seq')
+        .orderBy('attempt')
         .execute();
       return {
         // Read back from the row this case's ids were written to.
@@ -88,6 +116,21 @@ export async function readCase(
               ? // Stored only by lease-fenced completion, from a RemoteIdentifier.
                 { type: s.remote_type, id: s.remote_id as RemoteId, version: s.remote_version }
               : null,
+          pins: s.pins === null ? null : readPins(s.name, s.pins),
+          attemptLog: attempts
+            .filter((a) => a.seq === s.seq)
+            .map((a) => ({
+              attempt: a.attempt,
+              startedAt: a.started_at.toISOString(),
+              endedAt: a.ended_at.toISOString(),
+              outcome: a.outcome,
+              errorCode: a.error_code,
+              httpStatus: a.http_status,
+              // Written by the outbox from an attempt's facts, as JSON; shown as stored.
+              valuesUsed: a.values_used,
+              lookupMethods: a.lookup_methods,
+              violations: a.violations,
+            })),
         })),
       };
     });

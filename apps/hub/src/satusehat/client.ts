@@ -4,7 +4,7 @@ import type { Brand } from '../brand.js';
 import type { RemoteId, RemoteIdentifier, VisitId } from '../cases/case-model.js';
 import type { SatusehatConfig } from '../config.js';
 import { SatusehatRequestError, SatusehatResponseError } from './errors.js';
-import { platformTime } from './platform-time.js';
+import { encounterSystem, type FhirResource } from './resources.js';
 import type { AccessTokens } from './token.js';
 
 /** A SATUSEHAT patient's or practitioner's IHS number. */
@@ -19,19 +19,6 @@ export interface VisitIdentifier {
   visitId: VisitId;
 }
 
-/** The encounter classes a visit may have (#6). */
-export type EncounterClass = 'AMB' | 'IMP' | 'EMER';
-
-/** What a create-visit Encounter says about its visit. */
-export interface VisitEncounter {
-  identifier: VisitIdentifier;
-  encounterClass: EncounterClass;
-  patient: IhsNumber;
-  practitioner: IhsNumber;
-  location: LocationId;
-  startedAt: Date;
-}
-
 /**
  * The SATUSEHAT calls the hub makes, one method per call, so each can be
  * faked with one return shape. An unexpected status throws
@@ -44,14 +31,11 @@ export interface SatusehatClient {
   findPractitionersByNik(nik: string): Promise<IhsNumber[]>;
   /** Every Encounter under the visit's business identifier. */
   findEncounters(identifier: VisitIdentifier): Promise<RemoteIdentifier[]>;
-  /** Creates the visit's Encounter, status `arrived`; resolves to the record SATUSEHAT stored. */
-  createEncounter(encounter: VisitEncounter): Promise<RemoteIdentifier>;
+  /** Sends a built Encounter (see `visitEncounterResource`); resolves to the record SATUSEHAT stored. */
+  createEncounter(encounter: FhirResource): Promise<RemoteIdentifier>;
 }
 
 const NIK_SYSTEM = 'https://fhir.kemkes.go.id/id/nik';
-const encounterSystem = (org: OrganizationId) => `http://sys-ids.kemkes.go.id/encounter/${org}`;
-
-const CLASS_DISPLAY = { AMB: 'ambulatory', IMP: 'inpatient encounter', EMER: 'emergency' } as const;
 
 const storedRecordSchema = z.object({ id: z.string().min(1), meta: z.object({ versionId: z.string().optional() }).optional() });
 const searchBundleSchema = z.object({
@@ -121,40 +105,8 @@ export function createSatusehatClient(deps: {
     findEncounters: async ({ organizationId, visitId }) =>
       (await search('Encounter', `${encounterSystem(organizationId)}|${visitId}`)).map(encounterRecord),
     async createEncounter(encounter) {
-      const stored = parse(storedRecordSchema, 'POST', await call('POST', 'Encounter', 201, visitEncounterResource(encounter)));
+      const stored = parse(storedRecordSchema, 'POST', await call('POST', 'Encounter', 201, encounter));
       return encounterRecord(stored);
     },
-  };
-}
-
-/** The FHIR R4 Encounter of a visit that has just started. */
-function visitEncounterResource(e: VisitEncounter): Record<string, unknown> {
-  const start = platformTime(e.startedAt);
-  return {
-    resourceType: 'Encounter',
-    identifier: [{ system: encounterSystem(e.identifier.organizationId), value: e.identifier.visitId }],
-    status: 'arrived',
-    class: {
-      system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode',
-      code: e.encounterClass,
-      display: CLASS_DISPLAY[e.encounterClass],
-    },
-    subject: { reference: `Patient/${e.patient}` },
-    participant: [
-      {
-        type: [
-          {
-            coding: [
-              { system: 'http://terminology.hl7.org/CodeSystem/v3-ParticipationType', code: 'ATND', display: 'attender' },
-            ],
-          },
-        ],
-        individual: { reference: `Practitioner/${e.practitioner}` },
-      },
-    ],
-    period: { start },
-    location: [{ location: { reference: `Location/${e.location}` } }],
-    statusHistory: [{ status: 'arrived', period: { start } }],
-    serviceProvider: { reference: `Organization/${e.identifier.organizationId}` },
   };
 }
