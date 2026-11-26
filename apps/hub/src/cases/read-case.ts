@@ -24,6 +24,8 @@ export interface CaseStepView {
   attempts: number;
   /** Why the step was dead-lettered; null unless it was. */
   deadLetterReason: DeadLetterReason | null;
+  /** When a `retry_wait` step may be claimed again, ISO 8601 UTC; null otherwise. */
+  availableAt: string | null;
   /** The record the step's completion stored at SATUSEHAT; null until it completes. */
   remote: RemoteIdentifier | null;
   /** The values the step's completion pinned; null until it completes. */
@@ -46,6 +48,8 @@ export interface AttemptView {
   valuesUsed: unknown;
   lookupMethods: unknown;
   violations: unknown;
+  /** The attempt's in-process read retries: sub-entries, not attempts (#13). */
+  readRetries: unknown;
 }
 
 /** A case as `GET /v1/cases/{id}` shows it: its status, what a waiting case waits for, and its steps in order. */
@@ -90,7 +94,7 @@ export async function readCase(
       if (!kase) return undefined;
       const steps = await trx
         .selectFrom('step')
-        .select(['seq', 'name', 'event_type', 'state', 'attempts', 'dead_letter_reason', 'remote_type', 'remote_id', 'remote_version', 'pins'])
+        .select(['seq', 'name', 'event_type', 'state', 'attempts', 'dead_letter_reason', 'available_at', 'remote_type', 'remote_id', 'remote_version', 'pins'])
         .where('case_id', '=', caseId)
         .orderBy('seq')
         .execute();
@@ -117,6 +121,7 @@ export async function readCase(
           state: s.state,
           attempts: s.attempts,
           deadLetterReason: s.dead_letter_reason,
+          availableAt: s.available_at?.toISOString() ?? null,
           remote:
             s.remote_type !== null && s.remote_id !== null
               ? // Stored only by lease-fenced completion, from a RemoteIdentifier.
@@ -136,6 +141,7 @@ export async function readCase(
               valuesUsed: a.values_used,
               lookupMethods: a.lookup_methods,
               violations: a.violations,
+              readRetries: a.read_retries,
             })),
         })),
       };

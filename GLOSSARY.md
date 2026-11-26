@@ -86,6 +86,14 @@ _Avoid_: Lock (that is the database's, and lasts one transaction), reservation
 A further attempt the hub makes on its own after a transient failure, up to a fixed limit. When the limit is reached, the case is dead-lettered.
 _Avoid_: Replay (that is an operator's deliberate action), resend (that is the source system's act)
 
+**Read retry**:
+Sending an idempotent read (a search or KFA lookup) again within one attempt after it failed transiently, at most twice. It is recorded under its attempt in the attempt log and is not itself an attempt. Writes are never read-retried.
+_Avoid_: Retry (that is a further attempt), try
+
+**Attempt budget**:
+How long one attempt may go on making calls to SATUSEHAT. No call starts with less than one call timeout of it left; the attempt then ends transient, as `attempt_budget_exceeded`.
+_Avoid_: Deadline, lease (that is the claim on a step)
+
 **Dead-lettered case**:
 A case whose step failed permanently. Its downstream steps are held and it waits for an operator to replay or abandon it.
 _Avoid_: Failed case, poisoned case

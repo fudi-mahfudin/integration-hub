@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { RetryPolicy } from './outbox/retry-policy.js';
 
 /** One registered source system and its static API key (#25). */
 export interface SourceSystemConfig {
@@ -17,6 +18,13 @@ export interface SourceSystemConfig {
 export type IdempotencyStoreKind = 'postgres' | 'naive-redis';
 
 /**
+ * The platform the SATUSEHAT adapter talks to (`SATUSEHAT_PROFILE`): `mock`
+ * (the default, as the URLs' defaults are the mock's) or `live-sandbox`. It
+ * picks per-profile defaults: the call timeout's (#13).
+ */
+export type SatusehatProfile = 'mock' | 'live-sandbox';
+
+/**
  * Where and as whom the SATUSEHAT adapter connects. The defaults point at a
  * mock SATUSEHAT on localhost:3001 with its public development credentials.
  */
@@ -31,11 +39,18 @@ export interface SatusehatConfig {
    */
   kfaUrl: URL;
   /**
-   * How long a KFA v2 lookup may take before the attempt gives up on it
-   * (default 10s). A timeout is transient, like a 5xx (#10). The FHIR calls'
-   * own budget lands with the attempt budget (#13, #35).
+   * How long one FHIR, KFA or token call may take in all, connect to last
+   * byte, before it is a timeout, which is transient: 10s live, 2s against the
+   * mock so the `timeout` fault doesn't stretch the big run (#13).
    */
-  kfaTimeoutMs: number;
+  callTimeoutMs: number;
+  /** How long connecting may take within a call (3s, #13). */
+  connectTimeoutMs: number;
+  /**
+   * The least time between two successful token fetches of one process
+   * (10s, #13), so a refresh loop can't hammer the throttled token endpoint.
+   */
+  tokenMinIntervalMs: number;
   /** client_credentials pair; one client belongs to one organization. */
   clientId: string;
   clientSecret: string;
@@ -65,6 +80,20 @@ export interface HubConfig {
   workerLeaseMs: number;
   /** How long an idle worker waits before it looks for a claimable step again. */
   workerPollIntervalMs: number;
+  /**
+   * How long one attempt may go on making calls (default 60s, #13): no call
+   * starts with less than one call timeout left, and the attempt ends
+   * `attempt_budget_exceeded`.
+   */
+  attemptBudgetMs: number;
+  /**
+   * Retries of steps whose attempt failed transiently (#13): a cap of 15
+   * attempts, the smallest that keeps the big run's expected number of
+   * exhausted steps under 0.01 at 30% faults; derivation:
+   * https://github.com/fudi-mahfudin/integration-hub/issues/13#issuecomment-7120238873
+   * Full-jitter backoff base 1s, cap 60s; `Retry-After` clamped to 300s.
+   */
+  retry: RetryPolicy;
 }
 
 type Env = Record<string, string | undefined>;
@@ -93,6 +122,7 @@ const sourcesSchema = z
  * naming it.
  */
 export function loadConfig(env: Env): HubConfig {
+  const profile = parseProfile(env.SATUSEHAT_PROFILE ?? 'mock');
   return {
     host: parseHost(env.HOST ?? '0.0.0.0'),
     port: parsePort(env.PORT ?? '3000'),
@@ -112,14 +142,28 @@ export function loadConfig(env: Env): HubConfig {
       authUrl: parseBaseUrl('SATUSEHAT_AUTH_URL', env.SATUSEHAT_AUTH_URL ?? 'http://localhost:3001/oauth2/v1/'),
       fhirUrl: parseBaseUrl('SATUSEHAT_FHIR_URL', env.SATUSEHAT_FHIR_URL ?? 'http://localhost:3001/fhir-r4/v1/'),
       kfaUrl: parseBaseUrl('SATUSEHAT_KFA_URL', env.SATUSEHAT_KFA_URL ?? 'http://localhost:3001/kfa-v2/'),
-      kfaTimeoutMs: parsePositiveInt('SATUSEHAT_KFA_TIMEOUT_MS', env.SATUSEHAT_KFA_TIMEOUT_MS ?? '10000'),
+      callTimeoutMs: parsePositiveInt('SATUSEHAT_CALL_TIMEOUT_MS', env.SATUSEHAT_CALL_TIMEOUT_MS ?? (profile === 'mock' ? '2000' : '10000')),
+      connectTimeoutMs: parsePositiveInt('SATUSEHAT_CONNECT_TIMEOUT_MS', env.SATUSEHAT_CONNECT_TIMEOUT_MS ?? '3000'),
+      tokenMinIntervalMs: parseNonNegativeInt('SATUSEHAT_TOKEN_MIN_INTERVAL_MS', env.SATUSEHAT_TOKEN_MIN_INTERVAL_MS ?? '10000'),
       // The mock's public development pair; a real platform needs its own (set up through a /wizard).
       clientId: parseNonEmpty('SATUSEHAT_CLIENT_ID', env.SATUSEHAT_CLIENT_ID ?? 'dev-satusehat-client'),
       clientSecret: parseNonEmpty('SATUSEHAT_CLIENT_SECRET', env.SATUSEHAT_CLIENT_SECRET ?? 'dev-satusehat-secret'),
     },
     workerLeaseMs: parsePositiveInt('WORKER_LEASE_MS', env.WORKER_LEASE_MS ?? '90000'),
     workerPollIntervalMs: parsePositiveInt('WORKER_POLL_INTERVAL_MS', env.WORKER_POLL_INTERVAL_MS ?? '1000'),
+    attemptBudgetMs: parsePositiveInt('ATTEMPT_BUDGET_MS', env.ATTEMPT_BUDGET_MS ?? '60000'),
+    retry: {
+      maxAttempts: parsePositiveInt('RETRY_MAX_ATTEMPTS', env.RETRY_MAX_ATTEMPTS ?? '15'),
+      backoffBaseMs: parsePositiveInt('RETRY_BACKOFF_BASE_MS', env.RETRY_BACKOFF_BASE_MS ?? '1000'),
+      backoffCapMs: parsePositiveInt('RETRY_BACKOFF_CAP_MS', env.RETRY_BACKOFF_CAP_MS ?? '60000'),
+      retryAfterCapMs: 300_000,
+    },
   };
+}
+
+function parseProfile(raw: string): SatusehatProfile {
+  if (raw === 'mock' || raw === 'live-sandbox') return raw;
+  throw new Error(`SATUSEHAT_PROFILE must be "mock" or "live-sandbox", got "${raw}"`);
 }
 
 function parseHost(raw: string): string {

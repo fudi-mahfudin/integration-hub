@@ -143,7 +143,7 @@ A case's status, what a waiting case waits for, and its four steps in order. A s
   ],
   "steps": [
     {
-      "step": "create_visit", "eventType": "visit.started", "state": "completed", "attempts": 1, "deadLetterReason": null,
+      "step": "create_visit", "eventType": "visit.started", "state": "completed", "attempts": 1, "deadLetterReason": null, "availableAt": null,
       "remote": { "type": "Encounter", "id": "5f8d2c8e-7a51-4b0e-9a57-0d7c3f1e9b42", "version": "1" },
       "pins": { "patientIhsNumber": "P00000000001", "practitionerIhsNumber": "10000000001", "locationId": "b017aa54-f1df-4ec2-9d84-8823815d7228" },
       "attemptLog": [
@@ -152,13 +152,14 @@ A case's status, what a waiting case waits for, and its four steps in order. A s
           "outcome": "completed", "errorCode": null, "httpStatus": 201,
           "valuesUsed": { "locationId": "b017aa54-f1df-4ec2-9d84-8823815d7228", "patientIhsNumber": "P00000000001", "practitionerIhsNumber": "10000000001" },
           "lookupMethods": { "patient": "nik", "practitioner": "nik" },
-          "violations": []
+          "violations": [],
+          "readRetries": [{ "call": "GET /fhir-r4/v1/Encounter", "try": 1, "failure": "status", "httpStatus": 503 }]
         }
       ]
     },
-    { "step": "submit_prescription", "eventType": "prescription.written", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null, "pins": null, "attemptLog": [] },
-    { "step": "submit_dispense", "eventType": "drug.dispensed", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null, "pins": null, "attemptLog": [] },
-    { "step": "update_visit", "eventType": "visit.finished", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null, "pins": null, "attemptLog": [] }
+    { "step": "submit_prescription", "eventType": "prescription.written", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "availableAt": null, "remote": null, "pins": null, "attemptLog": [] },
+    { "step": "submit_dispense", "eventType": "drug.dispensed", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "availableAt": null, "remote": null, "pins": null, "attemptLog": [] },
+    { "step": "update_visit", "eventType": "visit.finished", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "availableAt": null, "remote": null, "pins": null, "attemptLog": [] }
   ]
 }
 ```
@@ -173,14 +174,16 @@ Case status: `waiting`, `active`, `dead_lettered`, `completed`, `abandoned`. Ste
 | `steps[].attempts` | How many times a worker has claimed the step. |
 | `steps[].remote` | The record the step stored at SATUSEHAT, by its remote identifier and `meta.versionId`; `null` until the step completes. |
 | `steps[].deadLetterReason` | Why the step was dead-lettered; `null` unless it was. |
+| `steps[].availableAt` | For a step in `retry_wait`, when a worker may claim it again (UTC); otherwise `null`. See [Retries](#retries). |
 | `steps[].pins` | The values the step sent, pinned when it completed; later steps read these, never the live mappings or lookups. Create visit pins `patientIhsNumber`, `practitionerIhsNumber` and `locationId`. Submit prescription pins the prescribed KFA product (`kfaCode`, `kfaLevel`, `parent92`, `activeIngredients`, its 91 codes) and `requesterIhsNumber`. Submit dispense pins the dispensed KFA product (the same four fields) and `pharmacistIhsNumber`. Update visit pins the create visit values it sent again. `null` until the step completes. |
 | `steps[].attemptLog` | Every attempt at the step, oldest first. Append-only. |
-| `attemptLog[].outcome` | `completed`; `dead_lettered`; `failed` (it ended without an outcome, and the step stays in flight until its lease expires); `lease_expired` (its lease ran out before it stored an outcome, and another attempt took the step over; it ended when the lease ran out, and an outcome it reaches later is thrown away); `discarded` (no longer written: shown only on attempts logged before `lease_expired` existed, whose late outcome was thrown away). |
-| `attemptLog[].errorCode` | The dead-letter reason the attempt reached; otherwise `null`. |
+| `attemptLog[].outcome` | `completed`; `dead_lettered`; `failed` (it failed transiently: the step waits in `retry_wait`, or, if this was its last allowed attempt, is dead-lettered with `errorCode` `RETRIES_EXHAUSTED`); `attempt_budget_exceeded` (it had less time left than one call may take, so it stopped; transient, like `failed`); `lease_expired` (its lease ran out before it stored an outcome, and another attempt took the step over; it ended when the lease ran out, and an outcome it reaches later is thrown away); `discarded` (no longer written: shown only on attempts logged before `lease_expired` existed, whose late outcome was thrown away). |
+| `attemptLog[].errorCode` | The dead-letter reason the attempt reached (`RETRIES_EXHAUSTED` on a transient last attempt); otherwise `null`. |
 | `attemptLog[].httpStatus` | The status of the last SATUSEHAT response the attempt read; `null` if it sent nothing. |
 | `attemptLog[].valuesUsed`, `lookupMethods` | What the attempt had resolved, as far as it got (the values its step pins), and how each person was found: `nik`, `mother_nik_birth_date` or `name_birth_date_gender`. A person the attempt did not find has no entry. IHS numbers are looked up on every attempt, never reused from another case. |
-| `attemptLog[].httpStatus` for KFA | A KFA v2 lookup that answers a 5xx or takes longer than `SATUSEHAT_KFA_TIMEOUT_MS` ends the attempt as `failed`: transient, never a dead letter. |
+| `attemptLog[].httpStatus` for KFA | A KFA v2 lookup that still answers a 5xx or times out on its third try ends the attempt as `failed`: transient, never a dead letter. |
 | `attemptLog[].violations` | Every violation step-time validation found, in rule order, each with `code`, `path` (a FHIR path, or `null`) and `message`. The dead-letter reason is the first one. |
+| `attemptLog[].readRetries` | The attempt's read retries: each read (a search or KFA lookup) that failed transiently and was sent again within the attempt, with the `call` (method and path, never the query), which `try` failed (1 or 2), how (`status`, `timeout` or `network`) and the `httpStatus` answered. They are not attempts. |
 
 ### Dead-letter reasons
 
@@ -203,6 +206,19 @@ Just before a step sends anything, step-time validation checks what it built. An
 | `PRACTITIONER_NOT_FOUND` | Neither `nik` nor `name` + `birthDate` + `gender` found anyone for the visit's `practitioner`, the prescription's `requester` or the dispense's `pharmacist`. |
 | `PRACTITIONER_AMBIGUOUS` | One of those searches found more than one practitioner. |
 | `REMOTE_RECORD_AMBIGUOUS` | More than one record at SATUSEHAT already carries the step's identifier (for create visit, `encounter/{org}` with the `visitId`; for submit prescription and submit dispense, `prescription/{org}` with the `prescriptionId`, which a MedicationDispense reuses), so the hub can't tell which one is the visit's. |
+| `REMOTE_RECORD_MISSING` | The visit's Encounter is gone from SATUSEHAT: update visit's search by `encounter/{org}` finds no record. |
+
+SATUSEHAT's answers can dead-letter a step too:
+
+| Code | Meaning |
+|---|---|
+| `PLATFORM_FORBIDDEN` | SATUSEHAT answered `403`: the hub's credentials or configuration don't allow the call. Replay once that is fixed. |
+| `PAYLOAD_INVALID` | SATUSEHAT answered another `4xx` the hub can't retry its way past (`400`, `404` on a search or create, `409`, `412`, `422`, …): a hub bug, as above. |
+| `RETRIES_EXHAUSTED` | The step's 15th attempt failed transiently too (or its lease ran out). |
+
+### Retries
+
+An attempt that fails transiently (a timeout, a network error or reset, any `5xx`, `408`, `429`, or a `401` that one token refresh didn't cure) sends its step to `retry_wait`. A worker claims it again at `availableAt`: after a random wait of up to `min(60s, 1s·2ⁿ⁻¹)` after attempt n, or the answer's `Retry-After` if that is later (capped at 300s; a past or unreadable value is ignored). Each attempt starts over with search-then-create, so a write SATUSEHAT applied but didn't answer is found and adopted, never sent twice. A read (search or KFA lookup) that fails transiently is retried within the attempt, after 100ms and then 400ms, and shows in `readRetries`; a write is never sent twice by one attempt. If update visit's stored Encounter id is stale (its search finds one other Encounter, or its `PUT` answers `404` or `410` and a search finds one), create visit's `remote` is refreshed to the one found and the step retried.
 
 ## Errors
 

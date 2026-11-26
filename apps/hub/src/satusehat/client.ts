@@ -5,7 +5,7 @@ import type { PrescriptionId, RemoteId, RemoteIdentifier, VisitId } from '../cas
 import type { SatusehatConfig } from '../config.js';
 import { SatusehatRequestError, SatusehatResponseError } from './errors.js';
 import { encounterSystem, prescriptionSystem, type FhirResource } from './resources.js';
-import type { AccessTokens } from './token.js';
+import type { AttemptCalls, SatusehatTransport } from './transport.js';
 
 /** A SATUSEHAT patient's or practitioner's IHS number. */
 export type IhsNumber = Brand<string, 'IhsNumber'>;
@@ -101,12 +101,17 @@ const foundEncounterSchema = storedRecordSchema.extend({
   period: z.object({ end: z.string().optional() }).optional(),
 });
 
-/** Builds the SATUSEHAT client over one process's access tokens. Only the composition root calls this. */
+/**
+ * Builds the SATUSEHAT client for one attempt: every call goes through the
+ * process's transport (token, timeouts, read retries) and counts against
+ * `calls`, the attempt's budget and read-retry log. Only the composition root calls this.
+ */
 export function createSatusehatClient(deps: {
   config: Pick<SatusehatConfig, 'fhirUrl'>;
-  tokens: AccessTokens;
+  transport: SatusehatTransport;
+  calls: AttemptCalls;
 }): SatusehatClient {
-  const { config, tokens } = deps;
+  const { config, transport, calls } = deps;
 
   async function call(
     method: 'GET' | 'POST' | 'PUT',
@@ -115,18 +120,14 @@ export function createSatusehatClient(deps: {
     body?: unknown,
   ): Promise<{ url: URL; json: unknown }> {
     const url = new URL(path, config.fhirUrl);
-    const token = await tokens.current();
-    const res = await fetch(url, {
+    const res = await transport.send(calls, {
       method,
-      headers: {
-        authorization: `Bearer ${token}`,
-        accept: 'application/fhir+json',
-        ...(body === undefined ? {} : { 'content-type': 'application/fhir+json' }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      url,
+      accept: 'application/fhir+json',
+      ...(body === undefined ? {} : { body: { json: body, contentType: 'application/fhir+json' } }),
     });
-    const text = await res.text();
-    if (res.status !== expected) throw new SatusehatRequestError(method, url, res.status, text);
+    const { text } = res;
+    if (res.status !== expected) throw new SatusehatRequestError(method, url, res.status, text, res.retryAfter);
     try {
       return { url, json: JSON.parse(text) };
     } catch (err) {

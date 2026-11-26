@@ -31,7 +31,7 @@ describe('ingest: accepting visit.started', () => {
 
     const res = await getCase(hub.baseUrl, location?.split('/').at(-1) ?? '');
     // No worker runs against this database, so no step has been claimed.
-    const unworked = { attempts: 0, deadLetterReason: null, remote: null, pins: null, attemptLog: [] };
+    const unworked = { attempts: 0, deadLetterReason: null, availableAt: null, remote: null, pins: null, attemptLog: [] };
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
