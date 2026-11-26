@@ -26,6 +26,8 @@ The client credentials are the world's organization (`dev-satusehat-client` / `d
 
 - `POST /oauth2/v1/accesstoken?grant_type=client_credentials` (form body `client_id`, `client_secret`)
 - `GET /fhir-r4/v1/Patient?identifier=https://fhir.kemkes.go.id/id/nik|{nik}`, same for `Practitioner`
+- `GET /fhir-r4/v1/Patient?identifier=https://fhir.kemkes.go.id/id/nik-ibu|{nik}`: every child of that mother, each with its `birthDate` (the docs give this search no birthdate parameter)
+- `GET /fhir-r4/v1/Patient?name={name}&birthdate={YYYY-MM-DD}&gender={male|female}`, same for `Practitioner`, parameters in any order. The docs say only that a name is validated and may be partial or complete; the mock assumes a whole name, ignoring case and runs of spaces, until a live check observes it. The world's near-miss patients (`patientMarkers.nearMisses`) check that a near-miss never matches
 - `GET /fhir-r4/v1/Location?_id={id}`
 - `GET /fhir-r4/v1/Encounter?identifier=http://sys-ids.kemkes.go.id/encounter/{org}|{value}`
 - `POST /fhir-r4/v1/Encounter`: validated, then stored with a new `id` and `meta.versionId`. A second create for the same identifier is stored too, so the duplicate shows in the report.

@@ -36,7 +36,7 @@ This is the design the hub is built to; the ingest and dead-letter codes below l
 | The outpatient-pharmacy visit flow | Only the hospital-side flow is modelled, so `Encounter.serviceType` 64 (Pharmacy) is never sent. |
 | Multi-item prescriptions | One step in flight per case is what keeps visit records from being duplicated. One case per item would share the visit steps across cases and break that, so a prescription without exactly one item is rejected at ingest with `UNSUPPORTED_MULTI_ITEM` (ADR 0004). |
 | Therapeutic substitution | Only substitution within the same KFA 91 set (a different product with the same active ingredients) is supported. A dispense with different active ingredients dead-letters the case with `UNSUPPORTED_THERAPEUTIC_SUBSTITUTION`. |
-| Patient creation | Registering a patient at SATUSEHAT is not a pharmacy act. A patient not found by NIK or the documented fallbacks dead-letters the case with `PATIENT_NOT_FOUND`. |
+| Patient creation | Registering a patient at SATUSEHAT is not a pharmacy act. A patient not found by NIK or the documented fallbacks dead-letters the case with `PATIENT_NOT_FOUND`, and one the lookup can't tell apart from another with `PATIENT_AMBIGUOUS`. |
 
 Abandoning a case leaves the records its completed steps created at SATUSEHAT in place; cleaning them up is a hospital operations task (ADR 0007).
 

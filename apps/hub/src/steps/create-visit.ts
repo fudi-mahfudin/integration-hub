@@ -8,13 +8,13 @@ import type { ClaimedStep } from '../outbox/outbox.js';
 import type { SatusehatClient } from '../satusehat/client.js';
 import { visitEncounterResource } from '../satusehat/resources.js';
 import { validateStepPayload } from '../validation/validation.js';
-import { lookUpByNik } from './person-lookup.js';
+import { lookUpPatient, lookUpPractitioner } from './person-lookup.js';
 import { AttemptFailed, rejected, type AttemptFacts, type StepOutcome } from './step-outcome.js';
 
 /**
  * One attempt at create visit: resolves the Location from the operator's
- * mapping, the patient and practitioner IHS numbers by NIK and the
- * organization from the source registration, builds the Encounter and has
+ * mapping, the patient and practitioner IHS numbers by NIK or the
+ * documented fallbacks (see `person-lookup`) and the organization from the source registration, builds the Encounter and has
  * the Validation module check it, then search-then-create (ADR 0005) under
  * the visit's `encounter/{org}` identifier: one match is adopted, none is
  * created, more than one dead-letters. Any violation dead-letters with the
@@ -62,20 +62,15 @@ async function attemptCreateVisit(
   }
   attempt.valuesUsed.locationId = location;
 
-  const patient = await lookUpByNik('patient', visit.patient.nik, (nik) => satusehat.findPatientsByNik(nik), attempt);
-  if (!patient) return deadLettered('PATIENT_NOT_FOUND');
+  const patientLookup = await lookUpPatient(satusehat, visit.patient, attempt);
+  if ('deadLettered' in patientLookup) return deadLettered(patientLookup.deadLettered);
+  const patient = patientLookup.found;
   attempt.valuesUsed.patientIhsNumber = patient;
-  attempt.lookupMethods.patient = 'nik';
 
-  const practitioner = await lookUpByNik(
-    'practitioner',
-    visit.practitioner.nik,
-    (nik) => satusehat.findPractitionersByNik(nik),
-    attempt,
-  );
-  if (!practitioner) return deadLettered('PRACTITIONER_NOT_FOUND');
+  const practitionerLookup = await lookUpPractitioner(satusehat, 'practitioner', visit.practitioner, attempt);
+  if ('deadLettered' in practitionerLookup) return deadLettered(practitionerLookup.deadLettered);
+  const practitioner = practitionerLookup.found;
   attempt.valuesUsed.practitionerIhsNumber = practitioner;
-  attempt.lookupMethods.practitioner = 'nik';
 
   const identifier = { organizationId: step.organizationId, visitId: step.visitId };
   const encounter = visitEncounterResource({

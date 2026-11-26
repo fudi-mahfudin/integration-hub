@@ -57,11 +57,18 @@ export interface RemoteIdentifier {
 
 /**
  * Why a step was dead-lettered: a stable code on the step (#8, #10): the
- * Validation module's rule codes (#9), or a lookup that found no one.
+ * Validation module's rule codes (#9), or a person lookup that found no one
+ * (`*_NOT_FOUND`) or more than one (`*_AMBIGUOUS`) (#32).
  * `REMOTE_RECORD_AMBIGUOUS`: search-then-create found more than one record
  * under the step's business identifier (ADR 0005).
  */
-export type DeadLetterReason = RuleCode | 'PATIENT_NOT_FOUND' | 'PRACTITIONER_NOT_FOUND' | 'REMOTE_RECORD_AMBIGUOUS';
+export type DeadLetterReason =
+  | RuleCode
+  | 'PATIENT_NOT_FOUND'
+  | 'PATIENT_AMBIGUOUS'
+  | 'PRACTITIONER_NOT_FOUND'
+  | 'PRACTITIONER_AMBIGUOUS'
+  | 'REMOTE_RECORD_AMBIGUOUS';
 
 /** A step's position and state: all the state machine looks at. */
 export interface StepView {

@@ -178,7 +178,7 @@ Case status: `waiting`, `active`, `dead_lettered`, `completed`, `abandoned`. Ste
 | `attemptLog[].outcome` | `completed`; `dead_lettered`; `failed` (it ended without an outcome, and the step stays in flight until its lease expires); `lease_expired` (its lease ran out before it stored an outcome, and another attempt took the step over; it ended when the lease ran out, and an outcome it reaches later is thrown away); `discarded` (no longer written: shown only on attempts logged before `lease_expired` existed, whose late outcome was thrown away). |
 | `attemptLog[].errorCode` | The dead-letter reason the attempt reached; otherwise `null`. |
 | `attemptLog[].httpStatus` | The status of the last SATUSEHAT response the attempt read; `null` if it sent nothing. |
-| `attemptLog[].valuesUsed`, `lookupMethods` | What the attempt had resolved, as far as it got (the values its step pins), and how each person was found (`nik`). |
+| `attemptLog[].valuesUsed`, `lookupMethods` | What the attempt had resolved, as far as it got (the values its step pins), and how each person was found: `nik`, `mother_nik_birth_date` or `name_birth_date_gender`. A person the attempt did not find has no entry. IHS numbers are looked up on every attempt, never reused from another case. |
 | `attemptLog[].httpStatus` for KFA | A KFA v2 lookup that answers a 5xx or takes longer than `SATUSEHAT_KFA_TIMEOUT_MS` ends the attempt as `failed`: transient, never a dead letter. |
 | `attemptLog[].violations` | Every violation step-time validation found, in rule order, each with `code`, `path` (a FHIR path, or `null`) and `message`. The dead-letter reason is the first one. |
 
@@ -198,8 +198,10 @@ Just before a step sends anything, step-time validation checks what it built. An
 
 | Code | Meaning |
 |---|---|
-| `PATIENT_NOT_FOUND` | SATUSEHAT has no single patient for the visit's `patient.nik`. Lookups other than by NIK are not yet made. |
-| `PRACTITIONER_NOT_FOUND` | SATUSEHAT has no single practitioner for the visit's `practitioner.nik`, the prescription's `requester.nik`, or the dispense's `pharmacist.nik`. |
+| `PATIENT_NOT_FOUND` | No search the visit's `patient` supplies data for found anyone. The hub tries them in the order SATUSEHAT documents: `nik`; then `motherNik`, keeping only the children born on `birthDate`; then `name` + `birthDate` + `gender`. A search that finds no one moves on to the next. The hub never creates a Patient. |
+| `PATIENT_AMBIGUOUS` | One of those searches found more than one patient, for example twins found by their mother's NIK and birth date. The hub stops there: a later, weaker search never decides between them. |
+| `PRACTITIONER_NOT_FOUND` | Neither `nik` nor `name` + `birthDate` + `gender` found anyone for the visit's `practitioner`, the prescription's `requester` or the dispense's `pharmacist`. |
+| `PRACTITIONER_AMBIGUOUS` | One of those searches found more than one practitioner. |
 | `REMOTE_RECORD_AMBIGUOUS` | More than one record at SATUSEHAT already carries the step's identifier (for create visit, `encounter/{org}` with the `visitId`; for submit prescription and submit dispense, `prescription/{org}` with the `prescriptionId`, which a MedicationDispense reuses), so the hub can't tell which one is the visit's. |
 
 ## Errors

@@ -287,10 +287,29 @@ function valueAt(input: unknown, path: readonly PropertyKey[]): unknown {
   return value;
 }
 
+/** How the source identifies a patient: at least one of NIK, mother's NIK + birthDate, or name + birthDate + gender (#6). */
+export interface PatientFacts {
+  nik?: string | undefined;
+  motherNik?: string | undefined;
+  name?: string | undefined;
+  /** A calendar date `YYYY-MM-DD`. */
+  birthDate?: string | undefined;
+  gender?: 'male' | 'female' | undefined;
+}
+
+/** How the source identifies a practitioner, requester or pharmacist: by NIK, or by name + birthDate + gender (#6). */
+export interface PractitionerFacts {
+  nik?: string | undefined;
+  name?: string | undefined;
+  /** A calendar date `YYYY-MM-DD`. */
+  birthDate?: string | undefined;
+  gender?: 'male' | 'female' | undefined;
+}
+
 /** The fields of a recorded `visit.started` that the create visit step sends. */
 export interface VisitStartedFacts {
-  patient: { nik?: string | undefined };
-  practitioner: { nik?: string | undefined };
+  patient: PatientFacts;
+  practitioner: PractitionerFacts;
   encounterClass: (typeof ENCOUNTER_CLASSES)[number];
   locationCode: string;
   startedAt: Date;
@@ -315,7 +334,7 @@ export function readVisitStarted(storedEnvelope: unknown): VisitStartedFacts {
 export interface PrescriptionWrittenFacts {
   prescriptionId: PrescriptionId;
   authoredAt: Date;
-  requester: { nik?: string | undefined };
+  requester: PractitionerFacts;
   item: z.infer<typeof prescriptionItem>;
 }
 
@@ -350,7 +369,7 @@ export interface DrugDispensedFacts {
   preparedAt: Date;
   handedOverAt: Date;
   /** How to find the pharmacist's IHS number. */
-  pharmacist: { nik?: string | undefined };
+  pharmacist: PractitionerFacts;
   /** The batch handed over; null when the source sent none. `expiry` stays a plain date. */
   batch: { lot: string; expiry: string } | null;
   /** The source's substitution declaration; null when it declared none. */

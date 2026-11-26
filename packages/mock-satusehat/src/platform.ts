@@ -6,7 +6,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import type { Clock } from './clock.js';
 import type { Effect } from './submission-log.js';
 import * as templates from './templates/index.js';
-import { NIK_SYSTEM } from './templates/resources.js';
+import { MOTHER_NIK_SYSTEM, NIK_SYSTEM } from './templates/resources.js';
 import { validateEncounter } from './validation/encounter.js';
 import { validateMedicationDispense } from './validation/medication-dispense.js';
 import { validateMedicationRequest } from './validation/medication-request.js';
@@ -184,6 +184,20 @@ export class Platform {
           ? this.world.patients.filter((p) => p.nik === identifier.value).map((p) => templates.patientResource(p))
           : this.world.practitioners.filter((p) => p.nik === identifier.value).map((p) => templates.practitionerResource(p));
       return answer(hits, { businessIdentifier });
+    }
+    if (resourceType === 'Patient' && identifier?.system === MOTHER_NIK_SYSTEM) {
+      const hits = this.world.patients.filter((p) => p.motherNik === identifier.value).map((p) => templates.patientResource(p));
+      return answer(hits, { businessIdentifier: `${MOTHER_NIK_SYSTEM}|${identifier.value}` });
+    }
+    const person = resourceType === 'Patient' || resourceType === 'Practitioner' ? personQuery(params) : undefined;
+    if (person) {
+      const matches = (p: { name: string; birthDate: string; gender: string }) =>
+        sameName(p.name, person.name) && p.birthDate === person.birthdate && p.gender === person.gender;
+      const hits =
+        resourceType === 'Patient'
+          ? this.world.patients.filter(matches).map((p) => templates.patientResource(p))
+          : this.world.practitioners.filter(matches).map((p) => templates.practitionerResource(p));
+      return answer(hits, {});
     }
     const locationId = resourceType === 'Location' ? single('_id') : undefined;
     if (locationId !== undefined) {
@@ -561,6 +575,31 @@ function prescribedKfaCodeOf(held: fhir4.MedicationRequest): string {
   const code = medication?.code?.coding?.find((c) => c.system === 'http://sys-ids.kemkes.go.id/kfa')?.code;
   if (code === undefined) throw new Error(`held MedicationRequest ${held.id ?? '(no id)'} has no KFA-coded Medication, yet its create was accepted (or it was inserted or patched that way through /__mock/records)`);
   return code;
+}
+
+/**
+ * The name + birthdate + gender person search, when `params` is exactly that:
+ * each once, a `YYYY-MM-DD` birthdate (the docs also allow `YYYY` and
+ * `YYYY-MM`, which the hub never sends) and `male` or `female`.
+ */
+function personQuery(params: URLSearchParams): { name: string; birthdate: string; gender: string } | undefined {
+  const names = [...params.keys()].sort();
+  if (names.join('&') !== 'birthdate&gender&name') return undefined;
+  const name = params.get('name') ?? '';
+  const birthdate = params.get('birthdate') ?? '';
+  const gender = params.get('gender') ?? '';
+  if (name.trim() === '' || !/^\d{4}-\d{2}-\d{2}$/.test(birthdate) || (gender !== 'male' && gender !== 'female')) return undefined;
+  return { name, birthdate, gender };
+}
+
+/**
+ * Whether a held name answers a name search. The docs say only that the name
+ * is validated and may be "partial or complete"; the mock assumes a whole
+ * name, ignoring case and runs of spaces, until a live check observes it.
+ */
+function sameName(held: string, searched: string): boolean {
+  const normalize = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
+  return normalize(held) === normalize(searched);
 }
 
 /** Splits a FHIR token search value `system|value`. */

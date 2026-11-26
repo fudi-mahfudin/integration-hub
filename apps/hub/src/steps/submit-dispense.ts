@@ -13,7 +13,7 @@ import type { SatusehatClient } from '../satusehat/client.js';
 import { dispenseMedicationDispenseResource } from '../satusehat/resources.js';
 import { validateStepPayload, type MissingMapping } from '../validation/validation.js';
 import { readCompletedCreateVisit, readCompletedPrescription } from './completed-steps.js';
-import { lookUpByNik } from './person-lookup.js';
+import { lookUpPractitioner } from './person-lookup.js';
 import { AttemptFailed, rejected, type AttemptFacts, type StepOutcome } from './step-outcome.js';
 
 /** What submit dispense reads and calls. */
@@ -30,7 +30,7 @@ type DispenseAttempt = AttemptFacts & { valuesUsed: Partial<SubmitDispensePins> 
  * One attempt at submit dispense: maps the dispensed local drug code to a KFA
  * code and resolves its KFA details as submit prescription does, judges the
  * dispensed product against the product submit prescription pinned (#9) and
- * sets `wasSubstituted` from that judgement, looks the pharmacist up by NIK,
+ * sets `wasSubstituted` from that judgement, looks the pharmacist up (see `person-lookup`),
  * builds the MedicationDispense authorized by the stored MedicationRequest on
  * the stored Encounter, and has the Validation module check it, the source's
  * substitution declaration included; then search-then-create (ADR 0005)
@@ -87,10 +87,10 @@ async function attemptSubmitDispense(deps: SubmitDispenseDeps, step: ClaimedStep
   const { product } = medication;
   Object.assign(attempt.valuesUsed, kfaProductPins(product));
 
-  const pharmacist = await lookUpByNik('pharmacist', dispensed.pharmacist.nik, (nik) => satusehat.findPractitionersByNik(nik), attempt);
-  if (!pharmacist) return deadLettered('PRACTITIONER_NOT_FOUND');
+  const pharmacistLookup = await lookUpPractitioner(satusehat, 'pharmacist', dispensed.pharmacist, attempt);
+  if ('deadLettered' in pharmacistLookup) return deadLettered(pharmacistLookup.deadLettered);
+  const pharmacist = pharmacistLookup.found;
   attempt.valuesUsed.pharmacistIhsNumber = pharmacist;
-  attempt.lookupMethods.pharmacist = 'nik';
 
   // The hub's decision, from KFA; the Validation module checks the source's declaration against it.
   const substituted = judgeDispense(prescribed, product) !== 'as_prescribed';
