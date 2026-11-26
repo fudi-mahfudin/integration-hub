@@ -91,6 +91,16 @@ export function buildServer({ platform, log, clock }: ServerDeps): FastifyInstan
     }),
   );
 
+  app.put(
+    `${FHIR_BASE}/Encounter/:id`,
+    platformRoute(FHIR_JSON, (req) => {
+      const { id } = req.params as { id: string }; // the route has exactly this parameter
+      const requestBody = parseJson(req.body);
+      if (!platform.isAuthorized(req.headers.authorization)) return unauthorizedFor('Encounter', requestBody);
+      return { ...platform.updateEncounter(id, requestBody), requestBody };
+    }),
+  );
+
   app.post(
     `${FHIR_BASE}/MedicationRequest`,
     platformRoute(FHIR_JSON, (req) => {

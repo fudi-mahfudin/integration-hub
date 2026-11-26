@@ -149,8 +149,31 @@ export function worldDrugDispensed(
   };
 }
 
+/** A `visit.finished` for `visit`, an hour after `worldVisitStarted()`'s start; `data` overrides are shallow-merged. */
+export function worldVisitFinished(visit: { visitId: string }, data: Record<string, unknown> = {}) {
+  return {
+    type: 'visit.finished',
+    visitId: visit.visitId,
+    occurredAt: '2026-03-02T09:00:00+07:00',
+    data: { finishedAt: '2026-03-02T09:00:00.500+07:00', ...data },
+  };
+}
+
 /** POSTs a resource straight to the mock, as another client of the platform would; resolves to the 201 body's id. */
 async function createAtMock(mockBaseUrl: URL, resourceType: string, body: unknown): Promise<string> {
+  const res = await fetch(new URL(`fhir-r4/v1/${resourceType}`, mockBaseUrl), {
+    method: 'POST',
+    headers: { authorization: `Bearer ${await mockToken(mockBaseUrl)}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const created: unknown = await res.json();
+  const id: unknown = typeof created === 'object' && created !== null && 'id' in created ? created.id : undefined;
+  if (res.status !== 201 || typeof id !== 'string') throw new Error(`planting a ${resourceType} answered ${res.status}: ${JSON.stringify(created)}`);
+  return id;
+}
+
+/** An access token for the world's organization, as another client of the platform would get one. */
+async function mockToken(mockBaseUrl: URL): Promise<string> {
   const tokenRes = await fetch(new URL('oauth2/v1/accesstoken?grant_type=client_credentials', mockBaseUrl), {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -160,15 +183,24 @@ async function createAtMock(mockBaseUrl: URL, resourceType: string, body: unknow
   if (typeof token !== 'object' || token === null || !('access_token' in token)) {
     throw new Error(`the mock issued no token: ${JSON.stringify(token)}`);
   }
-  const res = await fetch(new URL(`fhir-r4/v1/${resourceType}`, mockBaseUrl), {
-    method: 'POST',
-    headers: { authorization: `Bearer ${String(token.access_token)}`, 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+  return String(token.access_token);
+}
+
+/**
+ * PUTs Encounter `encounter` straight at the mock, as another client of the
+ * platform would; resolves to the version it answered with.
+ */
+export async function updateEncounterAtMock(mockBaseUrl: URL, encounter: { id: string } & Record<string, unknown>): Promise<string> {
+  const res = await fetch(new URL(`fhir-r4/v1/Encounter/${encounter.id}`, mockBaseUrl), {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${await mockToken(mockBaseUrl)}`, 'content-type': 'application/json' },
+    body: JSON.stringify(encounter),
   });
-  const created: unknown = await res.json();
-  const id: unknown = typeof created === 'object' && created !== null && 'id' in created ? created.id : undefined;
-  if (res.status !== 201 || typeof id !== 'string') throw new Error(`planting a ${resourceType} answered ${res.status}: ${JSON.stringify(created)}`);
-  return id;
+  const updated: unknown = await res.json();
+  const meta: unknown = typeof updated === 'object' && updated !== null && 'meta' in updated ? updated.meta : undefined;
+  const version: unknown = typeof meta === 'object' && meta !== null && 'versionId' in meta ? meta.versionId : undefined;
+  if (res.status !== 200 || typeof version !== 'string') throw new Error(`updating an Encounter answered ${res.status}: ${JSON.stringify(updated)}`);
+  return version;
 }
 
 /** Creates an Encounter for `visitKey` straight at the mock, as another client of the platform would. */

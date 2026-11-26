@@ -3,12 +3,17 @@ import type { LogEntry } from './submission-log.js';
 /** The order a visit's effects must land in at SATUSEHAT. */
 const EXPECTED_ORDER = ['Encounter created', 'MedicationRequest created', 'MedicationDispense created', 'Encounter updated'] as const;
 
-/** More than one record created for one business identifier: a duplicate submission (GLOSSARY.md). */
+/**
+ * A duplicate submission (GLOSSARY.md): more than one record created for one
+ * business identifier, or more than one applied update of one record.
+ */
 export interface DuplicateSubmission {
   resourceType: string;
+  /** Whether the repeated effect is a create or an update. */
+  effect: 'created' | 'updated';
   businessIdentifier: string;
   visitKey: string | null;
-  /** The `seq` of every create, oldest first. */
+  /** The `seq` of every such effect, oldest first. */
   seqs: number[];
 }
 
@@ -48,15 +53,16 @@ export function computeReport(entries: readonly LogEntry[], faultSeed: number | 
 }
 
 function findDuplicates(entries: readonly LogEntry[]): DuplicateSubmission[] {
-  const creates = new Map<string, DuplicateSubmission>();
+  const groups = new Map<string, DuplicateSubmission>();
   for (const e of entries) {
-    if (e.effect !== 'created' || e.resourceType === null || e.businessIdentifier === null) continue;
-    const key = `${e.resourceType} ${e.businessIdentifier}`;
-    const group = creates.get(key) ?? { resourceType: e.resourceType, businessIdentifier: e.businessIdentifier, visitKey: e.visitKey, seqs: [] };
+    const { effect } = e;
+    if (effect === 'none' || e.resourceType === null || e.businessIdentifier === null) continue;
+    const key = `${e.resourceType} ${effect} ${e.businessIdentifier}`;
+    const group = groups.get(key) ?? { resourceType: e.resourceType, effect, businessIdentifier: e.businessIdentifier, visitKey: e.visitKey, seqs: [] };
     group.seqs.push(e.seq);
-    creates.set(key, group);
+    groups.set(key, group);
   }
-  return [...creates.values()].filter((g) => g.seqs.length > 1);
+  return [...groups.values()].filter((g) => g.seqs.length > 1);
 }
 
 function findOutOfOrder(entries: readonly LogEntry[]): OutOfOrderEffect[] {

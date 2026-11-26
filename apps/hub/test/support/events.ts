@@ -80,6 +80,16 @@ export function drugDispensed(overrides: { visitId?: string; data?: Record<strin
   };
 }
 
+/** A valid `visit.finished` envelope, an hour after `visitStarted()`'s start; `data` overrides are shallow-merged. */
+export function visitFinished(overrides: { visitId?: string; data?: Record<string, unknown> } = {}) {
+  return {
+    type: 'visit.finished',
+    visitId: overrides.visitId ?? newVisitId(),
+    occurredAt: '2026-03-02T09:00:00+07:00',
+    data: { finishedAt: '2026-03-02T09:00:00+07:00', ...overrides.data },
+  };
+}
+
 /** What `postEvent` sends; every field defaults to a valid request. */
 export interface PostEventOptions {
   /** `null` sends no Idempotency-Key header; default is a fresh UUID. */

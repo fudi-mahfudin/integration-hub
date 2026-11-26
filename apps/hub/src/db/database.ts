@@ -72,6 +72,8 @@ export interface SourceEventTable {
   /** For a `prescription.written` or `drug.dispensed`: the `prescriptionId` and `itemId` it names; null for other types. */
   prescription_id: string | null;
   item_id: string | null;
+  /** For a `visit.started` its `startedAt`, for a `visit.finished` its `finishedAt`; null for other types. */
+  visit_time: Timestamp | null;
   received_at: Timestamp;
 }
 

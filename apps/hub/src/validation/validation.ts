@@ -6,8 +6,9 @@
  * checks the same payloads with its own code (ADR 0006).
  */
 import type { OrganizationId } from '../auth/source-systems.js';
+import type { RemoteId } from '../cases/case-model.js';
 import { judgeDispense, type KfaCode, type KfaProduct } from '../kfa/kfa-product.js';
-import { checkEncounter } from './encounter-rules.js';
+import { checkEncounter, checkEncounterUpdate } from './encounter-rules.js';
 import { checkMedicationDispense } from './medication-dispense-rules.js';
 import { checkMedicationRequest } from './medication-request-rules.js';
 
@@ -83,6 +84,17 @@ export type StepPayload =
       declaredSubstitution: boolean;
       /** The MedicationDispense about to be sent; null when a missing mapping meant it could not be built. */
       medicationDispense: unknown;
+    }
+  | {
+      step: 'update_visit';
+      /** The case's organization: the `{org}` of its identifier system and its serviceProvider. */
+      organizationId: OrganizationId;
+      /** The update maps nothing: it re-sends what create visit pinned. */
+      missingMappings: readonly [];
+      /** The Encounter create visit stored, which the update replaces. */
+      encounterId: RemoteId;
+      /** The finished Encounter about to be sent. */
+      encounter: unknown;
     };
 
 /** Every violation of `payload`, in rule order; empty means it may be sent. */
@@ -112,6 +124,11 @@ export function validateStepPayload(payload: StepPayload): Violation[] {
       }
       if (payload.medicationRequest !== null) checkMedicationRequest(payload.medicationRequest, payload.organizationId, fail);
       else if (payload.missingMappings.length === 0) add('PAYLOAD_INVALID', 'no MedicationRequest was built, yet no mapping is missing');
+      break;
+    }
+    case 'update_visit': {
+      checkEncounter(payload.encounter, payload.organizationId, fail);
+      checkEncounterUpdate(payload.encounter, payload.encounterId, fail);
       break;
     }
     case 'submit_dispense': {

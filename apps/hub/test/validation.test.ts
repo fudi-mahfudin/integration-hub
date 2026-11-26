@@ -368,6 +368,45 @@ describe('validateStepPayload: a dispense’s MedicationDispense', () => {
   });
 });
 
+describe('validateStepPayload: an update visit’s finished Encounter', () => {
+  const ENCOUNTER_ID = 'b2d7c3a0-0000-4000-8000-000000000001';
+  const finished = (overrides: Record<string, unknown> = {}) =>
+    encounter({
+      id: ENCOUNTER_ID,
+      status: 'finished',
+      period: { start: '2026-03-02T01:00:00+00:00', end: '2026-03-02T02:00:00+00:00' },
+      ...overrides,
+    });
+  const updateVisit = (body: unknown): StepPayload => ({
+    step: 'update_visit',
+    organizationId: ORG,
+    missingMappings: [],
+    // The id create visit stored, as completed-steps reads it back.
+    encounterId: ENCOUNTER_ID as Extract<StepPayload, { step: 'update_visit' }>['encounterId'],
+    encounter: body,
+  });
+
+  it('a finished Encounter of the stored record, ending after its start, passes', () => {
+    expect(validateStepPayload(updateVisit(finished()))).toEqual([]);
+  });
+
+  it.each<[string, Record<string, unknown>, string]>([
+    ['another record’s id', { id: 'another-id' }, 'Encounter.id'],
+    ['no id', { id: undefined }, 'Encounter.id'],
+    ['a status other than finished', { status: 'arrived' }, 'Encounter.status'],
+    ['no period.end', { period: { start: '2026-03-02T01:00:00+00:00' } }, 'Encounter.period.end'],
+    ['an end at its start', { period: { start: '2026-03-02T01:00:00+00:00', end: '2026-03-02T01:00:00+00:00' } }, 'Encounter.period.end'],
+  ])('%s is PAYLOAD_INVALID', (_, overrides, path) => {
+    expect(validateStepPayload(updateVisit(finished(overrides)))).toEqual([expect.objectContaining({ code: 'PAYLOAD_INVALID', path })]);
+  });
+
+  it('still checks every create visit rule', () => {
+    expect(validateStepPayload(updateVisit(finished({ serviceProvider: undefined })))).toEqual([
+      expect.objectContaining({ path: 'Encounter.serviceProvider' }),
+    ]);
+  });
+});
+
 describe('validateStepPayload: rule order', () => {
   it('lists violations in rule order, whatever order they were found in', () => {
     const payload = createVisit({

@@ -40,6 +40,12 @@ This is the design the hub is built to; the ingest and dead-letter codes below l
 
 Abandoning a case leaves the records its completed steps created at SATUSEHAT in place; cleaning them up is a hospital operations task (ADR 0007).
 
+## Known risks
+
+| Risk | Why it is taken |
+|---|---|
+| `Encounter.diagnosis` is not sent when the update visit step closes a visit | Only the Encounter resource page stars it; the rule dictionary and the guide don't require it, and the source event contract carries no diagnosis (a Condition is out of scope). If SATUSEHAT turns out to require it on a `finished` Encounter, every update visit will be rejected, and the contract needs a diagnosis field. |
+
 ## Commitments
 
 Every number an evidence run is judged by is committed in [`bigrun.commitments.json`](bigrun.commitments.json) before any result exists:

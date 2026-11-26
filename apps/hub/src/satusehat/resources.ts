@@ -45,9 +45,47 @@ export interface VisitEncounter {
 export function visitEncounterResource(e: VisitEncounter): FhirResource {
   const start = platformTime(e.startedAt);
   return {
+    ...encounterOf(e, 'arrived'),
+    period: { start },
+    statusHistory: [{ status: 'arrived', period: { start } }],
+  };
+}
+
+/** What a finished visit's Encounter says: the started visit, its record at SATUSEHAT, and its end. */
+export interface FinishedVisitEncounter extends VisitEncounter {
+  /** The Encounter create visit stored, which this one replaces. */
+  encounter: RemoteIdentifier;
+  finishedAt: Date;
+}
+
+/**
+ * The FHIR R4 Encounter of a visit that has finished (#9): the same record
+ * create visit sent, by its `id`, now `finished` with a `period.end`; its
+ * history goes `arrived` until the end, then `finished`. `diagnosis` is not
+ * sent: only the resource page stars it, a known risk (README).
+ */
+export function finishedEncounterResource(e: FinishedVisitEncounter): FhirResource {
+  const start = platformTime(e.startedAt);
+  const end = platformTime(e.finishedAt);
+  const { resourceType, ...rest } = encounterOf(e, 'finished');
+  return {
+    resourceType,
+    id: e.encounter.id,
+    ...rest,
+    period: { start, end },
+    statusHistory: [
+      { status: 'arrived', period: { start, end } },
+      { status: 'finished', period: { start: end, end } },
+    ],
+  };
+}
+
+/** The fields an Encounter of a visit has whatever its status, in the order they are sent. */
+function encounterOf(e: VisitEncounter, status: 'arrived' | 'finished') {
+  return {
     resourceType: 'Encounter',
     identifier: [{ system: encounterSystem(e.identifier.organizationId), value: e.identifier.visitId }],
-    status: 'arrived',
+    status,
     class: {
       system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode',
       code: e.encounterClass,
@@ -66,9 +104,7 @@ export function visitEncounterResource(e: VisitEncounter): FhirResource {
         individual: { reference: `Practitioner/${e.practitioner}` },
       },
     ],
-    period: { start },
     location: [{ location: { reference: `Location/${e.location}` } }],
-    statusHistory: [{ status: 'arrived', period: { start } }],
     serviceProvider: { reference: `Organization/${e.identifier.organizationId}` },
   };
 }
