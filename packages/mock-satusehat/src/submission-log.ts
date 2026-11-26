@@ -1,5 +1,9 @@
-/** What a request did to the mock's records. Rejected and faulted-before-apply requests are `none`. */
-export type Effect = 'created' | 'updated' | 'none';
+/**
+ * What a request did to the mock's records. Rejected and faulted-before-apply
+ * requests are `none`; `admin` is a test's mutation through `/__mock/records`,
+ * never a submission.
+ */
+export type Effect = 'created' | 'updated' | 'none' | 'admin';
 
 /** One request the mock received, with what it answered and what it changed. */
 export interface LogEntry {
@@ -20,7 +24,8 @@ export interface LogEntry {
   businessIdentifier: string | null;
   /** The request body as parsed; secrets (client_secret) are left out. */
   request: { body: unknown };
-  response: { status: number; body: unknown };
+  /** What was answered; `status` is null when the connection was cut without an answer (a timeout or reset fault). */
+  response: { status: number | null; body: unknown };
   /** Id of the fault rule that hit this request, or null. */
   fault: string | null;
   effect: Effect;

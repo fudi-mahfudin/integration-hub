@@ -42,7 +42,11 @@ export interface MockReport {
   overlap: OverlappingRequests[];
 }
 
-/** Computes the report from the whole log. Requests with `effect: none` never count as effects. */
+/**
+ * Computes the report from the whole log. Requests with `effect: none` never
+ * count as effects, and admin entries are a test's mutations, not the hub's
+ * submissions, so they count nowhere.
+ */
 export function computeReport(entries: readonly LogEntry[], faultSeed: number | null): MockReport {
   return {
     faultSeed,
@@ -56,7 +60,7 @@ function findDuplicates(entries: readonly LogEntry[]): DuplicateSubmission[] {
   const groups = new Map<string, DuplicateSubmission>();
   for (const e of entries) {
     const { effect } = e;
-    if (effect === 'none' || e.resourceType === null || e.businessIdentifier === null) continue;
+    if (effect === 'none' || effect === 'admin' || e.resourceType === null || e.businessIdentifier === null) continue;
     const key = `${e.resourceType} ${effect} ${e.businessIdentifier}`;
     const group = groups.get(key) ?? { resourceType: e.resourceType, effect, businessIdentifier: e.businessIdentifier, visitKey: e.visitKey, seqs: [] };
     group.seqs.push(e.seq);
@@ -90,7 +94,7 @@ function findOutOfOrder(entries: readonly LogEntry[]): OutOfOrderEffect[] {
 
 function findOverlap(entries: readonly LogEntry[]): OverlappingRequests[] {
   const found: OverlappingRequests[] = [];
-  for (const [visitKey, visitEntries] of byVisit(entries)) {
+  for (const [visitKey, visitEntries] of byVisit(entries.filter((e) => e.effect !== 'admin'))) {
     for (let i = 0; i < visitEntries.length; i++) {
       for (let j = i + 1; j < visitEntries.length; j++) {
         const a = visitEntries[i];

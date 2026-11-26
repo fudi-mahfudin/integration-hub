@@ -18,7 +18,7 @@ node packages/mock-satusehat/dist/main.js     # serves http://localhost:3001
 | `MOCK_TOKEN_EXPIRES_IN_SECONDS` | `3599` | `expires_in` of issued tokens (sent as a string) |
 | `MOCK_TOKEN_THROTTLE_WINDOW_SECONDS` | `60` | After a failed token request, token requests within this window get `429` |
 
-Extra seed data is set only through the API, as fault rules and holds will be (#33). The log's `fault` field and the report's `faultSeed` stay `null` until then.
+Extra seed data, fault rules and holds are set only through the API.
 
 ## SATUSEHAT-facing paths
 
@@ -47,9 +47,38 @@ Use it through the typed client, `@integration-hub/mock-satusehat/client`.
 | `GET /__mock/log?visitKey=&resourceType=&afterSeq=&limit=` | Submission log entries (`limit` 1-10000) |
 | `GET /__mock/log.ndjson` | The whole log, one entry per line |
 | `GET /__mock/report` | Duplicate submissions (more than one create per business identifier, or more than one applied update of one record), out-of-order effects and overlapping in-flight requests per visit, and the fault seed |
-| `POST /__mock/reset` | Clears records, log, tokens and throttle state; reloads the world |
+| `POST /__mock/reset` | Clears records, log, fault rules, tokens and throttle state; drops every held or delayed request unanswered and unlogged; reloads the world |
 | `POST /__mock/seed` | Adds world entries until the next reset |
 | `POST /__mock/tokens/revoke` | Invalidates every issued token |
+| `PUT /__mock/faults` | Replaces the fault rules (below) |
+| `GET /__mock/holds?wait=ms` | Requests parked by `hold` rules, oldest first; when none is parked, waits up to `wait` ms (0-60000) for one |
+| `POST /__mock/holds/{id}/release` | Lets a parked request go on to be applied and answered; `404` for an unknown id |
+| `DELETE /__mock/records/{type}/{id}` | Deletes a held Encounter, MedicationRequest or MedicationDispense: later searches miss it, a PUT gets `404`, a reference to it `REFERENCE_NOT_FOUND` |
+| `PATCH /__mock/records/{type}/{id}` | JSON merge patch (RFC 7386), unvalidated, that may not touch `id` or `resourceType`; bumps `meta.versionId` |
+| `POST /__mock/records` | Stores a record directly, unvalidated, under its own `id` (`409` if held) or a new one: a record the hub never created, or a second search match |
+
+Record mutations are logged as `effect: "admin"` entries under the record's visit. They are a test's doing, not the hub's, so the report counts them nowhere. A refused mutation is not logged.
+
+## Fault rules
+
+`PUT /__mock/faults` takes `{ seed, rules: [{ id, match: { method?, resourceType?, path? }, kind, rate | everyNth | firstN, params }] }`. Rules are tried in order and the first that matches and hits a request decides its fault. `match.path` is compared with the path without its query string, so the token endpoint is matched like any other path (`/oauth2/v1/accesstoken`); `resourceType` is the one the log files the request under (`KfaProduct` for KFA v2).
+
+Each request is counted per identifier: its method plus its business identifier, or its path and query when it has none (token, KFA, Location). For the nth request of an identifier, a rule hits when `n <= firstN`, when `n` is a multiple of `everyNth`, or when a hash of (seed, rule id, identifier, n) falls below `rate` (0-1). The decision depends on nothing else, so the same seed meets the same faults however workers interleave. Setting rules restarts the counts.
+
+| `kind` | `params` | What the request gets |
+|---|---|---|
+| `http_500` | | `500` OperationOutcome; not applied |
+| `http_503`, `http_429` | `retryAfter?: { form: "seconds" \| "http-date", seconds }` | `503` / `429` OperationOutcome, with `Retry-After` as delta seconds or the HTTP date that many seconds from the mock's clock, or none; not applied |
+| `http_400` | | `400` OperationOutcome with `PAYLOAD_INVALID`: a forced permanent rejection; not applied |
+| `http_401` | | `401` as for a bad token; not applied |
+| `timeout` | `ms` | Held `ms` (set it past the client's timeout), then the connection is dropped; not applied |
+| `connection_reset` | | The connection is reset at once; not applied |
+| `timeout_after_apply` | `ms` | Applied, then held `ms` and dropped: the effect counts though the client saw no answer |
+| `http_500_after_apply` | | Applied, then answered `500`: the effect counts |
+| `latency` | `ms`, or `minMs` and `maxMs` | Delayed by `ms`, or by a value drawn from the hash in `[minMs, maxMs]`, then applied and answered |
+| `hold` | | Parked until released through `/__mock/holds`, then applied and answered |
+
+A faulted request is logged with the rule's id in `fault`. One faulted before it was applied has `effect: "none"` and never counts in the report. One cut without an answer is logged with `response.status: null` when the connection goes. The report's `faultSeed` is the current rules' seed.
 
 ## World dataset and fixtures
 

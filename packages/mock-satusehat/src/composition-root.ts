@@ -3,6 +3,8 @@
 /// <reference types="fhir" />
 import type { Clock } from './clock.js';
 import type { MockConfig } from './config.js';
+import { FaultRules } from './faults.js';
+import { Parking } from './parking.js';
 import { Platform } from './platform.js';
 import { buildServer } from './server.js';
 import { SubmissionLog } from './submission-log.js';
@@ -29,7 +31,7 @@ export interface MockSatusehat {
 export async function createMockSatusehat(config: MockConfig, runtime: MockRuntime): Promise<MockSatusehat> {
   const world = await loadWorld(config.worldPath);
   const platform = new Platform(world, config, runtime.clock);
-  const app = buildServer({ platform, log: new SubmissionLog(), clock: runtime.clock });
+  const app = buildServer({ platform, log: new SubmissionLog(), faults: new FaultRules(), parking: new Parking(runtime.clock), clock: runtime.clock });
   return {
     async listen() {
       const address = await app.listen({ host: config.host, port: config.port });

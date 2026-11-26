@@ -152,6 +152,14 @@ _Avoid_: Request log, audit log, attempt log (that is the hub's record of its at
 The value of a visit's `encounter/{org}` identifier, which the mock SATUSEHAT uses to group a visit's requests in its submission log.
 _Avoid_: Visit ID (that is the source system's field), Encounter ID (that is the remote identifier)
 
+**Fault rule**:
+A rule set on the mock SATUSEHAT that makes the requests it matches fail, slow down or wait, on a deterministic schedule fixed by a seed, so that the same run meets the same faults however workers interleave.
+_Avoid_: Chaos, failure injection setting
+
+**Hold**:
+A request the mock SATUSEHAT has parked under a fault rule, unapplied and unanswered, until a test releases it, so a test can act at a known moment without sleeping.
+_Avoid_: Pause, breakpoint, lock
+
 **Business identifier**:
 The `system|value` identifier the hub gives a record it submits, such as `encounter/{org}|V-1`, by which SATUSEHAT can be searched for it. ADR 0005 calls it the local identifier.
 _Avoid_: Remote identifier (that is the id SATUSEHAT assigns), external ID
