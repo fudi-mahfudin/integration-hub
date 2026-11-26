@@ -1,5 +1,7 @@
 import { fetch, type Dispatcher } from 'undici';
 import type { Clock } from '../clock.js';
+import type { CircuitBreaker } from './circuit-breaker.js';
+import type { RateLimitedApi, RateLimiter } from './rate-limiter.js';
 import { AttemptBudgetExceeded, SatusehatNetworkError, SatusehatTimeoutError } from './errors.js';
 import type { AccessTokens } from './token.js';
 
@@ -31,6 +33,8 @@ export interface AttemptCalls {
 
 /** One request to SATUSEHAT (FHIR or KFA v2), sent with the process's access token. */
 export interface SatusehatRequest {
+  /** Which platform API it goes to: its breaker and rate limit apply. */
+  api: RateLimitedApi;
   /** A GET is an idempotent read (retried in-process); a POST or PUT is a write (sent once). */
   method: 'GET' | 'POST' | 'PUT';
   /** The full URL, query included. */
@@ -60,7 +64,9 @@ export interface SatusehatTransport {
    * fails transiently (timeout, network error, 5xx, 408, 429) is tried again
    * after 100ms, then 400ms (±20%): three tries in all, each logged in
    * `calls.readRetries`; a write is sent once. No send starts with less than
-   * one call timeout left of the attempt's budget: `AttemptBudgetExceeded`.
+   * one call timeout left of the attempt's budget: `AttemptBudgetExceeded`;
+   * none is sent while its platform API's breaker is open: `CircuitOpen`. Each
+   * send waits its turn under the platform API's rate limit, and a 429 holds its calls off.
    * Throws `SatusehatTimeoutError` or `SatusehatNetworkError` for the last
    * failed try, or resolves to the last answer, whatever its status.
    */
@@ -94,6 +100,10 @@ export function isTransientStatus(status: number): boolean {
 /** Builds the transport over one process's tokens and connection pool. Only the composition root calls this. */
 export function createSatusehatTransport(deps: {
   tokens: AccessTokens;
+  /** The process's FHIR and KFA breakers; every exchange reports its health to its platform API's. */
+  breakers: Record<SatusehatRequest['api'], CircuitBreaker>;
+  /** The rate limit shared by the worker processes. */
+  limiter: RateLimiter;
   dispatcher: Dispatcher;
   callTimeoutMs: number;
   /** The connect timeout `dispatcher` was built with, for the error it raises. */
@@ -102,15 +112,36 @@ export function createSatusehatTransport(deps: {
   /** Draws from [0, 1), for the read retries' jitter. */
   random: () => number;
 }): SatusehatTransport {
-  const { tokens, dispatcher, callTimeoutMs, connectTimeoutMs, clock, random } = deps;
+  const { tokens, breakers, limiter, dispatcher, callTimeoutMs, connectTimeoutMs, clock, random } = deps;
 
   function checkBudget(calls: AttemptCalls, request: SatusehatRequest): void {
     const remainingMs = calls.budgetEndsAt.getTime() - clock().getTime();
     if (remainingMs < callTimeoutMs) throw new AttemptBudgetExceeded(request.method, request.url, remainingMs, callTimeoutMs);
   }
 
+  /**
+   * One HTTP exchange, once the rate limit lets it go and within the budget,
+   * through the platform API's breaker: a 5xx, timeout or network error is a
+   * health failure. A 429 holds off the platform API's calls.
+   */
+  async function exchange(calls: AttemptCalls, request: SatusehatRequest, token: string): Promise<SatusehatAnswer> {
+    await limiter.acquire(request.api);
+    checkBudget(calls, request);
+    const report = breakers[request.api].admit();
+    let answer: SatusehatAnswer;
+    try {
+      answer = await exchangeOnce(request, token);
+    } catch (err) {
+      report(false);
+      throw err;
+    }
+    report(answer.status < 500);
+    if (answer.status === 429) await limiter.holdOff(request.api, answer.retryAfter);
+    return answer;
+  }
+
   /** One HTTP exchange within the call timeout, connect to last byte. */
-  async function exchange(request: SatusehatRequest, token: string): Promise<SatusehatAnswer> {
+  async function exchangeOnce(request: SatusehatRequest, token: string): Promise<SatusehatAnswer> {
     const { method, url, accept, body } = request;
     const signal = AbortSignal.timeout(callTimeoutMs);
     try {
@@ -132,17 +163,15 @@ export function createSatusehatTransport(deps: {
     }
   }
 
-  /** One try: the exchange, and after a 401 one token refresh and resend. The token comes first, so its fetch counts against the budget too. */
+  /** One try: the exchange, and after a 401 one token refresh and resend. The token comes first, so its fetch (and the rate limit's wait) count against the budget too. */
   async function tryOnce(calls: AttemptCalls, request: SatusehatRequest): Promise<SatusehatAnswer> {
     const token = await tokens.current();
-    checkBudget(calls, request);
-    const answer = await exchange(request, token);
+    const answer = await exchange(calls, request, token);
     if (answer.status !== 401) return answer;
     const renewed = await tokens.renew(token);
     // No new token yet (refreshed too recently): the 401 stands, and is transient.
     if (renewed === null) return answer;
-    checkBudget(calls, request);
-    return exchange(request, renewed);
+    return exchange(calls, request, renewed);
   }
 
   return {

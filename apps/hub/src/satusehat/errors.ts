@@ -1,3 +1,5 @@
+import type { PlatformApi } from './circuit-breaker.js';
+
 /** SATUSEHAT answered a request with a status the adapter did not expect. */
 export class SatusehatRequestError extends Error {
   constructor(
@@ -76,5 +78,17 @@ export class TokenUnavailable extends Error {
   constructor(reason: string, options?: { cause: unknown }) {
     super(`no SATUSEHAT access token: ${reason}`, options);
     this.name = 'TokenUnavailable';
+  }
+}
+
+/**
+ * The circuit breaker of the platform API a call was for is open, so the call was
+ * not sent (#13). Transient: a worker whose breaker opens mid-attempt ends
+ * the attempt as failed, and claims nothing more until it closes.
+ */
+export class CircuitOpen extends Error {
+  constructor(readonly api: PlatformApi) {
+    super(`SATUSEHAT ${api} call not sent: its circuit breaker is open`);
+    this.name = 'CircuitOpen';
   }
 }

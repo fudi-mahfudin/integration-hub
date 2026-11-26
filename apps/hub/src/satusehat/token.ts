@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Clock } from '../clock.js';
 import type { SatusehatConfig } from '../config.js';
 import { SatusehatRequestError, SatusehatResponseError, TokenUnavailable } from './errors.js';
+import type { CircuitBreaker } from './circuit-breaker.js';
 import type { SharedTokenBackoff } from './token-backoff.js';
 import { parseRetryAfter } from './transport.js';
 
@@ -42,14 +43,17 @@ const BACKOFF_MS = 60_000;
  * the throttled endpoint. After a failed token request, the endpoint is left
  * alone for 60s: `shared` (Redis) tells the other processes, while Redis
  * holds the key, and this process also remembers on its own, in case Redis is down.
+ * Token requests go through `breaker`, the auth platform API's: while it is open
+ * none is sent (`CircuitOpen`), and that starts no backoff.
  */
 export function createAccessTokens(deps: {
   config: Pick<SatusehatConfig, 'authUrl' | 'clientId' | 'clientSecret' | 'callTimeoutMs' | 'tokenMinIntervalMs'>;
   dispatcher: Dispatcher;
   clock: Clock;
   shared: SharedTokenBackoff;
+  breaker: CircuitBreaker;
 }): AccessTokens {
-  const { config, dispatcher, clock, shared } = deps;
+  const { config, dispatcher, clock, shared, breaker } = deps;
   let cached: { token: string; refreshAtMs: number; expiresAtMs: number } | undefined;
   let lastFetchedAtMs: number | undefined;
   let backoffUntilMs = 0;
@@ -91,9 +95,13 @@ export function createAccessTokens(deps: {
     if (now() < backoffUntilMs) {
       throw new TokenUnavailable(`the token endpoint is backing off until ${new Date(backoffUntilMs).toISOString()} after a failed request`);
     }
+    const report = breaker.admit();
     try {
-      return await request();
+      const token = await request();
+      report(true);
+      return token;
     } catch (err) {
+      report(!isHealthFailure(err));
       backoffUntilMs = now() + BACKOFF_MS;
       await shared.set(new Date(backoffUntilMs));
       throw new TokenUnavailable(`the token request failed; backing off until ${new Date(backoffUntilMs).toISOString()}`, { cause: err });
@@ -130,6 +138,12 @@ export function createAccessTokens(deps: {
       return fetchShared();
     },
   };
+}
+
+/** A 5xx, or no answer at all (timeout, network error); an answer the hub can't read is the hub's problem, not the endpoint's health. */
+function isHealthFailure(err: unknown): boolean {
+  if (err instanceof SatusehatRequestError) return err.status >= 500;
+  return !(err instanceof SatusehatResponseError);
 }
 
 function safeJson(text: string): unknown {

@@ -128,6 +128,14 @@ _Avoid_: Drift, inconsistency
 The identifier SATUSEHAT assigns to a record the hub created. It is learned at runtime and stored, never hardcoded.
 _Avoid_: FHIR ID, server ID
 
+**Platform API**:
+One of the three SATUSEHAT APIs the hub calls: FHIR, KFA v2, and the token endpoint (`auth`). Each has its own circuit breaker in every worker process; FHIR and KFA v2 each have one rate limit, shared by all worker processes.
+_Avoid_: Upstream (avoided for the source system), host (against the mock, all three share one)
+
+**Circuit breaker**:
+A worker process's in-memory guard for one platform API. When at least half of the last 10s of its calls (20 or more) failed for the platform's health (5xx, timeouts, resets), it opens, and the worker claims no step until a probe call succeeds, so a down platform consumes no attempts.
+_Avoid_: Kill switch, fuse
+
 **IHS number**:
 The SATUSEHAT identifier for a patient or practitioner.
 _Avoid_: Patient ID, NIK (that is the national ID number, a different thing)

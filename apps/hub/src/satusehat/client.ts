@@ -121,6 +121,7 @@ export function createSatusehatClient(deps: {
   ): Promise<{ url: URL; json: unknown }> {
     const url = new URL(path, config.fhirUrl);
     const res = await transport.send(calls, {
+      api: 'fhir',
       method,
       url,
       accept: 'application/fhir+json',
