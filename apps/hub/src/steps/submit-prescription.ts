@@ -12,7 +12,7 @@ import type { SatusehatClient } from '../satusehat/client.js';
 import { prescriptionMedicationRequestResource } from '../satusehat/resources.js';
 import { validateStepPayload, type MissingMapping } from '../validation/validation.js';
 import { readCompletedCreateVisit } from './completed-steps.js';
-import { lookUpByNik } from './person-lookup.js';
+import { lookUpPractitioner } from './person-lookup.js';
 import { AttemptFailed, rejected, type AttemptFacts, type StepOutcome } from './step-outcome.js';
 
 /** What submit prescription reads and calls. */
@@ -28,7 +28,7 @@ type PrescriptionAttempt = AttemptFacts & { valuesUsed: Partial<SubmitPrescripti
 /**
  * One attempt at submit prescription: maps the item's local drug code to a
  * KFA code by the operator's mapping and resolves its KFA details (stored,
- * else fetched from KFA v2 once), looks the requester up by NIK, builds the
+ * else fetched from KFA v2 once), looks the requester up (see `person-lookup`), builds the
  * MedicationRequest on the Encounter and patient create visit stored and
  * pinned, and has the Validation module check it; then search-then-create
  * (ADR 0005) under the `prescription/{org}` identifier: one match is
@@ -82,10 +82,10 @@ async function attemptSubmitPrescription(deps: SubmitPrescriptionDeps, step: Cla
   const { product } = medication;
   Object.assign(attempt.valuesUsed, kfaProductPins(product));
 
-  const requester = await lookUpByNik('requester', prescription.requester.nik, (nik) => satusehat.findPractitionersByNik(nik), attempt);
-  if (!requester) return deadLettered('PRACTITIONER_NOT_FOUND');
+  const requesterLookup = await lookUpPractitioner(satusehat, 'requester', prescription.requester, attempt);
+  if ('deadLettered' in requesterLookup) return deadLettered(requesterLookup.deadLettered);
+  const requester = requesterLookup.found;
   attempt.valuesUsed.requesterIhsNumber = requester;
-  attempt.lookupMethods.requester = 'nik';
 
   const identifier = { organizationId: step.organizationId, prescriptionId: prescription.prescriptionId };
   const medicationRequest = prescriptionMedicationRequestResource({

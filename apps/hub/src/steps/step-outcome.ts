@@ -2,8 +2,8 @@ import type { DeadLetterReason, RemoteIdentifier } from '../cases/case-model.js'
 import type { CreateVisitPins, StepPins, SubmitDispensePins, SubmitPrescriptionPins, UpdateVisitPins } from '../cases/pins.js';
 import type { Violation } from '../validation/validation.js';
 
-/** How a person's IHS number was found (#10, #32). Only by NIK so far. */
-export type LookupMethod = 'nik';
+/** How a person's IHS number was found (#10, #32): by NIK, or by one of the fallbacks SATUSEHAT documents. */
+export type LookupMethod = 'nik' | 'mother_nik_birth_date' | 'name_birth_date_gender';
 
 /**
  * What one attempt used and saw, for its row in the attempt log (#8, #10).

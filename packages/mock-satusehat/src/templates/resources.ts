@@ -3,6 +3,8 @@ import { defineTemplate, DOCS } from './provenance.js';
 
 /** Identifier system for the national ID number. */
 export const NIK_SYSTEM = 'https://fhir.kemkes.go.id/id/nik';
+/** Identifier system for the mother's NIK, which a newborn without its own NIK is found by. */
+export const MOTHER_NIK_SYSTEM = 'https://fhir.kemkes.go.id/id/nik-ibu';
 /** Identifier system for an IHS number. */
 export const IHS_SYSTEM = 'https://fhir.kemkes.go.id/id/ihs-number';
 
@@ -10,9 +12,10 @@ export const IHS_SYSTEM = 'https://fhir.kemkes.go.id/id/ihs-number';
 export const patientResource = defineTemplate(
   {
     tag: 'satusehat-docs',
-    note: 'Patient by NIK search hit, reduced to id, identifiers and the fields the fallbacks compare',
+    note: 'Patient search hit (by NIK, mother\'s NIK, or name + birthdate + gender), reduced to id, identifiers and the fields the fallbacks compare',
     link: DOCS.patient,
     fields: {
+      'identifier[nik-ibu]': { tag: 'assumed', note: 'the docs show the mother\'s NIK on mother\'s-NIK hits; that every hit carries it is unverified' },
       birthDate: { tag: 'assumed', note: 'whether a NIK search hit carries birthDate is unverified' },
       gender: { tag: 'assumed', note: 'whether a NIK search hit carries gender is unverified' },
     },
@@ -23,6 +26,7 @@ export const patientResource = defineTemplate(
     identifier: [
       { use: 'official', system: IHS_SYSTEM, value: patient.ihsNumber },
       { use: 'official', system: NIK_SYSTEM, value: patient.nik },
+      { use: 'official', system: MOTHER_NIK_SYSTEM, value: patient.motherNik },
     ],
     name: [{ use: 'official', text: patient.name }],
     gender: patient.gender,
@@ -35,13 +39,19 @@ export const practitionerResource = defineTemplate(
   {
     tag: 'fhir-spec',
     note: 'FHIR R4 Practitioner with the NIK identifier and the IHS number as id',
-    fields: { id: { tag: 'assumed', note: 'that the resource id is the IHS number is unverified for practitioners' } },
+    fields: {
+      id: { tag: 'assumed', note: 'that the resource id is the IHS number is unverified for practitioners' },
+      birthDate: { tag: 'assumed', note: 'whether a Practitioner search hit carries birthDate is unverified' },
+      gender: { tag: 'assumed', note: 'whether a Practitioner search hit carries gender is unverified' },
+    },
   },
   (practitioner: WorldPractitioner): fhir4.Practitioner => ({
     resourceType: 'Practitioner',
     id: practitioner.ihsNumber,
     identifier: [{ use: 'official', system: NIK_SYSTEM, value: practitioner.nik }],
     name: [{ use: 'official', text: practitioner.name }],
+    gender: practitioner.gender,
+    birthDate: practitioner.birthDate,
   }),
 );
 

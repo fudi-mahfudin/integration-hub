@@ -25,6 +25,20 @@ export interface PrescriptionIdentifier {
   prescriptionId: PrescriptionId;
 }
 
+/** The name, birthdate and gender SATUSEHAT finds a person by when there is no NIK. */
+export interface NameBirthDateGender {
+  name: string;
+  /** A calendar date `YYYY-MM-DD`. */
+  birthDate: string;
+  gender: 'male' | 'female';
+}
+
+/** A patient a mother's NIK search found: its IHS number and `birthDate`, null when SATUSEHAT holds none. */
+export interface MotherNikMatch {
+  ihsNumber: IhsNumber;
+  birthDate: string | null;
+}
+
 /** An Encounter a search found: its remote identifier, and how far the visit it records has got. */
 export interface FoundEncounter {
   remote: RemoteIdentifier;
@@ -42,8 +56,17 @@ export interface FoundEncounter {
 export interface SatusehatClient {
   /** IHS numbers of the patients found by NIK (`Patient?identifier=…/nik|{nik}`). */
   findPatientsByNik(nik: string): Promise<IhsNumber[]>;
+  /**
+   * The children of the mother with NIK `motherNik` (`Patient?identifier=…/nik-ibu|{nik}`),
+   * each with its birthDate; SATUSEHAT documents no birthdate parameter for this search.
+   */
+  findPatientsByMotherNik(motherNik: string): Promise<MotherNikMatch[]>;
+  /** IHS numbers of the patients found by name, birthdate and gender (`Patient?name=&birthdate=&gender=`). */
+  findPatientsByNameBirthDateGender(person: NameBirthDateGender): Promise<IhsNumber[]>;
   /** IHS numbers of the practitioners found by NIK. */
   findPractitionersByNik(nik: string): Promise<IhsNumber[]>;
+  /** IHS numbers of the practitioners found by name, birthdate and gender (`Practitioner?name=&birthdate=&gender=`). */
+  findPractitionersByNameBirthDateGender(person: NameBirthDateGender): Promise<IhsNumber[]>;
   /** Every Encounter under the visit's business identifier. */
   findEncounters(identifier: VisitIdentifier): Promise<FoundEncounter[]>;
   /** Sends a built Encounter (see `visitEncounterResource`); resolves to the record SATUSEHAT stored. */
@@ -64,6 +87,7 @@ export interface SatusehatClient {
 }
 
 const NIK_SYSTEM = 'https://fhir.kemkes.go.id/id/nik';
+const MOTHER_NIK_SYSTEM = 'https://fhir.kemkes.go.id/id/nik-ibu';
 
 const storedRecordSchema = z.object({ id: z.string().min(1), meta: z.object({ versionId: z.string().optional() }).optional() });
 const searchBundleSchema = z.object({
@@ -71,6 +95,7 @@ const searchBundleSchema = z.object({
   // Each hit is parsed by its caller's schema, which may need more than an id.
   entry: z.array(z.object({ resource: z.unknown() })).optional(),
 });
+const motherNikMatchSchema = storedRecordSchema.extend({ birthDate: z.string().optional() });
 const foundEncounterSchema = storedRecordSchema.extend({
   status: z.string().min(1),
   period: z.object({ end: z.string().optional() }).optional(),
@@ -117,14 +142,15 @@ export function createSatusehatClient(deps: {
     throw new SatusehatResponseError(method, url, `an unexpected body; ${problems.join('; ')}`);
   }
 
-  async function search(resourceType: string, identifier: string): Promise<{ url: URL; json: unknown }[]> {
-    const path = `${resourceType}?${new URLSearchParams({ identifier })}`;
+  /** A search by `identifier`, or by the given parameters. */
+  async function search(resourceType: string, query: string | Record<string, string>): Promise<{ url: URL; json: unknown }[]> {
+    const path = `${resourceType}?${new URLSearchParams(typeof query === 'string' ? { identifier: query } : query)}`;
     const answer = await call('GET', path, 200);
     const bundle = parse(searchBundleSchema, 'GET', answer);
     return (bundle.entry ?? []).map((e) => ({ url: answer.url, json: e.resource }));
   }
-  const searchRecords = async (resourceType: string, identifier: string) =>
-    (await search(resourceType, identifier)).map((hit) => parse(storedRecordSchema, 'GET', hit));
+  const searchRecords = async (resourceType: string, query: string | Record<string, string>) =>
+    (await search(resourceType, query)).map((hit) => parse(storedRecordSchema, 'GET', hit));
 
   // The resource id of a Patient or Practitioner is its IHS number.
   const ihsNumbers = (hits: { id: string }[]) => hits.map((h) => h.id as IhsNumber);
@@ -142,7 +168,15 @@ export function createSatusehatClient(deps: {
 
   return {
     findPatientsByNik: async (nik) => ihsNumbers(await searchRecords('Patient', `${NIK_SYSTEM}|${nik}`)),
+    findPatientsByMotherNik: async (motherNik) =>
+      (await search('Patient', `${MOTHER_NIK_SYSTEM}|${motherNik}`)).map((hit) => {
+        const found = parse(motherNikMatchSchema, 'GET', hit);
+        // The resource id of a Patient is its IHS number.
+        return { ihsNumber: found.id as IhsNumber, birthDate: found.birthDate ?? null };
+      }),
+    findPatientsByNameBirthDateGender: async (person) => ihsNumbers(await searchRecords('Patient', nameBirthDateGenderQuery(person))),
     findPractitionersByNik: async (nik) => ihsNumbers(await searchRecords('Practitioner', `${NIK_SYSTEM}|${nik}`)),
+    findPractitionersByNameBirthDateGender: async (person) => ihsNumbers(await searchRecords('Practitioner', nameBirthDateGenderQuery(person))),
     findEncounters: async ({ organizationId, visitId }) =>
       (await search('Encounter', `${encounterSystem(organizationId)}|${visitId}`)).map((hit) => {
         const found = parse(foundEncounterSchema, 'GET', hit);
@@ -169,4 +203,9 @@ export function createSatusehatClient(deps: {
       return medicationDispenseRecord(stored);
     },
   };
+}
+
+/** The documented name + birthdate + gender search parameters. */
+function nameBirthDateGenderQuery({ name, birthDate, gender }: NameBirthDateGender): Record<string, string> {
+  return { name, birthdate: birthDate, gender };
 }

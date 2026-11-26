@@ -121,11 +121,15 @@ const practitioners: World['practitioners'] = Array.from({ length: commitments.w
   const index = i + 1;
   const pharmacist = index === commitments.world.practitioners;
   const gender = random() < 0.5 ? 'male' : 'female';
+  // The README's example practitioner NIK 7209061211900001 is the first one.
+  const nik = index === 1 ? '7209061211900001' : `720906${randomBirthDate(1960, 1995).replace(/^(\d\d)(\d\d)-(\d\d)-(\d\d)$/, '$4$3$2')}${String(index).padStart(4, '0')}`;
   return {
     ihsNumber: `1000${String(9000000 + index).padStart(7, '0')}`,
-    // The README's example practitioner NIK 7209061211900001 is the first one.
-    nik: index === 1 ? '7209061211900001' : `720906${randomBirthDate(1960, 1995).replace(/^(\d\d)(\d\d)-(\d\d)-(\d\d)$/, '$4$3$2')}${String(index).padStart(4, '0')}`,
+    nik,
     name: `${pharmacist ? 'apt.' : 'dr.'} ${pick(gender === 'male' ? MALE : FEMALE)} ${pick(FAMILY)}`,
+    // Read from the date the NIK encodes (DDMMYY, all 19xx), so no extra random draw shifts the rest of the world.
+    birthDate: `19${nik.slice(10, 12)}-${nik.slice(8, 10)}-${nik.slice(6, 8)}`,
+    gender,
     role: pharmacist ? 'pharmacist' : 'physician',
   };
 });

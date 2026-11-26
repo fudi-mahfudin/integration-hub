@@ -47,6 +47,8 @@ const practitionerSchema = z.object({
   ihsNumber: z.string().regex(/^\d{11}$/),
   nik,
   name: z.string().min(1),
+  birthDate: date,
+  gender: z.enum(['male', 'female']),
   role: z.enum(['physician', 'pharmacist']),
 });
 

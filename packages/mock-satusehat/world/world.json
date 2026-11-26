@@ -8268,180 +8268,240 @@
    "ihsNumber": "10009000001",
    "nik": "7209061211900001",
    "name": "dr. Made Purba",
+   "birthDate": "1990-11-12",
+   "gender": "male",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000002",
    "nik": "7209060310800002",
    "name": "dr. Krisna Rahayu",
+   "birthDate": "1980-10-03",
+   "gender": "male",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000003",
    "nik": "7209062601820003",
    "name": "dr. Dimas Tanjung",
+   "birthDate": "1982-01-26",
+   "gender": "male",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000004",
    "nik": "7209062711620004",
    "name": "dr. Budi Lestari",
+   "birthDate": "1962-11-27",
+   "gender": "male",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000005",
    "nik": "7209060409930005",
    "name": "dr. Gita Kurniawan",
+   "birthDate": "1993-09-04",
+   "gender": "female",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000006",
    "nik": "7209060210830006",
    "name": "dr. Dewi Kurniawan",
+   "birthDate": "1983-10-02",
+   "gender": "female",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000007",
    "nik": "7209062012680007",
    "name": "dr. Tuti Halim",
+   "birthDate": "1968-12-20",
+   "gender": "female",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000008",
    "nik": "7209060512740008",
    "name": "dr. Made Lestari",
+   "birthDate": "1974-12-05",
+   "gender": "male",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000009",
    "nik": "7209062706780009",
    "name": "dr. Ayu Rahayu",
+   "birthDate": "1978-06-27",
+   "gender": "female",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000010",
    "nik": "7209060409750010",
    "name": "dr. Lina Pratama",
+   "birthDate": "1975-09-04",
+   "gender": "female",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000011",
    "nik": "7209061308920011",
    "name": "dr. Siti Simanjuntak",
+   "birthDate": "1992-08-13",
+   "gender": "female",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000012",
    "nik": "7209062302640012",
    "name": "dr. Dewi Manurung",
+   "birthDate": "1964-02-23",
+   "gender": "female",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000013",
    "nik": "7209061910600013",
    "name": "dr. Nur Wibowo",
+   "birthDate": "1960-10-19",
+   "gender": "female",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000014",
    "nik": "7209061006850014",
    "name": "dr. Krisna Gunawan",
+   "birthDate": "1985-06-10",
+   "gender": "male",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000015",
    "nik": "7209061002630015",
    "name": "dr. Agus Nugroho",
+   "birthDate": "1963-02-10",
+   "gender": "male",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000016",
    "nik": "7209061009670016",
    "name": "dr. Eko Wijaya",
+   "birthDate": "1967-09-10",
+   "gender": "male",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000017",
    "nik": "7209061001680017",
    "name": "dr. Yuni Sitompul",
+   "birthDate": "1968-01-10",
+   "gender": "female",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000018",
    "nik": "7209060301860018",
    "name": "dr. Rudi Manurung",
+   "birthDate": "1986-01-03",
+   "gender": "male",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000019",
    "nik": "7209062310740019",
    "name": "dr. Joko Pratama",
+   "birthDate": "1974-10-23",
+   "gender": "male",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000020",
    "nik": "7209061001710020",
    "name": "dr. Kartika Pratama",
+   "birthDate": "1971-01-10",
+   "gender": "female",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000021",
    "nik": "7209060504760021",
    "name": "dr. Fitri Siregar",
+   "birthDate": "1976-04-05",
+   "gender": "female",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000022",
    "nik": "7209062810630022",
    "name": "dr. Lukman Wibowo",
+   "birthDate": "1963-10-28",
+   "gender": "male",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000023",
    "nik": "7209061009660023",
    "name": "dr. Gilang Gunawan",
+   "birthDate": "1966-09-10",
+   "gender": "male",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000024",
    "nik": "7209062509860024",
    "name": "dr. Ratna Halim",
+   "birthDate": "1986-09-25",
+   "gender": "female",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000025",
    "nik": "7209062808840025",
    "name": "dr. Krisna Pratama",
+   "birthDate": "1984-08-28",
+   "gender": "male",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000026",
    "nik": "7209060509610026",
    "name": "dr. Fajar Sitompul",
+   "birthDate": "1961-09-05",
+   "gender": "male",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000027",
    "nik": "7209060407860027",
    "name": "dr. Lukman Siregar",
+   "birthDate": "1986-07-04",
+   "gender": "male",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000028",
    "nik": "7209060811700028",
    "name": "dr. Yuni Sitompul",
+   "birthDate": "1970-11-08",
+   "gender": "female",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000029",
    "nik": "7209061211660029",
    "name": "dr. Arif Hidayat",
+   "birthDate": "1966-11-12",
+   "gender": "male",
    "role": "physician"
   },
   {
    "ihsNumber": "10009000030",
    "nik": "7209061505710030",
    "name": "apt. Dewi Kurniawan",
+   "birthDate": "1971-05-15",
+   "gender": "female",
    "role": "pharmacist"
   }
  ],
