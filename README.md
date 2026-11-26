@@ -71,8 +71,22 @@ To run the hub service itself:
 
 ```sh
 pnpm build
-node apps/hub/dist/main.js     # serves GET http://localhost:3000/livez
+node apps/hub/dist/main.js     # serves http://localhost:3000
 ```
+
+Then send a source event as the development source system (its API key, `dev-source-key`, is public and for local runs only; production sets `HUB_SOURCES`):
+
+```sh
+curl -i http://localhost:3000/v1/events \
+  -H 'Authorization: Bearer dev-source-key' \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"visit.started","visitId":"V-1","occurredAt":"2026-03-02T08:00:00+07:00","data":{"patient":{"nik":"9271060312000001","mrn":"MRN-1"},"practitioner":{"nik":"7209061211900001"},"encounterClass":"AMB","locationCode":"POLI-UMUM","startedAt":"2026-03-02T08:00:00+07:00"}}'
+```
+
+The API is described in [docs/api.md](docs/api.md).
+
+To see why Redis alone can't detect duplicate ingests (ADR 0003), run `npm run demo:naive-race` (after `pnpm deps:up` and `pnpm migrate`). It fires 20 identical requests at once against the deliberately broken `IDEMPOTENCY_STORE=naive-redis` and then against the Postgres store, and prints how the answers differ.
 
 `pnpm deps:down` stops the containers and deletes their data.
 
@@ -85,6 +99,7 @@ The hub never migrates itself: always run `pnpm migrate` before starting it. The
 | Path | What |
 |---|---|
 | `apps/hub` | The hub: one NestJS + Fastify codebase, deployed as the hub service and (later) the worker process (ADR 0001) |
+| `docs/api.md` | The hub's API contract |
 | `compose.yaml` | Local infrastructure; only components from the closed list |
 | `.github/workflows/ci.yml` | CI: the same `pnpm test` against Postgres and Redis service containers |
 
