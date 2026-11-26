@@ -11,3 +11,16 @@ export class SatusehatRequestError extends Error {
     this.name = 'SatusehatRequestError';
   }
 }
+
+/** SATUSEHAT answered with the expected status, but its body is not what the adapter can read. */
+export class SatusehatResponseError extends Error {
+  constructor(
+    readonly method: string,
+    readonly url: URL,
+    problem: string,
+    options?: { cause: unknown },
+  ) {
+    super(`SATUSEHAT ${method} ${url.pathname} answered with ${problem}`, options);
+    this.name = 'SatusehatResponseError';
+  }
+}

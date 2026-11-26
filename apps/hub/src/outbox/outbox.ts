@@ -1,7 +1,15 @@
 import { sql, type Kysely, type Transaction } from 'kysely';
 import type { OrganizationId, SourceSystemId } from '../auth/source-systems.js';
 import type { Brand } from '../brand.js';
-import { applyCompletion, type CaseId, type DeadLetterReason, type StepName, type StepView, type VisitId } from '../cases/case-model.js';
+import {
+  applyCompletion,
+  type CaseId,
+  type DeadLetterReason,
+  type RemoteIdentifier,
+  type StepName,
+  type StepView,
+  type VisitId,
+} from '../cases/case-model.js';
 import { readSteps, writeCaseStatus } from '../cases/case-status.js';
 import type { Clock } from '../clock.js';
 import type { Database } from '../db/database.js';
@@ -23,13 +31,6 @@ export interface ClaimedStep {
   visitId: VisitId;
 }
 
-/** The record a completed step stored at SATUSEHAT. */
-export interface StepRemote {
-  type: string;
-  id: string;
-  version: string | null;
-}
-
 /**
  * The Postgres outbox (ADR 0002). A step row is its own outbox entry: the
  * transaction that makes a step eligible sets it `ready`, and workers take it
@@ -48,7 +49,7 @@ export interface Outbox {
    * event is stored, else the case waits for it. Resolves to `false`, having
    * changed nothing, when the claim no longer holds the lease.
    */
-  complete(step: ClaimedStep, remote: StepRemote): Promise<boolean>;
+  complete(step: ClaimedStep, remote: RemoteIdentifier): Promise<boolean>;
   /**
    * Lease-fenced permanent failure: the step and its case become
    * `dead_lettered` with `reason`; the rest of the case is held. Resolves to
@@ -105,6 +106,8 @@ export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs
       // One statement: pick the oldest claimable row, skip rows another
       // worker has locked, and take it under a fresh lease token. An expired
       // lease is claimable again; the stale holder's outcome then fails the fence.
+      // The row type brands what the columns hold: ids Postgres generated or
+      // ingest stored from a validated event, and the token gen_random_uuid() just issued.
       const { rows } = await sql<ClaimedStep>`
         with picked as (
           select case_id, seq

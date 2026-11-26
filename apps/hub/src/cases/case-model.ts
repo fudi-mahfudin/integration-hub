@@ -37,6 +37,17 @@ export type StepState =
 /** A case's status: derived from its current step, except the operator-only `abandoned` (ADR 0007). */
 export type CaseStatus = 'waiting' | 'active' | 'dead_lettered' | 'completed' | 'abandoned';
 
+/** The identifier SATUSEHAT assigned to a record the hub created; learned at runtime, never hardcoded. */
+export type RemoteId = Brand<string, 'RemoteId'>;
+
+/** A step's record at SATUSEHAT: its resource type, remote identifier and `meta.versionId` (#10). */
+export interface RemoteIdentifier {
+  type: 'Encounter';
+  id: RemoteId;
+  /** `meta.versionId`, when SATUSEHAT sends one. */
+  version: string | null;
+}
+
 /**
  * Why a step was dead-lettered: a stable code on the step (#8, #10).
  * `REMOTE_RECORD_AMBIGUOUS`: search-then-create found more than one record

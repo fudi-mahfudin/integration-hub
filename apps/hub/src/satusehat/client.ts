@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import type { OrganizationId } from '../auth/source-systems.js';
 import type { Brand } from '../brand.js';
+import type { RemoteId, RemoteIdentifier, VisitId } from '../cases/case-model.js';
 import type { SatusehatConfig } from '../config.js';
-import { SatusehatRequestError } from './errors.js';
+import { SatusehatRequestError, SatusehatResponseError } from './errors.js';
 import { platformTime } from './platform-time.js';
 import type { AccessTokens } from './token.js';
 
@@ -12,24 +13,19 @@ export type IhsNumber = Brand<string, 'IhsNumber'>;
 /** A SATUSEHAT Location id. */
 export type LocationId = Brand<string, 'LocationId'>;
 
-/** A record SATUSEHAT holds, by its remote identifier and version. */
-export interface RemoteRecord {
-  type: 'Encounter';
-  id: string;
-  /** `meta.versionId`, when SATUSEHAT sends one. */
-  version: string | null;
-}
-
 /** The visit's business identifier (ADR 0005): `encounter/{org}|{visitId}`. */
 export interface VisitIdentifier {
   organizationId: OrganizationId;
-  visitId: string;
+  visitId: VisitId;
 }
+
+/** The encounter classes a visit may have (#6). */
+export type EncounterClass = 'AMB' | 'IMP' | 'EMER';
 
 /** What a create-visit Encounter says about its visit. */
 export interface VisitEncounter {
   identifier: VisitIdentifier;
-  encounterClass: 'AMB' | 'IMP' | 'EMER';
+  encounterClass: EncounterClass;
   patient: IhsNumber;
   practitioner: IhsNumber;
   location: LocationId;
@@ -38,7 +34,8 @@ export interface VisitEncounter {
 
 /**
  * The SATUSEHAT calls the hub makes, one method per call, so each can be
- * faked with one return shape. Unexpected answers throw `SatusehatRequestError`.
+ * faked with one return shape. An unexpected status throws
+ * `SatusehatRequestError`; a body of the wrong shape throws `SatusehatResponseError`.
  */
 export interface SatusehatClient {
   /** IHS numbers of the patients found by NIK (`Patient?identifier=…/nik|{nik}`). */
@@ -46,9 +43,9 @@ export interface SatusehatClient {
   /** IHS numbers of the practitioners found by NIK. */
   findPractitionersByNik(nik: string): Promise<IhsNumber[]>;
   /** Every Encounter under the visit's business identifier. */
-  findEncounters(identifier: VisitIdentifier): Promise<RemoteRecord[]>;
+  findEncounters(identifier: VisitIdentifier): Promise<RemoteIdentifier[]>;
   /** Creates the visit's Encounter, status `arrived`; resolves to the record SATUSEHAT stored. */
-  createEncounter(encounter: VisitEncounter): Promise<RemoteRecord>;
+  createEncounter(encounter: VisitEncounter): Promise<RemoteIdentifier>;
 }
 
 const NIK_SYSTEM = 'https://fhir.kemkes.go.id/id/nik';
@@ -69,7 +66,12 @@ export function createSatusehatClient(deps: {
 }): SatusehatClient {
   const { config, tokens } = deps;
 
-  async function call(method: 'GET' | 'POST', path: string, expected: number, body?: unknown): Promise<unknown> {
+  async function call(
+    method: 'GET' | 'POST',
+    path: string,
+    expected: number,
+    body?: unknown,
+  ): Promise<{ url: URL; json: unknown }> {
     const url = new URL(path, config.fhirUrl);
     const token = await tokens.current();
     const res = await fetch(url, {
@@ -84,23 +86,32 @@ export function createSatusehatClient(deps: {
     const text = await res.text();
     if (res.status !== expected) throw new SatusehatRequestError(method, url, res.status, text);
     try {
-      return JSON.parse(text);
+      return { url, json: JSON.parse(text) };
     } catch (err) {
-      throw new Error(`SATUSEHAT ${method} ${url.pathname} answered ${res.status} with a body that is not JSON`, { cause: err });
+      throw new SatusehatResponseError(method, url, 'a body that is not JSON', { cause: err });
     }
+  }
+
+  /** Parses a response body at the boundary; a wrong shape is a `SatusehatResponseError`. */
+  function parse<T>(schema: z.ZodType<T>, method: string, { url, json }: { url: URL; json: unknown }): T {
+    const parsed = schema.safeParse(json);
+    if (parsed.success) return parsed.data;
+    const problems = parsed.error.issues.slice(0, 5).map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`);
+    throw new SatusehatResponseError(method, url, `an unexpected body; ${problems.join('; ')}`);
   }
 
   async function search(resourceType: string, identifier: string): Promise<z.infer<typeof storedRecordSchema>[]> {
     const path = `${resourceType}?${new URLSearchParams({ identifier })}`;
-    const bundle = searchBundleSchema.parse(await call('GET', path, 200));
+    const bundle = parse(searchBundleSchema, 'GET', await call('GET', path, 200));
     return (bundle.entry ?? []).map((e) => e.resource);
   }
 
   // The resource id of a Patient or Practitioner is its IHS number.
   const ihsNumbers = (hits: { id: string }[]) => hits.map((h) => h.id as IhsNumber);
-  const encounterRecord = (r: z.infer<typeof storedRecordSchema>): RemoteRecord => ({
+  const encounterRecord = (r: z.infer<typeof storedRecordSchema>): RemoteIdentifier => ({
     type: 'Encounter',
-    id: r.id,
+    // SATUSEHAT assigned this id to the Encounter.
+    id: r.id as RemoteId,
     version: r.meta?.versionId ?? null,
   });
 
@@ -110,7 +121,7 @@ export function createSatusehatClient(deps: {
     findEncounters: async ({ organizationId, visitId }) =>
       (await search('Encounter', `${encounterSystem(organizationId)}|${visitId}`)).map(encounterRecord),
     async createEncounter(encounter) {
-      const stored = storedRecordSchema.parse(await call('POST', 'Encounter', 201, visitEncounterResource(encounter)));
+      const stored = parse(storedRecordSchema, 'POST', await call('POST', 'Encounter', 201, visitEncounterResource(encounter)));
       return encounterRecord(stored);
     },
   };

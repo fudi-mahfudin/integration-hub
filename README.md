@@ -93,7 +93,7 @@ node packages/mock-satusehat/dist/main.js   # mock SATUSEHAT on http://localhost
 node apps/hub/dist/worker-main.js           # claims steps from the Postgres outbox
 ```
 
-The worker loads the location mapping seed (`apps/hub/seed/location-mappings.json`, the simulator's location codes mapped to the world dataset's locations) at boot; so does the hub service. Loading it again changes nothing.
+The worker loads the location mapping seed (`apps/hub/seed/location-mappings.json`, the simulator's location codes mapped to the world dataset's locations) at boot. Loading it again changes nothing.
 
 To see why Redis alone can't detect duplicate ingests (ADR 0003), run `npm run demo:naive-race` (after `pnpm deps:up` and `pnpm migrate`). It fires 20 identical requests at once against the deliberately broken `IDEMPOTENCY_STORE=naive-redis` and then against the Postgres store, and prints how the answers differ.
 

@@ -18,7 +18,7 @@ import type { IdempotencyStore } from './ingestion/idempotency-store.js';
 import { createIngest } from './ingestion/ingest.js';
 import { createNaiveRedisIdempotencyStore } from './ingestion/naive-redis-idempotency-store.js';
 import { createPostgresIdempotencyStore } from './ingestion/postgres-idempotency-store.js';
-import { LOCATION_MAPPING_SEED, loadLocationMappingSeed } from './mapping/location-mappings.js';
+import { loadLocationMappingSeed } from './mapping/location-mappings.js';
 import { log } from './observability/log.js';
 import { createOutbox } from './outbox/outbox.js';
 import { createSatusehatClient } from './satusehat/client.js';
@@ -65,7 +65,6 @@ export async function createHub(config: HubConfig, runtime: HubRuntime): Promise
   let redis: Redis;
   try {
     await checkPostgres(db, config.databaseUrl);
-    await loadLocationMappingSeed(db, LOCATION_MAPPING_SEED, clock());
     redis = await connectRedis(config.redisUrl);
   } catch (err) {
     await db.destroy();
@@ -145,7 +144,7 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
   const { clock } = runtime;
   try {
     await checkPostgres(db, config.databaseUrl);
-    await loadLocationMappingSeed(db, LOCATION_MAPPING_SEED, clock());
+    await loadLocationMappingSeed(db, clock());
   } catch (err) {
     await db.destroy();
     throw err;

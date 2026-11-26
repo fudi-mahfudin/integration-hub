@@ -73,10 +73,12 @@ const practitioner = z
     { when: () => true },
   );
 
+const ENCOUNTER_CLASSES = ['AMB', 'IMP', 'EMER'] as const;
+
 const visitStartedData = z.object({
   patient,
   practitioner,
-  encounterClass: z.enum(['AMB', 'IMP', 'EMER'], 'must be one of AMB, IMP, EMER'),
+  encounterClass: z.enum(ENCOUNTER_CLASSES, 'must be one of AMB, IMP, EMER'),
   locationCode: text(64),
   startedAt: sourceTime({ floor: true }),
 });
@@ -146,7 +148,7 @@ function valueAt(input: unknown, path: readonly PropertyKey[]): unknown {
 export interface VisitStartedFacts {
   patient: { nik?: string | undefined };
   practitioner: { nik?: string | undefined };
-  encounterClass: 'AMB' | 'IMP' | 'EMER';
+  encounterClass: (typeof ENCOUNTER_CLASSES)[number];
   locationCode: string;
   startedAt: Date;
 }

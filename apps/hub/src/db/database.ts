@@ -1,6 +1,6 @@
 import { Kysely, PostgresDialect, type ColumnType, type Generated } from 'kysely';
 import pg from 'pg';
-import type { CaseStatus, DeadLetterReason, EventType, StepName, StepState } from '../cases/case-model.js';
+import type { CaseStatus, DeadLetterReason, EventType, RemoteIdentifier, StepName, StepState } from '../cases/case-model.js';
 
 /** A `timestamptz` column: read as a `Date`, written as a `Date`. */
 type Timestamp = ColumnType<Date, Date, Date>;
@@ -33,7 +33,7 @@ export interface StepTable {
   lease_token: string | null;
   lease_expires_at: Timestamp | null;
   /** The record the step's completion stored at SATUSEHAT. */
-  remote_type: string | null;
+  remote_type: RemoteIdentifier['type'] | null;
   remote_id: string | null;
   remote_version: string | null;
   dead_letter_reason: DeadLetterReason | null;

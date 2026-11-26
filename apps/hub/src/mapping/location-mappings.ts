@@ -10,7 +10,7 @@ import type { LocationId } from '../satusehat/client.js';
  * simulator's source system, pointing at the world dataset's locations (#10).
  * Resolves to `apps/hub/seed/` from both `src/mapping` and `dist/mapping`.
  */
-export const LOCATION_MAPPING_SEED = new URL('../../seed/location-mappings.json', import.meta.url);
+const LOCATION_MAPPING_SEED = new URL('../../seed/location-mappings.json', import.meta.url);
 
 const seedSchema = z
   .array(
@@ -29,10 +29,11 @@ const seedSchema = z
 /**
  * Loads the seed file into the location mappings, idempotently: each
  * (source, locationCode) is upserted, so loading it again changes nothing,
- * and a changed seed entry takes effect at the next boot. Every process
- * loads it at boot. Throws naming the file if it is invalid.
+ * and a changed seed entry takes effect at the next boot. The worker loads
+ * it at boot. Throws naming the file if it is invalid.
  */
-export async function loadLocationMappingSeed(db: Kysely<Database>, path: URL, now: Date): Promise<void> {
+export async function loadLocationMappingSeed(db: Kysely<Database>, now: Date): Promise<void> {
+  const path = LOCATION_MAPPING_SEED;
   let json: unknown;
   try {
     json = JSON.parse(await readFile(path, 'utf8'));

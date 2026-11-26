@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { Clock } from '../clock.js';
 import type { SatusehatConfig } from '../config.js';
-import { SatusehatRequestError } from './errors.js';
+import { SatusehatRequestError, SatusehatResponseError } from './errors.js';
 
 /** The access token of one process. */
 export interface AccessTokens {
@@ -42,7 +42,8 @@ export function createAccessTokens(deps: {
     const parsed = tokenResponseSchema.safeParse(safeJson(text));
     if (!parsed.success) {
       // The body holds the token itself, so only the problems are reported.
-      throw new Error(`the token endpoint answered 200 with an unexpected body: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`);
+      const problems = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`);
+      throw new SatusehatResponseError('POST', url, `an unexpected token body; ${problems.join('; ')}`);
     }
     cached = { token: parsed.data.access_token, expiresAtMs: requestedAtMs + Number(parsed.data.expires_in) * 1000 };
     return cached.token;

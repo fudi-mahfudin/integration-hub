@@ -1,10 +1,20 @@
 import type { Kysely } from 'kysely';
 import type { SourceSystemId } from '../auth/source-systems.js';
 import type { Database } from '../db/database.js';
-import type { CaseId, CaseStatus, DeadLetterReason, EventType, StepName, StepState, VisitId } from './case-model.js';
+import type {
+  CaseId,
+  CaseStatus,
+  DeadLetterReason,
+  EventType,
+  RemoteId,
+  RemoteIdentifier,
+  StepName,
+  StepState,
+  VisitId,
+} from './case-model.js';
 
 /** One step as the case view shows it. */
-export interface StepView {
+export interface CaseStepView {
   step: StepName;
   eventType: EventType;
   state: StepState;
@@ -13,7 +23,7 @@ export interface StepView {
   /** Why the step was dead-lettered; null unless it was. */
   deadLetterReason: DeadLetterReason | null;
   /** The record the step's completion stored at SATUSEHAT; null until it completes. */
-  remote: { type: string; id: string; version: string | null } | null;
+  remote: RemoteIdentifier | null;
 }
 
 /** A case as `GET /v1/cases/{id}` shows it: its status, what a waiting case waits for, and its steps in order. */
@@ -25,7 +35,7 @@ export interface CaseView {
   waitingFor: EventType | null;
   /** Since when a waiting case has waited for it, ISO 8601 UTC; null unless `waiting`. */
   waitingSince: string | null;
-  steps: StepView[];
+  steps: CaseStepView[];
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -75,7 +85,8 @@ export async function readCase(
           deadLetterReason: s.dead_letter_reason,
           remote:
             s.remote_type !== null && s.remote_id !== null
-              ? { type: s.remote_type, id: s.remote_id, version: s.remote_version }
+              ? // Stored only by lease-fenced completion, from a RemoteIdentifier.
+                { type: s.remote_type, id: s.remote_id as RemoteId, version: s.remote_version }
               : null,
         })),
       };
