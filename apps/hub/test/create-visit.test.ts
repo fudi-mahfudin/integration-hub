@@ -205,6 +205,28 @@ describe('create visit: an accepted visit.started becomes an Encounter at the mo
     expectAtMostOneStepInMotion(view);
   });
 
+  it('logs an attempt that fails without an outcome with what it had resolved, and leaves the step in flight', async () => {
+    // A patient named without a NIK can't be looked up until the fallbacks land (#32), so the attempt fails.
+    const event = worldVisitStarted({ patient: { name: 'Pasien Contoh', birthDate: '1990-01-01', gender: 'female', mrn: 'MRN-0003' } });
+
+    const view = await waitForCase(hub.baseUrl, (await send(event)).headers.get('location'), (v) => (v.steps[0]?.attemptLog.length ?? 0) > 0, {
+      apiKey: WORLD_SOURCE_API_KEY,
+    });
+
+    expect(view.steps[0]).toMatchObject({ state: 'in_flight', deadLetterReason: null, pins: null });
+    expect(view.steps[0]?.attemptLog).toEqual([
+      expect.objectContaining({
+        attempt: 1,
+        outcome: 'failed',
+        errorCode: null,
+        httpStatus: null,
+        valuesUsed: { locationId: worldVisit.location.id },
+        lookupMethods: {},
+      }),
+    ]);
+    expect(await mock.client.log({ visitKey: event.visitId })).toEqual([]);
+  });
+
   it('dead-letters with PATIENT_NOT_FOUND when no patient has the NIK, creating nothing', async () => {
     const event = worldVisitStarted({ patient: { nik: '9271069999999999', mrn: 'MRN-0002' } });
 

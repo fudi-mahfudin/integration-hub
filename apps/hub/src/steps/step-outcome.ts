@@ -27,3 +27,18 @@ export interface AttemptFacts {
 export type StepOutcome =
   | { completed: RemoteIdentifier; pins: StepPins; attempt: AttemptFacts }
   | { deadLettered: DeadLetterReason; attempt: AttemptFacts };
+
+/**
+ * An attempt that ended without an outcome (a request failed, a lookup could
+ * not be resolved), carrying what it had resolved so the attempt log keeps it (#10).
+ */
+export class AttemptFailed extends Error {
+  constructor(
+    readonly facts: AttemptFacts,
+    options: { cause: unknown },
+  ) {
+    const resolved = Object.keys(facts.valuesUsed).join(', ') || 'nothing';
+    super(`the attempt failed after resolving ${resolved}: ${options.cause instanceof Error ? options.cause.message : String(options.cause)}`, options);
+    this.name = 'AttemptFailed';
+  }
+}

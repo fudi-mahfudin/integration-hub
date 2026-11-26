@@ -1,7 +1,7 @@
 import type { Kysely } from 'kysely';
 import type { SourceSystemId } from '../auth/source-systems.js';
 import type { AttemptOutcome, Database } from '../db/database.js';
-import { readCreateVisitPins, type StepPins } from './pins.js';
+import { readPins, type StepPins } from './pins.js';
 import type {
   CaseId,
   CaseStatus,
@@ -116,7 +116,7 @@ export async function readCase(
               ? // Stored only by lease-fenced completion, from a RemoteIdentifier.
                 { type: s.remote_type, id: s.remote_id as RemoteId, version: s.remote_version }
               : null,
-          pins: s.pins === null ? null : readCreateVisitPins(s.pins),
+          pins: s.pins === null ? null : readPins(s.name, s.pins),
           attemptLog: attempts
             .filter((a) => a.seq === s.seq)
             .map((a) => ({

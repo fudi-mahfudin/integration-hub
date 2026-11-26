@@ -1,8 +1,10 @@
 // The hub's PAYLOAD_INVALID rules for an Encounter (#9). Internal to the
-// Validation module: callers go through `validateSubmission`.
+// Validation module: callers go through `validateStepPayload`.
 import type { OrganizationId } from '../auth/source-systems.js';
 import { isObject, isReferenceTo, nonEmptyArray, nonEmptyString, describe, checkTime, type Fail } from './payload-checks.js';
 
+// Written out here, not imported from the builder in satusehat/resources.ts:
+// the check must not trust the code it checks.
 const ENCOUNTER_SYSTEM_PREFIX = 'http://sys-ids.kemkes.go.id/encounter/';
 
 /**

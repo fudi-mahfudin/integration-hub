@@ -1,6 +1,6 @@
 /**
  * The Validation module (#9): checks what a step is about to send, just before
- * it is sent. Pure: a submission in, its violations out. Any violation is
+ * it is sent. Pure: a step payload in, its violations out. Any violation is
  * permanent and dead-letters the step; the reason is the first violation in
  * rule order, and every violation goes to the attempt log. The mock SATUSEHAT
  * checks the same payloads with its own code (ADR 0006).
@@ -42,7 +42,7 @@ export interface MissingMapping {
  * steps carry the KFA details their rules judge; their FHIR resources join
  * them, with their PAYLOAD_INVALID rules, when those steps are built (#29, #30).
  */
-export type Submission =
+export type StepPayload =
   | {
       step: 'create_visit';
       /** The case's organization: the `{org}` of its identifier systems and its serviceProvider. */
@@ -68,32 +68,32 @@ export type Submission =
       declaredSubstitution: boolean;
     };
 
-/** Every violation of `submission`, in rule order; empty means it may be sent. */
-export function validateSubmission(submission: Submission): Violation[] {
-  const violations: Violation[] = submission.missingMappings.map((m) => ({
+/** Every violation of `payload`, in rule order; empty means it may be sent. */
+export function validateStepPayload(payload: StepPayload): Violation[] {
+  const violations: Violation[] = payload.missingMappings.map((m) => ({
     code: 'MAPPING_MISSING',
     path: null,
     message: `the ${m.kind} "${m.localCode}" has no mapping for this source system`,
   }));
   const add = (code: RuleCode, message: string) => void violations.push({ code, path: null, message });
 
-  switch (submission.step) {
+  switch (payload.step) {
     case 'create_visit': {
       const fail = (path: string, message: string) =>
         void violations.push({ code: 'PAYLOAD_INVALID', path, message: `${path} ${message}` });
-      if (submission.encounter !== null) checkEncounter(submission.encounter, submission.organizationId, fail);
-      else if (submission.missingMappings.length === 0) add('PAYLOAD_INVALID', 'no Encounter was built, yet no mapping is missing');
+      if (payload.encounter !== null) checkEncounter(payload.encounter, payload.organizationId, fail);
+      else if (payload.missingMappings.length === 0) add('PAYLOAD_INVALID', 'no Encounter was built, yet no mapping is missing');
       break;
     }
     case 'submit_prescription': {
-      const { product } = submission;
+      const { product } = payload;
       if (product && product.level !== 92 && product.level !== 93) {
         add('KFA_LEVEL_INVALID', `a prescription needs a KFA 92 or 93 product, got ${product.code} at level ${product.level}`);
       }
       break;
     }
     case 'submit_dispense': {
-      const { prescribed, dispensed, declaredSubstitution } = submission;
+      const { prescribed, dispensed, declaredSubstitution } = payload;
       if (!dispensed) break;
       if (dispensed.level !== 93) {
         add('KFA_LEVEL_INVALID', `a dispense needs a KFA 93 product, got ${dispensed.code} at level ${dispensed.level}`);

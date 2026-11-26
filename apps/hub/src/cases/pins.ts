@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { IhsNumber, LocationId } from '../satusehat/client.js';
+import type { StepName } from './case-model.js';
 
 /**
  * What a completed create visit sent, pinned in the transaction that stored
@@ -21,6 +22,21 @@ const createVisitPinsSchema = z.object({
   practitionerIhsNumber: z.string().min(1),
   locationId: z.string().min(1),
 });
+
+/**
+ * Reads a step's stored pins back, by the step that wrote them.
+ * @throws Error when the stored value does not match that step's pins.
+ */
+export function readPins(step: StepName, stored: unknown): StepPins {
+  switch (step) {
+    case 'create_visit':
+      return readCreateVisitPins(stored);
+    case 'submit_prescription':
+    case 'submit_dispense':
+    case 'update_visit':
+      throw new Error(`step ${step} has no pins defined yet, but its row holds ${JSON.stringify(stored)}`);
+  }
+}
 
 /**
  * Reads a create visit's stored pins back.

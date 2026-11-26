@@ -6,8 +6,8 @@ import { findLocation } from '../mapping/location-mappings.js';
 import type { ClaimedStep } from '../outbox/outbox.js';
 import type { IhsNumber, SatusehatClient } from '../satusehat/client.js';
 import { visitEncounterResource } from '../satusehat/resources.js';
-import { validateSubmission } from '../validation/validation.js';
-import type { AttemptFacts, StepOutcome } from './step-outcome.js';
+import { validateStepPayload } from '../validation/validation.js';
+import { AttemptFailed, type AttemptFacts, type StepOutcome } from './step-outcome.js';
 
 /**
  * One attempt at create visit: resolves the Location from the operator's
@@ -24,6 +24,20 @@ export async function createVisit(
   deps: { db: Kysely<Database>; satusehat: SatusehatClient },
   step: ClaimedStep,
 ): Promise<StepOutcome> {
+  const attempt: AttemptFacts = { httpStatus: null, valuesUsed: {}, lookupMethods: {}, violations: [] };
+  try {
+    return await attemptCreateVisit(deps, step, attempt);
+  } catch (err) {
+    throw new AttemptFailed(attempt, { cause: err });
+  }
+}
+
+/** The attempt itself; `attempt` collects what it resolves and sees as it goes, so a failure can report it. */
+async function attemptCreateVisit(
+  deps: { db: Kysely<Database>; satusehat: SatusehatClient },
+  step: ClaimedStep,
+  attempt: AttemptFacts,
+): Promise<StepOutcome> {
   const { db, satusehat } = deps;
   const { envelope } = await db
     .selectFrom('source_event')
@@ -32,12 +46,11 @@ export async function createVisit(
     .where('type', '=', 'visit.started')
     .executeTakeFirstOrThrow();
   const visit = readVisitStarted(envelope);
-  const attempt: AttemptFacts = { httpStatus: null, valuesUsed: {}, lookupMethods: {}, violations: [] };
   const deadLettered = (reason: DeadLetterReason): StepOutcome => ({ deadLettered: reason, attempt });
 
   const location = await findLocation(db, step.sourceSystemId, visit.locationCode);
   if (!location) {
-    attempt.violations = validateSubmission({
+    attempt.violations = validateStepPayload({
       step: 'create_visit',
       organizationId: step.organizationId,
       missingMappings: [{ kind: 'location', localCode: visit.locationCode }],
@@ -71,7 +84,7 @@ export async function createVisit(
     location,
     startedAt: visit.startedAt,
   });
-  attempt.violations = validateSubmission({
+  attempt.violations = validateStepPayload({
     step: 'create_visit',
     organizationId: step.organizationId,
     missingMappings: [],
@@ -81,6 +94,7 @@ export async function createVisit(
 
   const pins = { patientIhsNumber: patient, practitionerIhsNumber: practitioner, locationId: location };
   const existing = await satusehat.findEncounters(identifier);
+  // The client resolves a search only on 200 and a create only on 201; any other status throws.
   attempt.httpStatus = 200;
   const [adopted] = existing;
   if (existing.length > 1) return deadLettered('REMOTE_RECORD_AMBIGUOUS');
@@ -91,7 +105,7 @@ export async function createVisit(
   return { completed: created, pins, attempt };
 }
 
-/** Dead-letters a submission the Validation module rejected, with its first violation in rule order. */
+/** Dead-letters a payload the Validation module rejected, with its first violation in rule order. */
 function rejected(attempt: AttemptFacts): StepOutcome {
   const [first] = attempt.violations;
   if (!first) throw new Error('rejected() needs at least one violation');

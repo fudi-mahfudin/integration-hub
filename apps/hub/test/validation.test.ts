@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SourceSystems } from '../src/auth/source-systems.js';
 import { parseKfaProduct, type KfaProduct } from '../src/kfa/kfa-product.js';
-import { validateSubmission, type Submission } from '../src/validation/validation.js';
+import { validateStepPayload, type StepPayload } from '../src/validation/validation.js';
 
 const ORG = new SourceSystems([{ id: 's', organizationId: '10000001', apiKey: 'k' }]).authenticate('Bearer k').organizationId;
 
@@ -22,7 +22,7 @@ function encounter(overrides: Record<string, unknown> = {}): Record<string, unkn
   };
 }
 
-const createVisit = (overrides: Partial<Extract<Submission, { step: 'create_visit' }>> = {}): Submission => ({
+const createVisit = (overrides: Partial<Extract<StepPayload, { step: 'create_visit' }>> = {}): StepPayload => ({
   step: 'create_visit',
   organizationId: ORG,
   missingMappings: [],
@@ -30,21 +30,21 @@ const createVisit = (overrides: Partial<Extract<Submission, { step: 'create_visi
   ...overrides,
 });
 
-const codes = (submission: Submission) => validateSubmission(submission).map((v) => v.code);
+const codes = (payload: StepPayload) => validateStepPayload(payload).map((v) => v.code);
 
-describe('validateSubmission: MAPPING_MISSING', () => {
+describe('validateStepPayload: MAPPING_MISSING', () => {
   it('a valid create visit has no violations', () => {
-    expect(validateSubmission(createVisit())).toEqual([]);
+    expect(validateStepPayload(createVisit())).toEqual([]);
   });
 
   it('a location code with no mapping is MAPPING_MISSING, naming the kind and local code; nothing was built', () => {
     expect(
-      validateSubmission(createVisit({ missingMappings: [{ kind: 'location', localCode: 'POLI-X' }], encounter: null })),
+      validateStepPayload(createVisit({ missingMappings: [{ kind: 'location', localCode: 'POLI-X' }], encounter: null })),
     ).toEqual([{ code: 'MAPPING_MISSING', path: null, message: expect.stringContaining('location "POLI-X"') }]);
   });
 });
 
-describe('validateSubmission: PAYLOAD_INVALID on a create visit Encounter', () => {
+describe('validateStepPayload: PAYLOAD_INVALID on a create visit Encounter', () => {
   const OTHER_SYSTEM = 'http://sys-ids.kemkes.go.id/encounter/10000002';
   const time = (start: unknown) => ({ period: { start }, statusHistory: [{ status: 'arrived', period: { start } }] });
 
@@ -71,7 +71,7 @@ describe('validateSubmission: PAYLOAD_INVALID on a create visit Encounter', () =
     ['finished without period.end', { status: 'finished' }, 'Encounter.period.end'],
     ['finished with an end not after its start', { status: 'finished', period: { start: '2026-03-02T01:00:00+00:00', end: '2026-03-02T01:00:00+00:00' } }, 'Encounter.period.end'],
   ])('%s', (_name, overrides, path) => {
-    expect(validateSubmission(createVisit({ encounter: encounter(overrides) }))).toEqual([
+    expect(validateStepPayload(createVisit({ encounter: encounter(overrides) }))).toEqual([
       { code: 'PAYLOAD_INVALID', path, message: expect.stringContaining(path) },
     ]);
   });
@@ -86,18 +86,18 @@ describe('validateSubmission: PAYLOAD_INVALID on a create visit Encounter', () =
     ['a number', 1772413200000],
     ['a time before the 2014-06-03 floor', '2014-06-02T23:59:59+00:00'],
   ])('a time that is %s is PAYLOAD_INVALID wherever it appears', (_name, value) => {
-    const violations = validateSubmission(createVisit({ encounter: encounter(time(value)) }));
+    const violations = validateStepPayload(createVisit({ encounter: encounter(time(value)) }));
     expect(violations.map((v) => v.code)).toEqual(['PAYLOAD_INVALID', 'PAYLOAD_INVALID']);
     expect(violations.map((v) => v.path).sort()).toEqual(['Encounter.period.start', 'Encounter.statusHistory[0].period.start']);
   });
 
   it('the floor itself is allowed', () => {
-    expect(validateSubmission(createVisit({ encounter: encounter(time('2014-06-03T00:00:00+00:00')) }))).toEqual([]);
+    expect(validateStepPayload(createVisit({ encounter: encounter(time('2014-06-03T00:00:00+00:00')) }))).toEqual([]);
   });
 
   it('a finished Encounter with an end after its start is valid', () => {
     const period = { start: '2026-03-02T01:00:00+00:00', end: '2026-03-02T01:00:01+00:00' };
-    expect(validateSubmission(createVisit({ encounter: encounter({ status: 'finished', period }) }))).toEqual([]);
+    expect(validateStepPayload(createVisit({ encounter: encounter({ status: 'finished', period }) }))).toEqual([]);
   });
 
   it('a body that is not an object is PAYLOAD_INVALID', () => {
@@ -132,7 +132,7 @@ const AMOXICLAV = kfa('93000401', 93, ['91000003', '91000002'], '92000401');
 const AMOXICLAV_OTHER_BRAND = kfa('93000402', 93, ['91000002', '91000003'], '92000402');
 const INGREDIENT = kfa('91000001', 91, []);
 
-const prescription = (product: KfaProduct | null, missing = product === null): Submission => ({
+const prescription = (product: KfaProduct | null, missing = product === null): StepPayload => ({
   step: 'submit_prescription',
   missingMappings: missing ? [{ kind: 'drug', localCode: 'OBAT-1' }] : [],
   product,
@@ -142,7 +142,7 @@ const dispense = (
   prescribed: KfaProduct,
   dispensed: KfaProduct | null,
   declaredSubstitution: boolean,
-): Submission => ({
+): StepPayload => ({
   step: 'submit_dispense',
   missingMappings: dispensed === null ? [{ kind: 'drug', localCode: 'OBAT-2' }] : [],
   prescribed,
@@ -150,7 +150,7 @@ const dispense = (
   declaredSubstitution,
 });
 
-describe('validateSubmission: KFA_LEVEL_INVALID', () => {
+describe('validateStepPayload: KFA_LEVEL_INVALID', () => {
   it.each<[string, KfaProduct, string[]]>([
     ['a virtual product (92) may be prescribed', PARACETAMOL_500, []],
     ['an actual product (93) may be prescribed', PARACETAMOL_500_BRAND_A, []],
@@ -166,13 +166,13 @@ describe('validateSubmission: KFA_LEVEL_INVALID', () => {
   });
 
   it('a prescription whose drug code has no mapping is MAPPING_MISSING only', () => {
-    expect(validateSubmission(prescription(null))).toEqual([
+    expect(validateStepPayload(prescription(null))).toEqual([
       { code: 'MAPPING_MISSING', path: null, message: expect.stringContaining('drug "OBAT-1"') },
     ]);
   });
 });
 
-describe('validateSubmission: substitution on a dispense', () => {
+describe('validateStepPayload: substitution on a dispense', () => {
   it.each<[string, KfaProduct, KfaProduct, boolean, string[]]>([
     ['the prescribed actual product, not declared', PARACETAMOL_500_BRAND_A, PARACETAMOL_500_BRAND_A, false, []],
     ['a child of the prescribed virtual product, not declared', PARACETAMOL_500, PARACETAMOL_500_BRAND_B, false, []],
@@ -195,12 +195,12 @@ describe('validateSubmission: substitution on a dispense', () => {
   });
 });
 
-describe('validateSubmission: rule order', () => {
+describe('validateStepPayload: rule order', () => {
   it('lists violations in rule order, whatever order they were found in', () => {
-    const submission = createVisit({
+    const payload = createVisit({
       missingMappings: [{ kind: 'location', localCode: 'POLI-X' }],
       encounter: encounter({ status: undefined }),
     });
-    expect(codes(submission)).toEqual(['MAPPING_MISSING', 'PAYLOAD_INVALID']);
+    expect(codes(payload)).toEqual(['MAPPING_MISSING', 'PAYLOAD_INVALID']);
   });
 });

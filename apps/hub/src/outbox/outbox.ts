@@ -59,7 +59,7 @@ export interface Outbox {
    * Logs an attempt that ended without an outcome. The step is unchanged: it
    * stays `in_flight` until its lease expires (retries land with #35).
    */
-  recordFailedAttempt(step: ClaimedStep, failure: { httpStatus: number | null }): Promise<void>;
+  recordFailedAttempt(step: ClaimedStep, facts: AttemptFacts): Promise<void>;
 }
 
 /** Builds the outbox over the hub database. Only the composition root calls this. */
@@ -143,31 +143,37 @@ export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs
         const now = clock();
         await trx.selectFrom('case').select('id').where('id', '=', step.caseId).forUpdate().executeTakeFirstOrThrow();
         const before = await readSteps(trx, step.caseId);
-        const updated = await holding(trx, step)
-          .set(
-            'completed' in outcome
-              ? {
-                  state: 'completed',
+        const { change, after, outcome: logged, errorCode } =
+          'completed' in outcome
+            ? {
+                change: {
+                  state: 'completed' as const,
                   remote_type: outcome.completed.type,
                   remote_id: outcome.completed.id,
                   remote_version: outcome.completed.version,
                   pins: JSON.stringify(outcome.pins),
-                }
-              : { state: 'dead_lettered', dead_letter_reason: outcome.deadLettered },
-          )
+                },
+                after: () => applyCompletion(before, step.seq),
+                outcome: 'completed' as const,
+                errorCode: null,
+              }
+            : {
+                change: { state: 'dead_lettered' as const, dead_letter_reason: outcome.deadLettered },
+                after: () => before.map((s): StepView => (s.seq === step.seq ? { seq: s.seq, state: 'dead_lettered' } : s)),
+                outcome: 'dead_lettered' as const,
+                errorCode: outcome.deadLettered,
+              };
+        const updated = await holding(trx, step)
+          .set(change)
           .set({ lease_token: null, lease_expires_at: null, updated_at: now })
           .executeTakeFirst();
-        const errorCode = 'deadLettered' in outcome ? outcome.deadLettered : null;
         if (updated.numUpdatedRows === 0n) {
           await logAttempt(trx, step, now, { outcome: 'discarded', errorCode, facts: outcome.attempt });
           return false;
         }
 
-        const after =
-          'completed' in outcome
-            ? applyCompletion(before, step.seq)
-            : before.map((s): StepView => (s.seq === step.seq ? { seq: s.seq, state: 'dead_lettered' } : s));
-        for (const s of after) {
+        const next = after();
+        for (const s of next) {
           if (s.seq === step.seq || before.find((b) => b.seq === s.seq)?.state === s.state) continue;
           await trx
             .updateTable('step')
@@ -176,21 +182,13 @@ export function createOutbox(deps: { db: Kysely<Database>; clock: Clock; leaseMs
             .where('seq', '=', s.seq)
             .execute();
         }
-        await writeCaseStatus(trx, step.caseId, after, now);
-        await logAttempt(trx, step, now, {
-          outcome: 'completed' in outcome ? 'completed' : 'dead_lettered',
-          errorCode,
-          facts: outcome.attempt,
-        });
+        await writeCaseStatus(trx, step.caseId, next, now);
+        await logAttempt(trx, step, now, { outcome: logged, errorCode, facts: outcome.attempt });
         return true;
       }),
 
-    async recordFailedAttempt(step, failure) {
-      await logAttempt(db, step, clock(), {
-        outcome: 'failed',
-        errorCode: null,
-        facts: { httpStatus: failure.httpStatus, valuesUsed: {}, lookupMethods: {}, violations: [] },
-      });
+    async recordFailedAttempt(step, facts) {
+      await logAttempt(db, step, clock(), { outcome: 'failed', errorCode: null, facts });
     },
   };
 }
