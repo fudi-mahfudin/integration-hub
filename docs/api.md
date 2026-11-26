@@ -95,11 +95,21 @@ A case's status, what a waiting case waits for, and its four steps in order. A s
   "steps": [
     {
       "step": "create_visit", "eventType": "visit.started", "state": "completed", "attempts": 1, "deadLetterReason": null,
-      "remote": { "type": "Encounter", "id": "5f8d2c8e-7a51-4b0e-9a57-0d7c3f1e9b42", "version": "1" }
+      "remote": { "type": "Encounter", "id": "5f8d2c8e-7a51-4b0e-9a57-0d7c3f1e9b42", "version": "1" },
+      "pins": { "patientIhsNumber": "P00000000001", "practitionerIhsNumber": "10000000001", "locationId": "b017aa54-f1df-4ec2-9d84-8823815d7228" },
+      "attemptLog": [
+        {
+          "attempt": 1, "startedAt": "2026-03-02T01:00:03.140Z", "endedAt": "2026-03-02T01:00:03.410Z",
+          "outcome": "completed", "errorCode": null, "httpStatus": 201,
+          "valuesUsed": { "locationId": "b017aa54-f1df-4ec2-9d84-8823815d7228", "patientIhsNumber": "P00000000001", "practitionerIhsNumber": "10000000001" },
+          "lookupMethods": { "patient": "nik", "practitioner": "nik" },
+          "violations": []
+        }
+      ]
     },
-    { "step": "submit_prescription", "eventType": "prescription.written", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null },
-    { "step": "submit_dispense", "eventType": "drug.dispensed", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null },
-    { "step": "update_visit", "eventType": "visit.finished", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null }
+    { "step": "submit_prescription", "eventType": "prescription.written", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null, "pins": null, "attemptLog": [] },
+    { "step": "submit_dispense", "eventType": "drug.dispensed", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null, "pins": null, "attemptLog": [] },
+    { "step": "update_visit", "eventType": "visit.finished", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null, "pins": null, "attemptLog": [] }
   ]
 }
 ```
@@ -113,12 +123,30 @@ Case status: `waiting`, `active`, `dead_lettered`, `completed`, `abandoned`. Ste
 | `steps[].attempts` | How many times a worker has claimed the step. |
 | `steps[].remote` | The record the step stored at SATUSEHAT, by its remote identifier and `meta.versionId`; `null` until the step completes. |
 | `steps[].deadLetterReason` | Why the step was dead-lettered; `null` unless it was. |
+| `steps[].pins` | The values the step sent, pinned when it completed; later steps read these, never the live mappings or lookups. Create visit pins `patientIhsNumber`, `practitionerIhsNumber` and `locationId`. `null` until the step completes. |
+| `steps[].attemptLog` | Every attempt at the step, oldest first. Append-only. |
+| `attemptLog[].outcome` | `completed`; `dead_lettered`; `discarded` (the attempt lost its lease before it could store its outcome, which was thrown away); `failed` (it ended without an outcome, and the step stays in flight until its lease expires). |
+| `attemptLog[].errorCode` | The dead-letter reason the attempt reached; otherwise `null`. |
+| `attemptLog[].httpStatus` | The status of the last SATUSEHAT response the attempt read; `null` if it sent nothing. |
+| `attemptLog[].valuesUsed`, `lookupMethods` | What the attempt had resolved, as far as it got, and how each person was found (`nik`). |
+| `attemptLog[].violations` | Every violation step-time validation found, in rule order, each with `code`, `path` (a FHIR path, or `null`) and `message`. The dead-letter reason is the first one. |
 
 ### Dead-letter reasons
 
+Just before a step sends anything, step-time validation checks what it built. Any violation dead-letters the step and sends nothing. The case becomes `dead_lettered` and its later steps are held. The validation codes, in rule order:
+
 | Code | Meaning |
 |---|---|
-| `MAPPING_MISSING` | The visit's `locationCode` has no location mapping for this source system. Nothing was sent. |
+| `MAPPING_MISSING` | A local code the step needs has no mapping for this source system (for create visit, the visit's `locationCode`). Nothing was sent. |
+| `KFA_LEVEL_INVALID` | The mapped KFA product has the wrong level: a prescription needs a 92 or 93, a dispense a 93. |
+| `UNSUPPORTED_THERAPEUTIC_SUBSTITUTION` | The dispensed product's active ingredients (its set of KFA 91 codes) differ from the prescribed product's. |
+| `SUBSTITUTION_MISMATCH` | Whether the dispense is a substitution, as judged from KFA, disagrees with the source's `substitution` declaration. |
+| `PAYLOAD_INVALID` | The built payload breaks a mandatory-field, time-format, date-floor or identifier-system rule: a hub bug. The details are in the attempt log. |
+
+The codes for the KFA rules apply once the prescription and dispense steps are built. Lookups and search-then-create can also dead-letter a step:
+
+| Code | Meaning |
+|---|---|
 | `PATIENT_NOT_FOUND` | SATUSEHAT has no single patient for the visit's `patient.nik`. Lookups other than by NIK are not yet made. |
 | `PRACTITIONER_NOT_FOUND` | SATUSEHAT has no single practitioner for the visit's `practitioner.nik`. |
 | `REMOTE_RECORD_AMBIGUOUS` | More than one record at SATUSEHAT already carries the step's identifier (for create visit, `encounter/{org}` with the `visitId`), so the hub can't tell which one is the visit's. |

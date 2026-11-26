@@ -50,6 +50,14 @@ _Avoid_: Task, job, stage
 One try at carrying out a step. A step may take several attempts; a worker crashing mid-attempt still counts as one.
 _Avoid_: Try, run, execution
 
+**Attempt log**:
+A step's append-only record of its attempts: when each started and ended, its outcome, error code and HTTP status, the values it used, how each person was found, and every validation violation.
+_Avoid_: Submission log (that is the mock SATUSEHAT's record of requests), history, audit log
+
+**Pin**:
+A value a completed step sent, such as a patient's IHS number or a Location ID, stored with its remote identifier in the same transaction. Later steps of the case read pins, never the live mappings or lookups.
+_Avoid_: Snapshot, cache (a cache may lose a value; a pin is part of the case)
+
 **Lease**:
 A worker's time-limited claim on one step, taken when it starts an attempt. Only the worker holding the current lease may store the step's outcome; when a lease runs out, another worker may claim the step, and the first worker's late outcome is discarded.
 _Avoid_: Lock (that is the database's, and lasts one transaction), reservation

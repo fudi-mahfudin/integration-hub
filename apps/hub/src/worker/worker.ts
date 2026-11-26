@@ -1,6 +1,7 @@
 import type { StepName } from '../cases/case-model.js';
 import { log } from '../observability/log.js';
 import type { ClaimedStep, Outbox } from '../outbox/outbox.js';
+import { SatusehatRequestError } from '../satusehat/errors.js';
 import type { StepOutcome } from '../steps/step-outcome.js';
 
 /** Carries out one attempt at a step it holds the lease on. */
@@ -49,15 +50,19 @@ export function createWorkerLoop(deps: {
     }
     try {
       const outcome = await runner(step);
-      const applied =
-        'completed' in outcome ? await outbox.complete(step, outcome.completed) : await outbox.deadLetter(step, outcome.deadLettered);
-      if (!applied) {
+      if (!(await outbox.storeOutcome(step, outcome))) {
         log('warn', 'the lease was lost before the outcome was stored; the outcome is discarded', fields);
       } else if ('deadLettered' in outcome) {
         log('warn', 'step dead-lettered', { ...fields, reason: outcome.deadLettered });
       }
     } catch (err) {
       log('error', 'attempt failed; the step stays in flight until its lease expires', { ...fields, error: err });
+      try {
+        await outbox.recordFailedAttempt(step, { httpStatus: err instanceof SatusehatRequestError ? err.status : null });
+      } catch (logErr) {
+        // The failure itself is logged above; only its attempt-log row is missing.
+        log('error', 'logging the failed attempt failed', { ...fields, error: logErr });
+      }
     }
   }
 

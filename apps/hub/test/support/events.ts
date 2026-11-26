@@ -82,6 +82,20 @@ export const caseViewSchema = z.object({
       attempts: z.number().int(),
       deadLetterReason: z.string().nullable(),
       remote: remoteSchema.nullable(),
+      pins: z.record(z.string(), z.string()).nullable(),
+      attemptLog: z.array(
+        z.object({
+          attempt: z.number().int(),
+          startedAt: z.string(),
+          endedAt: z.string(),
+          outcome: z.string(),
+          errorCode: z.string().nullable(),
+          httpStatus: z.number().int().nullable(),
+          valuesUsed: z.record(z.string(), z.string()),
+          lookupMethods: z.record(z.string(), z.string()),
+          violations: z.array(z.object({ code: z.string(), path: z.string().nullable(), message: z.string() })),
+        }),
+      ),
     }),
   ),
 });
