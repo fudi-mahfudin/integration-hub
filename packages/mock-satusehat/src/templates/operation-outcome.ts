@@ -78,3 +78,18 @@ export const notFound = defineTemplate(
     issue: [{ severity: 'error', code: 'not-found', details: { text: `no such resource or path: ${path}` } }],
   }),
 );
+
+/** 500, 503 or 429 that a fault rule injects in place of the platform's answer. */
+export const injectedFailure = defineTemplate(
+  { tag: 'assumed', note: 'FHIR R4 OperationOutcome; the real 5xx and 429 bodies are unverified and may come from a gateway' },
+  (status: 500 | 503 | 429, ruleId: string): fhir4.OperationOutcome => ({
+    resourceType: 'OperationOutcome',
+    issue: [
+      {
+        severity: 'error',
+        code: status === 429 ? 'throttled' : status === 503 ? 'transient' : 'exception',
+        details: { text: `injected by mock fault rule "${ruleId}"` },
+      },
+    ],
+  }),
+);
