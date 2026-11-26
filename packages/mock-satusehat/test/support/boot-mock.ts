@@ -136,3 +136,46 @@ export function medicationRequest(
     ...overrides,
   };
 }
+
+/**
+ * A dispense of Paracetamol 500 mg (Fiktif Farma A, 93000001), a child of
+ * the 92000001 `medicationRequest()` prescribes, so not a substitution;
+ * authorized by MedicationRequest `medicationRequestId` on Encounter
+ * `encounterId`, under prescription `prescriptionId`.
+ */
+export function medicationDispense(
+  encounterId: string,
+  medicationRequestId: string,
+  prescriptionId = `RX-${crypto.randomUUID()}`,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const org = world.organization.id;
+  const [patient] = world.patients;
+  const pharmacist = world.practitioners.find((p) => p.role === 'pharmacist');
+  return {
+    resourceType: 'MedicationDispense',
+    contained: [
+      {
+        resourceType: 'Medication',
+        id: 'medication',
+        code: { coding: [{ system: 'http://sys-ids.kemkes.go.id/kfa', code: '93000001', display: 'Parasetamol 500 mg Tablet (Fiktif Farma A)' }] },
+        batch: { lotNumber: 'LOT-1', expirationDate: '2027-04-24' },
+      },
+    ],
+    identifier: [
+      { system: `http://sys-ids.kemkes.go.id/prescription/${org}`, use: 'official', value: prescriptionId },
+      { system: `http://sys-ids.kemkes.go.id/prescription-item/${org}`, use: 'official', value: `${prescriptionId}-1` },
+    ],
+    status: 'completed',
+    medicationReference: { reference: '#medication' },
+    subject: { reference: `Patient/${patient?.ihsNumber}` },
+    context: { reference: `Encounter/${encounterId}` },
+    performer: [{ actor: { reference: `Practitioner/${pharmacist?.ihsNumber}` } }],
+    authorizingPrescription: [{ reference: `MedicationRequest/${medicationRequestId}` }],
+    quantity: { value: 10, unit: 'Tablet', system: 'http://terminology.kemkes.go.id/CodeSystem/medication-form', code: 'BS066' },
+    whenPrepared: '2026-03-02T01:20:00+00:00',
+    whenHandedOver: '2026-03-02T01:30:00+00:00',
+    substitution: { wasSubstituted: false },
+    ...overrides,
+  };
+}

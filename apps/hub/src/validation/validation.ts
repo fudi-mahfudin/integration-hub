@@ -6,8 +6,9 @@
  * checks the same payloads with its own code (ADR 0006).
  */
 import type { OrganizationId } from '../auth/source-systems.js';
-import type { KfaCode, KfaProduct } from '../kfa/kfa-product.js';
+import { judgeDispense, type KfaCode, type KfaProduct } from '../kfa/kfa-product.js';
 import { checkEncounter } from './encounter-rules.js';
+import { checkMedicationDispense } from './medication-dispense-rules.js';
 import { checkMedicationRequest } from './medication-request-rules.js';
 
 /** The step dead-letter codes this module reports, in rule order (#9). */
@@ -49,11 +50,7 @@ export type MissingMapping =
       kfaCode: KfaCode;
     };
 
-/**
- * What a step is about to send, as the Validation module checks it. The drug
- * steps carry the KFA details their rules judge; the dispense's FHIR
- * resource joins it, with its PAYLOAD_INVALID rules, when that step is built (#30).
- */
+/** What a step is about to send, as the Validation module checks it. The drug steps carry the KFA details their rules judge. */
 export type StepPayload =
   | {
       step: 'create_visit';
@@ -75,6 +72,8 @@ export type StepPayload =
     }
   | {
       step: 'submit_dispense';
+      /** The case's organization: the `{org}` of its identifier systems. */
+      organizationId: OrganizationId;
       missingMappings: readonly MissingMapping[];
       /** The KFA product the completed prescription pinned. */
       prescribed: KfaProduct;
@@ -82,6 +81,8 @@ export type StepPayload =
       dispensed: KfaProduct | null;
       /** Whether the source declared the dispense a substitution (`drug.dispensed.substitution`). */
       declaredSubstitution: boolean;
+      /** The MedicationDispense about to be sent; null when a missing mapping meant it could not be built. */
+      medicationDispense: unknown;
     };
 
 /** Every violation of `payload`, in rule order; empty means it may be sent. */
@@ -115,46 +116,29 @@ export function validateStepPayload(payload: StepPayload): Violation[] {
     }
     case 'submit_dispense': {
       const { prescribed, dispensed, declaredSubstitution } = payload;
-      if (!dispensed) break;
-      if (dispensed.level !== 93) {
+      const judgement = dispensed?.level === 93 ? judgeDispense(prescribed, dispensed) : null;
+      if (dispensed && dispensed.level !== 93) {
         add('KFA_LEVEL_INVALID', `a dispense needs a KFA 93 product, got ${dispensed.code} at level ${dispensed.level}`);
-        break;
-      }
-      const kind = classifyDispense(prescribed, dispensed);
-      if (kind === 'therapeutic_substitution') {
+      } else if (dispensed && judgement === 'therapeutic_substitution') {
         add(
           'UNSUPPORTED_THERAPEUTIC_SUBSTITUTION',
           `the dispensed ${dispensed.code} has active ingredients [${[...dispensed.activeIngredients].sort().join(', ')}], ` +
             `the prescribed ${prescribed.code} has [${[...prescribed.activeIngredients].sort().join(', ')}]`,
         );
-      } else if ((kind === 'substitution') !== declaredSubstitution) {
+      } else if (dispensed && judgement !== null && (judgement === 'substitution') !== declaredSubstitution) {
         add(
           'SUBSTITUTION_MISMATCH',
-          `dispensing ${dispensed.code} for the prescribed ${prescribed.code} is ${kind === 'substitution' ? '' : 'not '}a substitution, ` +
+          `dispensing ${dispensed.code} for the prescribed ${prescribed.code} is ${judgement === 'substitution' ? '' : 'not '}a substitution, ` +
             `but the source declared it ${declaredSubstitution ? '' : 'not '}one`,
         );
+      }
+      if (payload.medicationDispense !== null) {
+        checkMedicationDispense(payload.medicationDispense, payload.organizationId, judgement === null ? null : judgement !== 'as_prescribed', fail);
+      } else if (payload.missingMappings.length === 0) {
+        add('PAYLOAD_INVALID', 'no MedicationDispense was built, yet no mapping is missing');
       }
       break;
     }
   }
   return violations.sort((a, b) => RULE_ORDER.indexOf(a.code) - RULE_ORDER.indexOf(b.code));
-}
-
-/**
- * How a dispensed actual product relates to the prescribed product (#9): the
- * prescribed one itself or derived from the prescribed virtual product
- * (`as_prescribed`); otherwise a `substitution` when the 91 sets are equal,
- * else a `therapeutic_substitution`.
- */
-function classifyDispense(
-  prescribed: KfaProduct,
-  dispensed: KfaProduct,
-): 'as_prescribed' | 'substitution' | 'therapeutic_substitution' {
-  const asPrescribed =
-    dispensed.code === prescribed.code || (prescribed.level === 92 && dispensed.parent92 === prescribed.code);
-  if (asPrescribed) return 'as_prescribed';
-  const ingredients = new Set(prescribed.activeIngredients);
-  const dispensedIngredients = new Set(dispensed.activeIngredients);
-  const sameSet = ingredients.size === dispensedIngredients.size && [...ingredients].every((c) => dispensedIngredients.has(c));
-  return sameSet ? 'substitution' : 'therapeutic_substitution';
 }

@@ -49,7 +49,7 @@ export type RemoteId = Brand<string, 'RemoteId'>;
 
 /** A step's record at SATUSEHAT: its resource type, remote identifier and `meta.versionId` (#10). */
 export interface RemoteIdentifier {
-  type: 'Encounter' | 'MedicationRequest';
+  type: 'Encounter' | 'MedicationRequest' | 'MedicationDispense';
   id: RemoteId;
   /** `meta.versionId`, when SATUSEHAT sends one. */
   version: string | null;

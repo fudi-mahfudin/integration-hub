@@ -26,6 +26,7 @@ import { createOutbox } from './outbox/outbox.js';
 import { createSatusehatClient } from './satusehat/client.js';
 import { createAccessTokens } from './satusehat/token.js';
 import { createVisit } from './steps/create-visit.js';
+import { submitDispense } from './steps/submit-dispense.js';
 import { submitPrescription } from './steps/submit-prescription.js';
 import { createWorkerLoop } from './worker/worker.js';
 import { DATABASE, INGEST, SOURCE_SYSTEMS } from './tokens.js';
@@ -163,6 +164,7 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
     runners: {
       create_visit: (step) => createVisit({ db, satusehat }, step),
       submit_prescription: (step) => submitPrescription({ db, satusehat, kfa, clock }, step),
+      submit_dispense: (step) => submitDispense({ db, satusehat, kfa, clock }, step),
     },
     pollIntervalMs: config.workerPollIntervalMs,
   });

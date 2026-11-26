@@ -60,6 +60,26 @@ export function prescriptionWritten(overrides: { visitId?: string; data?: Record
   };
 }
 
+/** A valid `drug.dispensed` envelope with fake values, for `prescriptionWritten()`'s defaults; `data` overrides are shallow-merged. */
+export function drugDispensed(overrides: { visitId?: string; data?: Record<string, unknown> } = {}) {
+  return {
+    type: 'drug.dispensed',
+    visitId: overrides.visitId ?? newVisitId(),
+    occurredAt: '2026-03-02T08:30:00+07:00',
+    data: {
+      prescriptionId: 'RX-1',
+      itemId: 'ITEM-1',
+      drugCode: 'PCT500-FFA',
+      quantity: 10,
+      preparedAt: '2026-03-02T08:20:00+07:00',
+      handedOverAt: '2026-03-02T08:30:00+07:00',
+      pharmacist: { nik: '7209061505710030' },
+      batch: { lot: 'LOT-1', expiry: '2027-04-24' },
+      ...overrides.data,
+    },
+  };
+}
+
 /** What `postEvent` sends; every field defaults to a valid request. */
 export interface PostEventOptions {
   /** `null` sends no Idempotency-Key header; default is a fresh UUID. */

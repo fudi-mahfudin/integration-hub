@@ -19,6 +19,7 @@ const PROBLEMS = {
   IDEMPOTENCY_KEY_REUSED: { status: 422, title: 'The Idempotency-Key was already used for a different request' },
   VALIDATION_FAILED: { status: 422, title: 'The source event failed validation' },
   UNSUPPORTED_MULTI_ITEM: { status: 422, title: 'A prescription must have exactly one drug item, and a visit exactly one prescription' },
+  PRESCRIPTION_MISMATCH: { status: 422, title: "The event names another prescription or item than the case's" },
   EVENT_ALREADY_RECORDED: { status: 409, title: 'This event was already recorded for the visit' },
   NOT_FOUND: { status: 404, title: 'Not found' },
   INTERNAL_ERROR: { status: 500, title: 'Internal error' },

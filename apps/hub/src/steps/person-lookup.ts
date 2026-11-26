@@ -2,7 +2,7 @@ import type { IhsNumber } from '../satusehat/client.js';
 import type { AttemptFacts } from './step-outcome.js';
 
 /** Who a step looks up by NIK. */
-export type LookedUpPerson = 'patient' | 'practitioner' | 'requester';
+export type LookedUpPerson = 'patient' | 'practitioner' | 'requester' | 'pharmacist';
 
 /**
  * A person the hub cannot resolve by NIK alone: the event names them without

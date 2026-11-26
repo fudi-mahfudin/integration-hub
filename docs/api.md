@@ -23,7 +23,7 @@ Sends one source event.
 2. `Idempotency-Key` present and valid (`400`).
 3. Key lookup: a key already accepted from this source system with the same body is a duplicate ingest and gets the original answer again; with a different body it is [`422 IDEMPOTENCY_KEY_REUSED`](#idempotency_key_reused).
 4. Event schema ([`422 VALIDATION_FAILED`](#validation_failed)), then a prescription's item count ([`422 UNSUPPORTED_MULTI_ITEM`](#unsupported_multi_item)).
-5. Checks against events already recorded for the visit ([`409 EVENT_ALREADY_RECORDED`](#event_already_recorded), or [`422 UNSUPPORTED_MULTI_ITEM`](#unsupported_multi_item) for a second prescription item).
+5. Checks against events already recorded for the visit ([`409 EVENT_ALREADY_RECORDED`](#event_already_recorded), [`422 UNSUPPORTED_MULTI_ITEM`](#unsupported_multi_item) for a second prescription item, or [`422 PRESCRIPTION_MISMATCH`](#prescription_mismatch) when a prescription and its dispense name different items).
 6. Accept (`202`).
 
 A true duplicate always gets the original answer. It is never validated again into a different answer.
@@ -41,7 +41,7 @@ A true duplicate always gets the original answer. It is never validated again in
 
 | Field | Rules |
 |---|---|
-| `type` | The event type: `visit.started` or `prescription.written` so far. |
+| `type` | The event type: `visit.started`, `prescription.written` or `drug.dispensed` so far. |
 | `visitId` | The source system's own visit number, 1-64 characters, unique per source system. The case for the visit is keyed by (source system, `visitId`). |
 | `occurredAt` | When the event happened at the source. A time (see [Times](#times)). |
 | `data` | The event's fields, by `type`. |
@@ -80,10 +80,26 @@ Each item is `{ itemId, drugCode, quantity, dosage }`:
 
 A case supports one prescription with one drug item (ADR 0004). A second `prescription.written` for the visit with another `prescriptionId` or `itemId` is `422 UNSUPPORTED_MULTI_ITEM`; with the same pair it is `409 EVENT_ALREADY_RECORDED`. A prescription may arrive before its `visit.started`: it is stored, and submitted once the visit's Encounter exists.
 
+### `drug.dispensed`
+
+| Field | Rules |
+|---|---|
+| `prescriptionId`, `itemId` | The prescription and item this dispense fills, 1-64 characters each: the same pair as the visit's `prescription.written`. |
+| `drugCode` | The hospital's **local** code of the product actually handed over, 1-64 characters. The hub maps it to a KFA code, which must be an actual product (93). |
+| `quantity` | How much was handed over, a number greater than 0, counted in the dispensed KFA product's dose form. |
+| `preparedAt`, `handedOverAt` | Times (see [Times](#times)), not before the date floor. |
+| `pharmacist` | The dispensing pharmacist: `{ nik }` or `{ name, birthDate, gender }`, as for `visit.started`. |
+| `batch` | Optional: `{ lot, expiry }`, both or neither (`BATCH_INCOMPLETE`). `lot` is 1-64 characters; `expiry` is a calendar date `YYYY-MM-DD`, sent on as written and not before `2014-06-03`. |
+| `substitution` | Optional: `{ reasonCode }` when the source dispensed a substitute. `reasonCode` is one of `OS` (out of stock), `FP` (formulary policy), `DRUG_INTERACTION`, `PATIENT_CHOICE`, `PRESCRIPTION_ERROR`; anything else is `INVALID_SUBSTITUTION_REASON`. |
+
+A dispense and its prescription may arrive in either order. Whichever arrives second must name the same `prescriptionId` and `itemId` as the first, or it is [`422 PRESCRIPTION_MISMATCH`](#prescription_mismatch). A second `drug.dispensed` for the visit is `409 EVENT_ALREADY_RECORDED`. The dispense is submitted once the prescription's MedicationRequest exists.
+
+**Substitution.** The hub decides from KFA, never from local codes, whether a dispense is a substitution. The prescribed product is the one submit prescription pinned. Dispensing that product, or an actual product derived from the prescribed virtual product (92), is no substitution. Dispensing another product whose active ingredients (its set of KFA 91 codes) are exactly the same, such as another strength or another brand, is a substitution. The MedicationDispense then says so: type `G`, the reason, and the requester and pharmacist as responsible. A product with other active ingredients is a therapeutic substitution, which is not supported. The source's `substitution` must agree with the hub's decision in both directions. Disagreement dead-letters the case at the dispense step (see [Dead-letter reasons](#dead-letter-reasons)); it is not an ingest rejection.
+
 ### Times
 
 - Times are ISO 8601 date-times with an explicit offset, for example `2026-03-02T08:00:00+07:00` or `2026-03-02T01:00:00Z`. Seconds and fractions are optional. A time without an offset, or only part of one (for example just a date), is `TIME_OFFSET_MISSING`.
-- The date floor is `2014-06-03T00:00:00+00:00`, compared on the UTC value. `2014-06-03T05:00:00+07:00` is before it (`DATE_BEFORE_FLOOR`). It applies to `startedAt` and `authoredAt`, not to `occurredAt`.
+- The date floor is `2014-06-03T00:00:00+00:00`, compared on the UTC value. `2014-06-03T05:00:00+07:00` is before it (`DATE_BEFORE_FLOOR`). It applies to `startedAt`, `authoredAt`, `preparedAt` and `handedOverAt`, not to `occurredAt`. A `batch.expiry` is a plain date and is never converted; it must not be before `2014-06-03`.
 
 ### `202 Accepted`
 
@@ -143,11 +159,11 @@ Case status: `waiting`, `active`, `dead_lettered`, `completed`, `abandoned`. Ste
 |---|---|
 | `waitingFor` | For a `waiting` case, the source event its next step needs; otherwise `null`. |
 | `waitingSince` | Since when a `waiting` case has waited for `waitingFor` (UTC); otherwise `null`. |
-| `rejections` | The rejection log of the visit: every `VALIDATION_FAILED`, `UNSUPPORTED_MULTI_ITEM` and `EVENT_ALREADY_RECORDED` answer to an event naming this `visitId` and an event type, oldest first, including those sent before the case opened. Only the code, the event type and the time are kept, never the body. It explains a waiting case and never changes it. |
+| `rejections` | The rejection log of the visit: every `VALIDATION_FAILED`, `UNSUPPORTED_MULTI_ITEM`, `PRESCRIPTION_MISMATCH` and `EVENT_ALREADY_RECORDED` answer to an event naming this `visitId` and an event type, oldest first, including those sent before the case opened. Only the code, the event type and the time are kept, never the body. It explains a waiting case and never changes it. |
 | `steps[].attempts` | How many times a worker has claimed the step. |
 | `steps[].remote` | The record the step stored at SATUSEHAT, by its remote identifier and `meta.versionId`; `null` until the step completes. |
 | `steps[].deadLetterReason` | Why the step was dead-lettered; `null` unless it was. |
-| `steps[].pins` | The values the step sent, pinned when it completed; later steps read these, never the live mappings or lookups. Create visit pins `patientIhsNumber`, `practitionerIhsNumber` and `locationId`. Submit prescription pins the prescribed KFA product (`kfaCode`, `kfaLevel`, `parent92`, `activeIngredients`, its 91 codes) and `requesterIhsNumber`. `null` until the step completes. |
+| `steps[].pins` | The values the step sent, pinned when it completed; later steps read these, never the live mappings or lookups. Create visit pins `patientIhsNumber`, `practitionerIhsNumber` and `locationId`. Submit prescription pins the prescribed KFA product (`kfaCode`, `kfaLevel`, `parent92`, `activeIngredients`, its 91 codes) and `requesterIhsNumber`. Submit dispense pins the dispensed KFA product (the same four fields) and `pharmacistIhsNumber`. `null` until the step completes. |
 | `steps[].attemptLog` | Every attempt at the step, oldest first. Append-only. |
 | `attemptLog[].outcome` | `completed`; `dead_lettered`; `discarded` (the attempt lost its lease before it could store its outcome, which was thrown away); `failed` (it ended without an outcome, and the step stays in flight until its lease expires). |
 | `attemptLog[].errorCode` | The dead-letter reason the attempt reached; otherwise `null`. |
@@ -162,19 +178,19 @@ Just before a step sends anything, step-time validation checks what it built. An
 
 | Code | Meaning |
 |---|---|
-| `MAPPING_MISSING` | A local code the step needs has no mapping for this source system (for create visit, the visit's `locationCode`; for submit prescription, the item's `drugCode`), or the drug code maps to a KFA code that KFA v2 does not know (it answers no result, or `404`). Nothing was sent. |
+| `MAPPING_MISSING` | A local code the step needs has no mapping for this source system (for create visit, the visit's `locationCode`; for submit prescription, the item's `drugCode`; for submit dispense, the dispense's `drugCode`), or the drug code maps to a KFA code that KFA v2 does not know (it answers no result, or `404`). Nothing was sent. |
 | `KFA_LEVEL_INVALID` | The mapped KFA product has the wrong level: a prescription needs a 92 or 93, a dispense a 93. |
 | `UNSUPPORTED_THERAPEUTIC_SUBSTITUTION` | The dispensed product's active ingredients (its set of KFA 91 codes) differ from the prescribed product's. |
-| `SUBSTITUTION_MISMATCH` | Whether the dispense is a substitution, as judged from KFA, disagrees with the source's `substitution` declaration. |
+| `SUBSTITUTION_MISMATCH` | Whether the dispense is a substitution, as judged from KFA, disagrees with the source's `substitution` declaration: a declared substitution that is none, or a substitution that wasn't declared. |
 | `PAYLOAD_INVALID` | The built payload breaks a mandatory-field, time-format, date-floor or identifier-system rule: a hub bug. The details are in the attempt log. |
 
-`UNSUPPORTED_THERAPEUTIC_SUBSTITUTION` and `SUBSTITUTION_MISMATCH` apply once the dispense step is built. Lookups and search-then-create can also dead-letter a step:
+`UNSUPPORTED_THERAPEUTIC_SUBSTITUTION` and `SUBSTITUTION_MISMATCH` come from bad source data: replaying the case can't fix them. Lookups and search-then-create can also dead-letter a step:
 
 | Code | Meaning |
 |---|---|
 | `PATIENT_NOT_FOUND` | SATUSEHAT has no single patient for the visit's `patient.nik`. Lookups other than by NIK are not yet made. |
-| `PRACTITIONER_NOT_FOUND` | SATUSEHAT has no single practitioner for the visit's `practitioner.nik`, or for the prescription's `requester.nik`. |
-| `REMOTE_RECORD_AMBIGUOUS` | More than one record at SATUSEHAT already carries the step's identifier (for create visit, `encounter/{org}` with the `visitId`; for submit prescription, `prescription/{org}` with the `prescriptionId`), so the hub can't tell which one is the visit's. |
+| `PRACTITIONER_NOT_FOUND` | SATUSEHAT has no single practitioner for the visit's `practitioner.nik`, the prescription's `requester.nik`, or the dispense's `pharmacist.nik`. |
+| `REMOTE_RECORD_AMBIGUOUS` | More than one record at SATUSEHAT already carries the step's identifier (for create visit, `encounter/{org}` with the `visitId`; for submit prescription and submit dispense, `prescription/{org}` with the `prescriptionId`, which a MedicationDispense reuses), so the hub can't tell which one is the visit's. |
 
 ## Errors
 
@@ -219,11 +235,17 @@ Every error is an RFC 9457 problem, `Content-Type: application/problem+json`:
 | `REQUIRED` | A required field, or a required combination of fields, is missing. |
 | `INVALID_FORMAT` | The value has the wrong type or format, or isn't one of the allowed values. A body that isn't JSON is reported at path `""`. |
 | `TIME_OFFSET_MISSING` | A time has no explicit offset, or is only part of a date-time. |
-| `DATE_BEFORE_FLOOR` | A time is before `2014-06-03T00:00:00+00:00` in UTC. |
+| `DATE_BEFORE_FLOOR` | A time is before `2014-06-03T00:00:00+00:00` in UTC, or a `batch.expiry` is before `2014-06-03`. |
+| `BATCH_INCOMPLETE` | A `batch` has a `lot` without an `expiry`, or an `expiry` without a `lot`. |
+| `INVALID_SUBSTITUTION_REASON` | A `substitution.reasonCode` isn't one of the five allowed codes. |
 
 ### UNSUPPORTED_MULTI_ITEM
 
 `422`. A `prescription.written` whose `items` doesn't hold exactly one item, or a second `prescription.written` for the visit with another `prescriptionId` or `itemId`. A case supports one prescription with one drug item (ADR 0004). Nothing is recorded: an event rejected this way opens no case, and the same key may be sent again with a corrected body.
+
+### PRESCRIPTION_MISMATCH
+
+`422`. A `drug.dispensed` names another `prescriptionId` or `itemId` than the visit's recorded `prescription.written`, or a `prescription.written` names another pair than the visit's recorded `drug.dispensed`. `errors[]` names each field that differs. Nothing is recorded, and the same key may be sent again with a corrected body.
 
 ### EVENT_ALREADY_RECORDED
 

@@ -13,6 +13,9 @@ const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
  */
 export const DATE_FLOOR = new Date('2014-06-03T00:00:00+00:00');
 
+/** The date floor as a plain date, for dates that are never converted, such as a batch expiry (#9). */
+export const DATE_FLOOR_DAY = '2014-06-03';
+
 /** A parsed source time: its instant, or why it isn't one. */
 export type ParsedSourceTime = { ok: true; instant: Date } | { ok: false; reason: 'offset_missing' | 'invalid' };
 
