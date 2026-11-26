@@ -4,7 +4,14 @@ import { bootWorker, type BootedWorker } from './support/boot-worker.js';
 import { postEvent, waitForCase, type CaseView } from './support/events.js';
 import { createFreshDatabase, type FreshDatabase } from './support/fresh-database.js';
 import { expectAtMostOneStepInMotion } from './support/invariants.js';
-import { bootMock, WORLD_SOURCE_API_KEY, worldEnv, worldVisitStarted, type BootedMock } from './support/satusehat.js';
+import {
+  type BootedMock,
+  bootMock,
+  WORLD_SOURCE_API_KEY,
+  worldEnv,
+  worldVisitEvents,
+  worldVisitStarted,
+} from './support/satusehat.js';
 
 const createVisitCompleted = (v: CaseView) => v.steps[0]?.state === 'completed';
 
@@ -72,4 +79,33 @@ describe('workers claiming from the outbox', () => {
     const posts = (await stack.mock.client.log({ resourceType: 'Encounter' })).filter((e) => e.method === 'POST');
     expect(posts.map((e) => e.visitKey).sort()).toEqual(events.map((e) => e.visitId).sort());
   });
+
+  it('slow responses never let two workers work one case at once: no overlapping requests per visit, no duplicate submission', async () => {
+    const stack = await bootStack(4);
+    await stack.mock.client.setFaults({
+      seed: 34,
+      rules: [{ id: 'slow-platform', match: {}, rate: 1, kind: 'latency', params: { minMs: 10, maxMs: 60 } }],
+    });
+    const views = await Promise.all(
+      Array.from({ length: 8 }, async () => {
+        let location: string | null = null;
+        for (const body of worldVisitEvents().events) {
+          location = (await postEvent(stack.hub.baseUrl, { apiKey: WORLD_SOURCE_API_KEY, body })).headers.get('location');
+        }
+        return waitForCase(stack.hub.baseUrl, location, (v) => ['completed', 'dead_lettered'].includes(v.status), {
+          apiKey: WORLD_SOURCE_API_KEY,
+          timeoutMs: 30_000,
+        });
+      }),
+    );
+
+    expect(await stack.mock.client.report()).toEqual({ faultSeed: 34, duplicates: [], outOfOrder: [], overlap: [] });
+    for (const view of views) {
+      expect(view.status).toBe('completed');
+      expect(view.steps.map((s) => s.attempts)).toEqual([1, 1, 1, 1]);
+    }
+    // Every request was slowed: the workers had every chance to collide.
+    const entries = await stack.mock.client.log();
+    expect(entries.filter((e) => e.fault === 'slow-platform').length).toBe(entries.length);
+  }, 45_000);
 });

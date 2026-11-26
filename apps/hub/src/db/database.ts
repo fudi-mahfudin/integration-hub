@@ -33,6 +33,8 @@ export interface StepTable {
   /** The current claim's lease token; null unless `in_flight`. */
   lease_token: string | null;
   lease_expires_at: Timestamp | null;
+  /** When the current claim was taken: its attempt's start; null unless `in_flight`. */
+  claimed_at: Timestamp | null;
   /** The record the step's completion stored at SATUSEHAT. */
   remote_type: RemoteIdentifier['type'] | null;
   remote_id: string | null;
@@ -43,8 +45,13 @@ export interface StepTable {
   updated_at: Timestamp;
 }
 
-/** How an attempt ended. `discarded`: it lost its lease before storing its outcome; `failed`: it ended without an outcome. */
-export type AttemptOutcome = 'completed' | 'dead_lettered' | 'discarded' | 'failed';
+/**
+ * How an attempt ended. `failed`: it ended without an outcome. `lease_expired`:
+ * its lease ran out before it stored an outcome, and another claim took the
+ * step over (#8). `discarded`: no longer written; rows logged before #34
+ * for an attempt whose late outcome the lease fence threw away.
+ */
+export type AttemptOutcome = 'completed' | 'dead_lettered' | 'discarded' | 'failed' | 'lease_expired';
 
 /** One row of a step's append-only attempt log (#8); the database rejects updates and deletes. */
 export interface AttemptTable {
