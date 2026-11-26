@@ -1,6 +1,6 @@
 import type { DeadLetterReason } from '../cases/case-model.js';
 import type { PatientFacts, PractitionerFacts } from '../ingestion/event-schema.js';
-import type { IhsNumber, PersonDemographics, SatusehatClient } from '../satusehat/client.js';
+import type { IhsNumber, NameBirthDateGender, SatusehatClient } from '../satusehat/client.js';
 import type { AttemptFacts, LookupMethod } from './step-outcome.js';
 
 /** Who a step looks up. */
@@ -33,8 +33,8 @@ export function lookUpPatient(satusehat: SatusehatClient, patient: PatientFacts,
       run: async () => (await satusehat.findPatientsByMotherNik(motherNik)).filter((m) => m.birthDate === birthDate).map((m) => m.ihsNumber),
     });
   }
-  const demographics = demographicsOf(patient);
-  if (demographics) searches.push({ method: 'name_birth_date_gender', run: () => satusehat.findPatientsByDemographics(demographics) });
+  const nameBirthDateGender = nameBirthDateGenderOf(patient);
+  if (nameBirthDateGender) searches.push({ method: 'name_birth_date_gender', run: () => satusehat.findPatientsByNameBirthDateGender(nameBirthDateGender) });
   return lookUp('patient', searches, attempt);
 }
 
@@ -52,8 +52,8 @@ export function lookUpPractitioner(
   const { nik } = practitioner;
   const searches: PersonSearch[] = [];
   if (nik !== undefined) searches.push({ method: 'nik', run: () => satusehat.findPractitionersByNik(nik) });
-  const demographics = demographicsOf(practitioner);
-  if (demographics) searches.push({ method: 'name_birth_date_gender', run: () => satusehat.findPractitionersByDemographics(demographics) });
+  const nameBirthDateGender = nameBirthDateGenderOf(practitioner);
+  if (nameBirthDateGender) searches.push({ method: 'name_birth_date_gender', run: () => satusehat.findPractitionersByNameBirthDateGender(nameBirthDateGender) });
   return lookUp(person, searches, attempt);
 }
 
@@ -82,7 +82,7 @@ async function lookUp(person: LookedUpPerson, searches: readonly PersonSearch[],
 }
 
 /** Name + birthDate + gender when the event carries all three. */
-function demographicsOf(person: PractitionerFacts): PersonDemographics | undefined {
+function nameBirthDateGenderOf(person: PractitionerFacts): NameBirthDateGender | undefined {
   const { name, birthDate, gender } = person;
   return name !== undefined && birthDate !== undefined && gender !== undefined ? { name, birthDate, gender } : undefined;
 }

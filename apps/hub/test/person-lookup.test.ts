@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { bootHub, type BootedHub } from './support/boot-hub.js';
 import { bootWorker, type BootedWorker } from './support/boot-worker.js';
@@ -170,10 +170,10 @@ describe('person lookup: IHS numbers are found by NIK, else by the fallbacks SAT
   });
 
   describe('practitioner, requester and pharmacist', () => {
-    const byDemographics = (p: WorldPractitioner) => ({ name: p.name, birthDate: p.birthDate, gender: p.gender });
+    const byNameBirthDateGender = (p: WorldPractitioner) => ({ name: p.name, birthDate: p.birthDate, gender: p.gender });
 
     it('without a NIK, the visit practitioner is found by name + birthDate + gender', async () => {
-      const view = await startVisit({ practitioner: byDemographics(worldVisit.physician) });
+      const view = await startVisit({ practitioner: byNameBirthDateGender(worldVisit.physician) });
 
       expect(view.steps[0]).toMatchObject({ state: 'completed', pins: { practitionerIhsNumber: worldVisit.physician.ihsNumber } });
       expect(view.steps[0]?.attemptLog[0]?.lookupMethods).toEqual({ patient: 'nik', practitioner: 'name_birth_date_gender' });
@@ -182,10 +182,10 @@ describe('person lookup: IHS numbers are found by NIK, else by the fallbacks SAT
     it('without a NIK, the requester and the pharmacist are found by name + birthDate + gender', async () => {
       const { physician, pharmacist } = worldVisit;
       const visit = worldVisitStarted();
-      const prescription = worldPrescriptionWritten(visit.visitId, { data: { requester: byDemographics(physician) } });
+      const prescription = worldPrescriptionWritten(visit.visitId, { data: { requester: byNameBirthDateGender(physician) } });
       await send(visit);
       await send(prescription);
-      const res = await send(worldDrugDispensed(prescription, { pharmacist: byDemographics(pharmacist) }));
+      const res = await send(worldDrugDispensed(prescription, { pharmacist: byNameBirthDateGender(pharmacist) }));
 
       const view = await waitForCase(hub.baseUrl, res.headers.get('location'), (v) => v.steps[2]?.state === 'completed' || v.status === 'dead_lettered', {
         apiKey: WORLD_SOURCE_API_KEY,
@@ -198,7 +198,7 @@ describe('person lookup: IHS numbers are found by NIK, else by the fallbacks SAT
     });
 
     it('falls back from a NIK no one has to name + birthDate + gender', async () => {
-      const view = await startVisit({ practitioner: { nik: UNKNOWN_NIK, ...byDemographics(worldVisit.physician) } });
+      const view = await startVisit({ practitioner: { nik: UNKNOWN_NIK, ...byNameBirthDateGender(worldVisit.physician) } });
 
       expect(view.steps[0]).toMatchObject({ state: 'completed', pins: { practitionerIhsNumber: worldVisit.physician.ihsNumber } });
       expect(view.steps[0]?.attemptLog[0]?.lookupMethods).toEqual({ patient: 'nik', practitioner: 'name_birth_date_gender' });
@@ -207,7 +207,7 @@ describe('person lookup: IHS numbers are found by NIK, else by the fallbacks SAT
     it('dead-letters with PRACTITIONER_NOT_FOUND when the name is a near-miss', async () => {
       const { physician } = worldVisit;
 
-      const view = await startVisit({ practitioner: { ...byDemographics(physician), name: `${physician.name}x` } });
+      const view = await startVisit({ practitioner: { ...byNameBirthDateGender(physician), name: `${physician.name}x` } });
 
       expect(view.steps[0]).toMatchObject({ state: 'dead_lettered', deadLetterReason: 'PRACTITIONER_NOT_FOUND', pins: null });
       expect(view.steps[0]?.attemptLog).toEqual([
@@ -217,10 +217,12 @@ describe('person lookup: IHS numbers are found by NIK, else by the fallbacks SAT
 
     it('dead-letters with PRACTITIONER_AMBIGUOUS when two practitioners share name, birthDate and gender', async () => {
       const twin = { name: `dr. Kembar ${randomUUID()}`, birthDate: '1980-05-05', gender: 'female' as const };
+      // Fresh identifiers, so the seeded pair never collides with other seeds on this mock.
+      const digits = (n: number) => Array.from({ length: n }, () => randomInt(10)).join('');
       await mock.client.seed({
         practitioners: [
-          { ihsNumber: '19999999901', nik: '7209060505800901', role: 'physician', ...twin },
-          { ihsNumber: '19999999902', nik: '7209060505800902', role: 'physician', ...twin },
+          { ihsNumber: `1${digits(10)}`, nik: digits(16), role: 'physician', ...twin },
+          { ihsNumber: `1${digits(10)}`, nik: digits(16), role: 'physician', ...twin },
         ],
       });
 

@@ -26,7 +26,7 @@ export interface PrescriptionIdentifier {
 }
 
 /** The name, birthdate and gender SATUSEHAT finds a person by when there is no NIK. */
-export interface PersonDemographics {
+export interface NameBirthDateGender {
   name: string;
   /** A calendar date `YYYY-MM-DD`. */
   birthDate: string;
@@ -62,11 +62,11 @@ export interface SatusehatClient {
    */
   findPatientsByMotherNik(motherNik: string): Promise<MotherNikMatch[]>;
   /** IHS numbers of the patients found by name, birthdate and gender (`Patient?name=&birthdate=&gender=`). */
-  findPatientsByDemographics(person: PersonDemographics): Promise<IhsNumber[]>;
+  findPatientsByNameBirthDateGender(person: NameBirthDateGender): Promise<IhsNumber[]>;
   /** IHS numbers of the practitioners found by NIK. */
   findPractitionersByNik(nik: string): Promise<IhsNumber[]>;
   /** IHS numbers of the practitioners found by name, birthdate and gender (`Practitioner?name=&birthdate=&gender=`). */
-  findPractitionersByDemographics(person: PersonDemographics): Promise<IhsNumber[]>;
+  findPractitionersByNameBirthDateGender(person: NameBirthDateGender): Promise<IhsNumber[]>;
   /** Every Encounter under the visit's business identifier. */
   findEncounters(identifier: VisitIdentifier): Promise<FoundEncounter[]>;
   /** Sends a built Encounter (see `visitEncounterResource`); resolves to the record SATUSEHAT stored. */
@@ -174,9 +174,9 @@ export function createSatusehatClient(deps: {
         // The resource id of a Patient is its IHS number.
         return { ihsNumber: found.id as IhsNumber, birthDate: found.birthDate ?? null };
       }),
-    findPatientsByDemographics: async (person) => ihsNumbers(await searchRecords('Patient', demographicsQuery(person))),
+    findPatientsByNameBirthDateGender: async (person) => ihsNumbers(await searchRecords('Patient', nameBirthDateGenderQuery(person))),
     findPractitionersByNik: async (nik) => ihsNumbers(await searchRecords('Practitioner', `${NIK_SYSTEM}|${nik}`)),
-    findPractitionersByDemographics: async (person) => ihsNumbers(await searchRecords('Practitioner', demographicsQuery(person))),
+    findPractitionersByNameBirthDateGender: async (person) => ihsNumbers(await searchRecords('Practitioner', nameBirthDateGenderQuery(person))),
     findEncounters: async ({ organizationId, visitId }) =>
       (await search('Encounter', `${encounterSystem(organizationId)}|${visitId}`)).map((hit) => {
         const found = parse(foundEncounterSchema, 'GET', hit);
@@ -206,6 +206,6 @@ export function createSatusehatClient(deps: {
 }
 
 /** The documented name + birthdate + gender search parameters. */
-function demographicsQuery({ name, birthDate, gender }: PersonDemographics): Record<string, string> {
+function nameBirthDateGenderQuery({ name, birthDate, gender }: NameBirthDateGender): Record<string, string> {
   return { name, birthdate: birthDate, gender };
 }

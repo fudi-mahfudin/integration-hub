@@ -287,16 +287,6 @@ function valueAt(input: unknown, path: readonly PropertyKey[]): unknown {
   return value;
 }
 
-/** How the source identifies a patient: at least one of NIK, mother's NIK + birthDate, or name + birthDate + gender (#6). */
-export interface PatientFacts {
-  nik?: string | undefined;
-  motherNik?: string | undefined;
-  name?: string | undefined;
-  /** A calendar date `YYYY-MM-DD`. */
-  birthDate?: string | undefined;
-  gender?: 'male' | 'female' | undefined;
-}
-
 /** How the source identifies a practitioner, requester or pharmacist: by NIK, or by name + birthDate + gender (#6). */
 export interface PractitionerFacts {
   nik?: string | undefined;
@@ -304,6 +294,11 @@ export interface PractitionerFacts {
   /** A calendar date `YYYY-MM-DD`. */
   birthDate?: string | undefined;
   gender?: 'male' | 'female' | undefined;
+}
+
+/** How the source identifies a patient: by NIK, mother's NIK + birthDate, or name + birthDate + gender (#6). */
+export interface PatientFacts extends PractitionerFacts {
+  motherNik?: string | undefined;
 }
 
 /** The fields of a recorded `visit.started` that the create visit step sends. */
