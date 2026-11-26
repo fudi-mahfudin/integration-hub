@@ -1,4 +1,5 @@
-// The mock SATUSEHAT itself: tokens, searches and Encounter create, answered
+// The mock SATUSEHAT itself: tokens, searches, the KFA v2 product lookup and
+// Encounter and MedicationRequest create, answered
 // from the world dataset and the records it holds. Each handler returns the
 // response and what it did; the server logs it. All state is in memory.
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -7,6 +8,7 @@ import type { Effect } from './submission-log.js';
 import * as templates from './templates/index.js';
 import { NIK_SYSTEM } from './templates/resources.js';
 import { validateEncounter } from './validation/encounter.js';
+import { validateMedicationRequest } from './validation/medication-request.js';
 import type { World, WorldEntries } from './world/world.js';
 
 /** An answer plus what the request was about and what it changed, for the submission log. */
@@ -31,6 +33,7 @@ export function noEffect(resourceType: string | null): Omit<PlatformResponse, 's
 }
 
 const ENCOUNTER_SYSTEM = /^http:\/\/sys-ids\.kemkes\.go\.id\/encounter\/\d+$/;
+const PRESCRIPTION_SYSTEM = /^http:\/\/sys-ids\.kemkes\.go\.id\/prescription\/\d+$/;
 
 /** In-memory SATUSEHAT state and behaviour. */
 export class Platform {
@@ -38,6 +41,7 @@ export class Platform {
   private tokens = new Map<string, number>();
   private throttledUntilMs = 0;
   private encounters: fhir4.Encounter[] = [];
+  private medicationRequests: fhir4.MedicationRequest[] = [];
 
   constructor(
     private readonly baseWorld: World,
@@ -53,6 +57,7 @@ export class Platform {
     this.tokens.clear();
     this.throttledUntilMs = 0;
     this.encounters = [];
+    this.medicationRequests = [];
   }
 
   /** Adds entries to the world until the next reset. Entries that clash with existing ones are kept, so tests can make a lookup ambiguous. */
@@ -144,6 +149,16 @@ export class Platform {
       );
       return answer(hits, { visitKey: identifier.value, businessIdentifier: `${identifier.system}|${identifier.value}` });
     }
+    if (resourceType === 'MedicationRequest' && identifier && PRESCRIPTION_SYSTEM.test(identifier.system)) {
+      const hits = this.medicationRequests.filter((m) =>
+        m.identifier?.some((i) => i.system === identifier.system && i.value === identifier.value),
+      );
+      const [first] = hits;
+      return answer(hits, {
+        visitKey: first ? this.visitKeyOf(first.encounter?.reference) : null,
+        businessIdentifier: `${identifier.system}|${identifier.value}`,
+      });
+    }
     return {
       status: 400,
       body: templates.unsupportedSearch(resourceType, [...params].map(([k, v]) => `${k}=${v}`)),
@@ -152,12 +167,40 @@ export class Platform {
   }
 
   /**
+   * `GET /kfa-v2/products?identifier=kfa&code={code}`, answered from the
+   * world's KFA catalogue: a product (92 or 93) with its dose form, template
+   * and ingredients, or an ingredient (91). Any other query gets 400.
+   */
+  kfaProduct(params: URLSearchParams): PlatformResponse {
+    const names = [...params.keys()].sort();
+    const code = params.get('code');
+    if (names.join('&') !== 'code&identifier' || params.get('identifier') !== 'kfa' || !code || params.getAll('code').length !== 1) {
+      return {
+        status: 400,
+        body: templates.unsupportedSearch('KfaProduct', [...params].map(([k, v]) => `${k}=${v}`)),
+        ...noEffect('KfaProduct'),
+      };
+    }
+    const { kfaProducts, kfaIngredients } = this.world;
+    const product = kfaProducts.find((p) => p.code === code);
+    const ingredient = kfaIngredients.find((i) => i.code === code);
+    const found = product
+      ? {
+          product,
+          template: product.level === 93 ? kfaProducts.find((p) => p.code === product.parent) : undefined,
+          ingredients: product.ingredients.flatMap((c) => kfaIngredients.filter((i) => i.code === c)),
+        }
+      : ingredient && { ingredient };
+    return { status: 200, body: templates.kfaLookup(found), ...noEffect('KfaProduct') };
+  }
+
+  /**
    * `POST /Encounter`. A valid Encounter is stored with a new id and
    * `meta.versionId` "1". A second create for the same business identifier is
    * stored too, so a duplicate submission becomes visible in the report.
    */
   createEncounter(body: unknown): PlatformResponse {
-    const visitIdentifier = findVisitIdentifier(body);
+    const visitIdentifier = findIdentifier(body, ENCOUNTER_SYSTEM);
     const about = {
       resourceType: 'Encounter',
       visitKey: visitIdentifier?.value ?? null,
@@ -177,6 +220,52 @@ export class Platform {
     this.encounters.push(stored);
     return { status: 201, body: stored, effect: 'created', ...about };
   }
+
+  /**
+   * `POST /MedicationRequest`. A valid MedicationRequest on an Encounter the
+   * mock holds is stored with a new id and `meta.versionId` "1"; one on an
+   * unknown Encounter is rejected with `REFERENCE_NOT_FOUND`. A second create
+   * for the same prescription identifier is stored too, so the duplicate shows
+   * in the report. Logged under the visit of the Encounter it references.
+   */
+  createMedicationRequest(body: unknown): PlatformResponse {
+    const prescription = findIdentifier(body, PRESCRIPTION_SYSTEM);
+    const encounterReference = isRecord(body) && isRecord(body.encounter) ? body.encounter.reference : undefined;
+    const about = {
+      resourceType: 'MedicationRequest',
+      visitKey: this.visitKeyOf(encounterReference),
+      businessIdentifier: prescription ? `${prescription.system}|${prescription.value}` : null,
+    };
+    const violations = validateMedicationRequest(body, {
+      organizationId: this.world.organization.id,
+      kfaProducts: this.world.kfaProducts,
+      kfaIngredients: this.world.kfaIngredients,
+      encounterExists: (id) => this.encounters.some((e) => e.id === id),
+    });
+    if (violations.length > 0) {
+      return { status: 400, body: templates.payloadRejected(violations), effect: 'none', ...about };
+    }
+    const stored = templates.storedMedicationRequest({
+      // validateMedicationRequest accepted it, so it has every field the mock relies on.
+      body: body as fhir4.MedicationRequest,
+      id: randomUUID(),
+      versionId: '1',
+      lastUpdated: this.clock(),
+    });
+    this.medicationRequests.push(stored);
+    return { status: 201, body: stored, effect: 'created', ...about };
+  }
+
+  /** The visit key of the Encounter an `Encounter/{id}` reference names, when the mock holds it. */
+  private visitKeyOf(reference: unknown): string | null {
+    if (typeof reference !== 'string' || !reference.startsWith('Encounter/')) return null;
+    const held = this.encounters.find((e) => e.id === reference.slice('Encounter/'.length));
+    return held?.identifier?.find((i) => typeof i.system === 'string' && ENCOUNTER_SYSTEM.test(i.system))?.value ?? null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** Splits a FHIR token search value `system|value`. */
@@ -186,16 +275,16 @@ function splitToken(raw: string | undefined): { system: string; value: string } 
   return { system: raw.slice(0, bar), value: raw.slice(bar + 1) };
 }
 
-/** The `encounter/{org}` identifier of a submitted body, read leniently so even rejected requests get a visitKey. */
-function findVisitIdentifier(body: unknown): { system: string; value: string } | undefined {
+/** A submitted body's identifier under `system`, read leniently so even rejected requests are logged under it. */
+function findIdentifier(body: unknown, system: RegExp): { system: string; value: string } | undefined {
   if (typeof body !== 'object' || body === null || !('identifier' in body) || !Array.isArray(body.identifier)) return undefined;
   // Array.isArray narrows to any[]; unknown[] keeps every element checked below.
   for (const id of body.identifier as unknown[]) {
     if (typeof id !== 'object' || id === null) continue;
     // Both fields are read as unknown and type-checked on the next line.
-    const { system, value } = id as { system?: unknown; value?: unknown };
-    if (typeof system === 'string' && ENCOUNTER_SYSTEM.test(system) && typeof value === 'string' && value !== '') {
-      return { system, value };
+    const { system: idSystem, value } = id as { system?: unknown; value?: unknown };
+    if (typeof idSystem === 'string' && system.test(idSystem) && typeof value === 'string' && value !== '') {
+      return { system: idSystem, value };
     }
   }
   return undefined;

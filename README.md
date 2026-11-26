@@ -93,7 +93,7 @@ node packages/mock-satusehat/dist/main.js   # mock SATUSEHAT on http://localhost
 node apps/hub/dist/worker-main.js           # claims steps from the Postgres outbox
 ```
 
-The worker loads the location mapping seed (`apps/hub/seed/location-mappings.json`, the simulator's location codes mapped to the world dataset's locations) at boot. Loading it again changes nothing.
+The worker loads the mapping seeds at boot: `apps/hub/seed/location-mappings.json` (the simulator's location codes mapped to the world dataset's locations) and `apps/hub/seed/drug-mappings.json` (its local drug codes mapped to the world's KFA codes, plus two entries noted as deliberately wrong for the KFA failure paths). Loading them again changes nothing. KFA details are fetched from KFA v2 the first time a code is used and stored.
 
 To see why Redis alone can't detect duplicate ingests (ADR 0003), run `npm run demo:naive-race` (after `pnpm deps:up` and `pnpm migrate`). It fires 20 identical requests at once against the deliberately broken `IDEMPOTENCY_STORE=naive-redis` and then against the Postgres store, and prints how the answers differ.
 
@@ -110,7 +110,7 @@ The hub never migrates itself: always run `pnpm migrate` before starting it. The
 | Path | What |
 |---|---|
 | `apps/hub` | The hub: one NestJS + Fastify codebase, deployed as the hub service (`main.ts`) and the worker process (`worker-main.ts`) (ADR 0001) |
-| `apps/hub/seed` | The operator's location mapping seed, loaded idempotently at boot |
+| `apps/hub/seed` | The operator's location and drug mapping seeds, loaded idempotently at boot |
 | `packages/mock-satusehat` | The mock SATUSEHAT: a stateful fake platform with its own validator (ADR 0006) and the `/__mock/*` inspection and control API; never deployed publicly |
 | `docs/api.md` | The hub's API contract |
 | `compose.yaml` | Local infrastructure; only components from the closed list |

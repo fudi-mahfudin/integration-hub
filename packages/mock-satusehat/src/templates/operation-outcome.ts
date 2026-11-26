@@ -3,8 +3,12 @@ import { defineTemplate } from './provenance.js';
 /** The coding system the mock puts its rejection codes under in `issue.details.coding`. */
 export const MOCK_RULE_SYSTEM = 'urn:integration-hub:mock-satusehat:rule';
 
-/** A rejection code the mock reports (#9: the same strings as the hub's step codes 2-5). */
-export type RejectionCode = 'PAYLOAD_INVALID';
+/**
+ * A rejection code the mock reports: the same strings as the hub's step codes
+ * 2-5 (#9), plus `REFERENCE_NOT_FOUND` for a reference to a record the mock
+ * does not hold (#12).
+ */
+export type RejectionCode = 'KFA_LEVEL_INVALID' | 'PAYLOAD_INVALID' | 'REFERENCE_NOT_FOUND';
 
 /** One rule a payload broke. */
 export interface Violation {

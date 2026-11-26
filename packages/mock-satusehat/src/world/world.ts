@@ -10,11 +10,15 @@ const kfaIngredientSchema = z.object({
   display: z.string().min(1),
 });
 
+/** A KFA dose form (`dosage_form`): the unit a product is counted in. */
+const doseFormSchema = z.object({ code: z.string().min(1), display: z.string().min(1) });
+
 const kfaProductSchema = z.discriminatedUnion('level', [
   z.object({
     level: z.literal(92),
     code: z.string().regex(/^92\d{6}$/),
     display: z.string().min(1),
+    doseForm: doseFormSchema,
     /** The KFA 91 codes of its active ingredients. */
     ingredients: z.array(z.string()).min(1),
   }),
@@ -22,6 +26,7 @@ const kfaProductSchema = z.discriminatedUnion('level', [
     level: z.literal(93),
     code: z.string().regex(/^93\d{6}$/),
     display: z.string().min(1),
+    doseForm: doseFormSchema,
     ingredients: z.array(z.string()).min(1),
     /** The virtual product (KFA 92) this actual product derives from. */
     parent: z.string().regex(/^92\d{6}$/),
@@ -95,6 +100,10 @@ export type WorldEntries = z.infer<typeof worldEntriesSchema>;
 export type WorldPatient = World['patients'][number];
 /** A fake practitioner in the world. */
 export type WorldPractitioner = World['practitioners'][number];
+/** A fake KFA ingredient (91) in the world. */
+export type WorldKfaIngredient = World['kfaIngredients'][number];
+/** A fake KFA product (92 or 93) in the world. */
+export type WorldKfaProduct = World['kfaProducts'][number];
 /** A fake location in the world. */
 export type WorldLocation = World['locations'][number];
 /** The organization the world's client credentials belong to. */

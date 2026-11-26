@@ -29,8 +29,11 @@ The client credentials are the world's organization (`dev-satusehat-client` / `d
 - `GET /fhir-r4/v1/Location?_id={id}`
 - `GET /fhir-r4/v1/Encounter?identifier=http://sys-ids.kemkes.go.id/encounter/{org}|{value}`
 - `POST /fhir-r4/v1/Encounter`: validated, then stored with a new `id` and `meta.versionId`. A second create for the same identifier is stored too, so the duplicate shows in the report.
+- `GET /fhir-r4/v1/MedicationRequest?identifier=http://sys-ids.kemkes.go.id/prescription/{org}|{value}`
+- `POST /fhir-r4/v1/MedicationRequest`: validated by its own rules (mandatory fields, `+00:00` authoredOn and the floor, `prescription/{org}` and `prescription-item/{org}` identifiers, a contained Medication whose KFA code is a 92 or 93 in its catalogue, a quantity in that product's dose form), then stored like an Encounter. One that references an Encounter the mock doesn't hold is `400 REFERENCE_NOT_FOUND`. Logged under the visit key of the Encounter it references.
+- `GET /kfa-v2/products?identifier=kfa&code={code}` (same token): a product (92 or 93) from the world's KFA catalogue with its `dosage_form`, `product_template` (the 92 of a 93) and `active_ingredients`, or an ingredient (91) with neither; an unknown code is `200 { "total": 0, "result": null }`.
 
-Any other search parameter gets `400`: an unknown search reaching the mock is a hub bug. FHIR calls without a valid token get `401`. Validation failures are `400` OperationOutcomes with the rejection code (`PAYLOAD_INVALID`) in `issue.details.coding`.
+Any other search parameter gets `400`: an unknown search reaching the mock is a hub bug. FHIR calls without a valid token get `401`. Validation failures are `400` OperationOutcomes with the rejection code (`PAYLOAD_INVALID`, `KFA_LEVEL_INVALID` or `REFERENCE_NOT_FOUND`) in `issue.details.coding`.
 
 ## Inspection and control API
 

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseKfaProduct, type KfaCode, type KfaProduct } from '../kfa/kfa-product.js';
 import type { IhsNumber, LocationId } from '../satusehat/client.js';
 import type { StepName } from './case-model.js';
 
@@ -14,8 +15,23 @@ export interface CreateVisitPins {
   locationId: LocationId;
 }
 
-/** A step's pins. Only create visit pins so far; the drug steps add theirs (#29, #30). */
-export type StepPins = CreateVisitPins;
+/**
+ * What a completed submit prescription sent (#10): the prescribed KFA product
+ * as the KFA rules judge it, and the requester. The dispense step compares
+ * its product against these, never the live drug mapping.
+ */
+export interface SubmitPrescriptionPins {
+  kfaCode: KfaCode;
+  kfaLevel: number;
+  /** For an actual product (93), its virtual product; otherwise null. */
+  parent92: KfaCode | null;
+  /** The 91 codes of its active ingredients. */
+  activeIngredients: KfaCode[];
+  requesterIhsNumber: IhsNumber;
+}
+
+/** A step's pins. The dispense step adds its own (#30). */
+export type StepPins = CreateVisitPins | SubmitPrescriptionPins;
 
 const createVisitPinsSchema = z.object({
   patientIhsNumber: z.string().min(1),
@@ -32,9 +48,10 @@ export function readPins(step: StepName, stored: unknown): StepPins {
     case 'create_visit':
       return readCreateVisitPins(stored);
     case 'submit_prescription':
+      return readSubmitPrescriptionPins(stored);
     case 'submit_dispense':
     case 'update_visit':
-      throw new Error(`step ${step} has no pins defined yet, but its row holds ${JSON.stringify(stored)}`);
+      throw new Error(`step ${step} has no pins defined yet, but its row holds ${stored === null ? 'null' : 'a value'}`);
   }
 }
 
@@ -44,8 +61,42 @@ export function readPins(step: StepName, stored: unknown): StepPins {
  */
 export function readCreateVisitPins(stored: unknown): CreateVisitPins {
   const parsed = createVisitPinsSchema.safeParse(stored);
-  if (!parsed.success) throw new Error(`stored create visit pins do not match their schema: ${JSON.stringify(stored)}`);
+  // The fields only: the stored values are IHS numbers, which no message carries.
+  if (!parsed.success) throw new Error(`stored create visit pins do not match their schema at ${pinProblems(parsed.error)}`);
   const { patientIhsNumber, practitionerIhsNumber, locationId } = parsed.data;
   // Written only by lease-fenced completion, from the IHS numbers and Location ID create visit sent.
   return { patientIhsNumber: patientIhsNumber as IhsNumber, practitionerIhsNumber: practitionerIhsNumber as IhsNumber, locationId: locationId as LocationId };
+}
+
+const submitPrescriptionPinsSchema = z.object({
+  kfaCode: z.string(),
+  kfaLevel: z.number().int(),
+  parent92: z.string().nullable(),
+  activeIngredients: z.array(z.string()),
+  requesterIhsNumber: z.string().min(1),
+});
+
+/**
+ * Reads a submit prescription's stored pins back.
+ * @throws Error when the stored value is not submit prescription pins, which means the row was changed outside the hub.
+ */
+export function readSubmitPrescriptionPins(stored: unknown): SubmitPrescriptionPins {
+  const parsed = submitPrescriptionPinsSchema.safeParse(stored);
+  if (!parsed.success) throw new Error(`stored submit prescription pins do not match their schema at ${pinProblems(parsed.error)}`);
+  const { kfaCode, kfaLevel, parent92, activeIngredients, requesterIhsNumber } = parsed.data;
+  return {
+    ...kfaProductPins(parseKfaProduct({ code: kfaCode, level: kfaLevel, parent92, activeIngredients })),
+    // Written only by lease-fenced completion, from the requester's IHS number the step sent.
+    requesterIhsNumber: requesterIhsNumber as IhsNumber,
+  };
+}
+
+/** Where stored pins broke their schema, by field path only. */
+function pinProblems(error: z.ZodError): string {
+  return error.issues.map((i) => i.path.join('.') || '(root)').join(', ');
+}
+
+/** The pin fields of a prescribed KFA product. */
+export function kfaProductPins(product: KfaProduct): Omit<SubmitPrescriptionPins, 'requesterIhsNumber'> {
+  return { kfaCode: product.code, kfaLevel: product.level, parent92: product.parent92, activeIngredients: [...product.activeIngredients] };
 }

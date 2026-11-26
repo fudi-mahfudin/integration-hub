@@ -97,3 +97,42 @@ export async function createdId(res: Response): Promise<string> {
   }
   return body.id;
 }
+
+/** A MedicationRequest for Paracetamol 500 mg tablets (92000001) on Encounter `encounterId`, under prescription `prescriptionId`. */
+export function medicationRequest(
+  encounterId: string,
+  prescriptionId = `RX-${crypto.randomUUID()}`,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const org = world.organization.id;
+  const [patient] = world.patients;
+  const [practitioner] = world.practitioners;
+  return {
+    resourceType: 'MedicationRequest',
+    contained: [
+      {
+        resourceType: 'Medication',
+        id: 'medication',
+        code: { coding: [{ system: 'http://sys-ids.kemkes.go.id/kfa', code: '92000001', display: 'Parasetamol 500 mg Tablet' }] },
+      },
+    ],
+    identifier: [
+      { system: `http://sys-ids.kemkes.go.id/prescription/${org}`, use: 'official', value: prescriptionId },
+      { system: `http://sys-ids.kemkes.go.id/prescription-item/${org}`, use: 'official', value: `${prescriptionId}-1` },
+    ],
+    status: 'completed',
+    intent: 'order',
+    category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/medicationrequest-category', code: 'community' }] }],
+    medicationReference: { reference: '#medication' },
+    subject: { reference: `Patient/${patient?.ihsNumber}` },
+    encounter: { reference: `Encounter/${encounterId}` },
+    authoredOn: '2026-03-02T01:10:00+00:00',
+    requester: { reference: `Practitioner/${practitioner?.ihsNumber}` },
+    dispenseRequest: {
+      quantity: { value: 10, unit: 'Tablet', system: 'http://terminology.kemkes.go.id/CodeSystem/medication-form', code: 'BS066' },
+      performer: { reference: `Organization/${org}` },
+    },
+    substitution: { allowedBoolean: true },
+    ...overrides,
+  };
+}

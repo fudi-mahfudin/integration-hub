@@ -2,6 +2,7 @@ import type { Kysely } from 'kysely';
 import type { SourceSystemId } from '../auth/source-systems.js';
 import type { AttemptOutcome, Database } from '../db/database.js';
 import { readPins, type StepPins } from './pins.js';
+import { readRejections, type RejectionView } from './rejection-log.js';
 import type {
   CaseId,
   CaseStatus,
@@ -56,6 +57,8 @@ export interface CaseView {
   waitingFor: EventType | null;
   /** Since when a waiting case has waited for it, ISO 8601 UTC; null unless `waiting`. */
   waitingSince: string | null;
+  /** The visit's ingest rejections, oldest first; they explain a waiting case and never change it (#8). */
+  rejections: RejectionView[];
   steps: CaseStepView[];
 }
 
@@ -98,6 +101,8 @@ export async function readCase(
         .orderBy('seq')
         .orderBy('attempt')
         .execute();
+      // Read back from the row this case's visit id was written to.
+      const rejections = await readRejections(trx, sourceSystemId, kase.visit_id as VisitId);
       return {
         // Read back from the row this case's ids were written to.
         caseId: kase.id as CaseId,
@@ -105,6 +110,7 @@ export async function readCase(
         status: kase.status,
         waitingFor: kase.waiting_for,
         waitingSince: kase.waiting_since?.toISOString() ?? null,
+        rejections,
         steps: steps.map((s) => ({
           step: s.name,
           eventType: s.event_type,

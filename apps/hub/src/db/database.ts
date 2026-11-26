@@ -1,6 +1,7 @@
 import { Kysely, PostgresDialect, type ColumnType, type Generated } from 'kysely';
 import pg from 'pg';
 import type { CaseStatus, DeadLetterReason, EventType, RemoteIdentifier, StepName, StepState } from '../cases/case-model.js';
+import type { RejectionCode } from '../cases/rejection-log.js';
 
 /** A `timestamptz` column: read as a `Date`, written as a `Date`. */
 type Timestamp = ColumnType<Date, Date, Date>;
@@ -68,7 +69,42 @@ export interface SourceEventTable {
   type: EventType;
   occurred_at: Timestamp;
   envelope: ColumnType<unknown, string, never>;
+  /** For a `prescription.written`: its `prescriptionId` and its one item's `itemId`; null for other types. */
+  prescription_id: string | null;
+  item_id: string | null;
   received_at: Timestamp;
+}
+
+/** One ingest rejection of a visit's event (#8): code, event type and time, never the body. */
+export interface RejectionTable {
+  id: Generated<string>;
+  source_system_id: string;
+  visit_id: string;
+  event_type: EventType;
+  code: RejectionCode;
+  rejected_at: Timestamp;
+}
+
+/** An operator-kept mapping of a source system's local drug code to a KFA code (#10). */
+export interface DrugMappingTable {
+  source_system_id: string;
+  drug_code: string;
+  kfa_code: string;
+  note: string | null;
+  updated_at: Timestamp;
+}
+
+/** KFA details fetched from the KFA v2 API on first use, shared by every source system (#10). */
+export interface KfaProductTable {
+  code: string;
+  display: string;
+  level: number;
+  parent_92: string | null;
+  /** The 91 codes of its active ingredients, as a JSON array. */
+  active_ingredients: ColumnType<unknown, string, string>;
+  dose_form_code: string | null;
+  dose_form_display: string | null;
+  fetched_at: Timestamp;
 }
 
 /** An accepted idempotency key, its body fingerprint, and the answer it was given. */
@@ -97,6 +133,9 @@ export interface Database {
   source_event: SourceEventTable;
   idempotency_key: IdempotencyKeyTable;
   location_mapping: LocationMappingTable;
+  rejection: RejectionTable;
+  drug_mapping: DrugMappingTable;
+  kfa_product: KfaProductTable;
 }
 
 /**

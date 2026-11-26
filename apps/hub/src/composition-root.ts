@@ -18,12 +18,15 @@ import type { IdempotencyStore } from './ingestion/idempotency-store.js';
 import { createIngest } from './ingestion/ingest.js';
 import { createNaiveRedisIdempotencyStore } from './ingestion/naive-redis-idempotency-store.js';
 import { createPostgresIdempotencyStore } from './ingestion/postgres-idempotency-store.js';
+import { createKfaClient } from './kfa/kfa-client.js';
+import { loadDrugMappingSeed } from './mapping/drug-mappings.js';
 import { loadLocationMappingSeed } from './mapping/location-mappings.js';
 import { log } from './observability/log.js';
 import { createOutbox } from './outbox/outbox.js';
 import { createSatusehatClient } from './satusehat/client.js';
 import { createAccessTokens } from './satusehat/token.js';
 import { createVisit } from './steps/create-visit.js';
+import { submitPrescription } from './steps/submit-prescription.js';
 import { createWorkerLoop } from './worker/worker.js';
 import { DATABASE, INGEST, SOURCE_SYSTEMS } from './tokens.js';
 
@@ -75,7 +78,7 @@ export async function createHub(config: HubConfig, runtime: HubRuntime): Promise
     config.idempotencyStore === 'naive-redis'
       ? createNaiveRedisIdempotencyStore({ db, redis, retentionHours: config.idempotencyRetentionHours })
       : createPostgresIdempotencyStore({ db, clock, retentionHours: config.idempotencyRetentionHours });
-  const ingest = createIngest({ store, clock });
+  const ingest = createIngest({ store, db, clock });
 
   const app = await NestFactory.create<NestFastifyApplication>(
     HubServiceModule.register([
@@ -137,7 +140,7 @@ export interface HubWorker {
 /**
  * The production composition root of the worker process (ADR 0001): the
  * worker entry point and the test harness both boot it through here. Loads
- * the location mapping seed, and fails fast if Postgres is unreachable.
+ * the location and drug mapping seeds, and fails fast if Postgres is unreachable.
  */
 export async function createWorker(config: HubConfig, runtime: HubRuntime): Promise<HubWorker> {
   const db = createDatabase(config.databaseUrl);
@@ -145,18 +148,22 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
   try {
     await checkPostgres(db, config.databaseUrl);
     await loadLocationMappingSeed(db, clock());
+    await loadDrugMappingSeed(db, clock());
   } catch (err) {
     await db.destroy();
     throw err;
   }
 
-  const satusehat = createSatusehatClient({
-    config: config.satusehat,
-    tokens: createAccessTokens({ config: config.satusehat, clock }),
-  });
+  // KFA v2 takes the same access token as FHIR (#14), so both share the process's tokens.
+  const tokens = createAccessTokens({ config: config.satusehat, clock });
+  const satusehat = createSatusehatClient({ config: config.satusehat, tokens });
+  const kfa = createKfaClient({ config: config.satusehat, tokens });
   const worker = createWorkerLoop({
     outbox: createOutbox({ db, clock, leaseMs: config.workerLeaseMs }),
-    runners: { create_visit: (step) => createVisit({ db, satusehat }, step) },
+    runners: {
+      create_visit: (step) => createVisit({ db, satusehat }, step),
+      submit_prescription: (step) => submitPrescription({ db, satusehat, kfa, clock }, step),
+    },
     pollIntervalMs: config.workerPollIntervalMs,
   });
 

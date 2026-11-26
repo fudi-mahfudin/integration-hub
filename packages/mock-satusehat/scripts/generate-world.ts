@@ -130,6 +130,10 @@ const practitioners: World['practitioners'] = Array.from({ length: commitments.w
   };
 });
 
+// Fake dose form codes in the shape of KFA's `dosage_form` (code + name).
+const TABLET = { code: 'BS066', display: 'Tablet' };
+const KAPSUL = { code: 'BS019', display: 'Kapsul' };
+
 const world: World = {
   organization: {
     id: '99000001',
@@ -146,24 +150,24 @@ const world: World = {
     { code: '91000006', display: 'Amlodipin besilat' },
   ],
   kfaProducts: [
-    { level: 92, code: '92000001', display: 'Parasetamol 500 mg Tablet', ingredients: ['91000001'] },
-    { level: 92, code: '92000002', display: 'Parasetamol 650 mg Tablet', ingredients: ['91000001'] },
-    { level: 92, code: '92000003', display: 'Amoksisilin 500 mg Kapsul', ingredients: ['91000002'] },
-    { level: 92, code: '92000004', display: 'Amoksisilin 500 mg / Asam klavulanat 125 mg Tablet', ingredients: ['91000002', '91000003'] },
-    { level: 92, code: '92000005', display: 'Ibuprofen 400 mg Tablet', ingredients: ['91000004'] },
-    { level: 92, code: '92000006', display: 'Metformin hidroklorida 500 mg Tablet', ingredients: ['91000005'] },
-    { level: 92, code: '92000007', display: 'Amlodipin besilat 5 mg Tablet', ingredients: ['91000006'] },
-    { level: 92, code: '92000008', display: 'Amlodipin besilat 10 mg Tablet', ingredients: ['91000006'] },
-    { level: 93, code: '93000001', display: 'Parasetamol 500 mg Tablet (Fiktif Farma A)', ingredients: ['91000001'], parent: '92000001' },
-    { level: 93, code: '93000002', display: 'Parasetamol 500 mg Tablet (Fiktif Farma B)', ingredients: ['91000001'], parent: '92000001' },
-    { level: 93, code: '93000003', display: 'Parasetamol 650 mg Tablet (Fiktif Farma A)', ingredients: ['91000001'], parent: '92000002' },
-    { level: 93, code: '93000004', display: 'Amoksisilin 500 mg Kapsul (Fiktif Farma C)', ingredients: ['91000002'], parent: '92000003' },
-    { level: 93, code: '93000005', display: 'Amoksisilin 500 mg Kapsul (Fiktif Farma D)', ingredients: ['91000002'], parent: '92000003' },
-    { level: 93, code: '93000006', display: 'Amoksisilin / Asam klavulanat 625 mg Tablet (Fiktif Farma C)', ingredients: ['91000002', '91000003'], parent: '92000004' },
-    { level: 93, code: '93000007', display: 'Ibuprofen 400 mg Tablet (Fiktif Farma B)', ingredients: ['91000004'], parent: '92000005' },
-    { level: 93, code: '93000008', display: 'Metformin hidroklorida 500 mg Tablet (Fiktif Farma D)', ingredients: ['91000005'], parent: '92000006' },
-    { level: 93, code: '93000009', display: 'Amlodipin besilat 5 mg Tablet (Fiktif Farma A)', ingredients: ['91000006'], parent: '92000007' },
-    { level: 93, code: '93000010', display: 'Amlodipin besilat 10 mg Tablet (Fiktif Farma A)', ingredients: ['91000006'], parent: '92000008' },
+    { level: 92, code: '92000001', display: 'Parasetamol 500 mg Tablet', doseForm: TABLET, ingredients: ['91000001'] },
+    { level: 92, code: '92000002', display: 'Parasetamol 650 mg Tablet', doseForm: TABLET, ingredients: ['91000001'] },
+    { level: 92, code: '92000003', display: 'Amoksisilin 500 mg Kapsul', doseForm: KAPSUL, ingredients: ['91000002'] },
+    { level: 92, code: '92000004', display: 'Amoksisilin 500 mg / Asam klavulanat 125 mg Tablet', doseForm: TABLET, ingredients: ['91000002', '91000003'] },
+    { level: 92, code: '92000005', display: 'Ibuprofen 400 mg Tablet', doseForm: TABLET, ingredients: ['91000004'] },
+    { level: 92, code: '92000006', display: 'Metformin hidroklorida 500 mg Tablet', doseForm: TABLET, ingredients: ['91000005'] },
+    { level: 92, code: '92000007', display: 'Amlodipin besilat 5 mg Tablet', doseForm: TABLET, ingredients: ['91000006'] },
+    { level: 92, code: '92000008', display: 'Amlodipin besilat 10 mg Tablet', doseForm: TABLET, ingredients: ['91000006'] },
+    { level: 93, code: '93000001', display: 'Parasetamol 500 mg Tablet (Fiktif Farma A)', doseForm: TABLET, ingredients: ['91000001'], parent: '92000001' },
+    { level: 93, code: '93000002', display: 'Parasetamol 500 mg Tablet (Fiktif Farma B)', doseForm: TABLET, ingredients: ['91000001'], parent: '92000001' },
+    { level: 93, code: '93000003', display: 'Parasetamol 650 mg Tablet (Fiktif Farma A)', doseForm: TABLET, ingredients: ['91000001'], parent: '92000002' },
+    { level: 93, code: '93000004', display: 'Amoksisilin 500 mg Kapsul (Fiktif Farma C)', doseForm: KAPSUL, ingredients: ['91000002'], parent: '92000003' },
+    { level: 93, code: '93000005', display: 'Amoksisilin 500 mg Kapsul (Fiktif Farma D)', doseForm: KAPSUL, ingredients: ['91000002'], parent: '92000003' },
+    { level: 93, code: '93000006', display: 'Amoksisilin / Asam klavulanat 625 mg Tablet (Fiktif Farma C)', doseForm: TABLET, ingredients: ['91000002', '91000003'], parent: '92000004' },
+    { level: 93, code: '93000007', display: 'Ibuprofen 400 mg Tablet (Fiktif Farma B)', doseForm: TABLET, ingredients: ['91000004'], parent: '92000005' },
+    { level: 93, code: '93000008', display: 'Metformin hidroklorida 500 mg Tablet (Fiktif Farma D)', doseForm: TABLET, ingredients: ['91000005'], parent: '92000006' },
+    { level: 93, code: '93000009', display: 'Amlodipin besilat 5 mg Tablet (Fiktif Farma A)', doseForm: TABLET, ingredients: ['91000006'], parent: '92000007' },
+    { level: 93, code: '93000010', display: 'Amlodipin besilat 10 mg Tablet (Fiktif Farma A)', doseForm: TABLET, ingredients: ['91000006'], parent: '92000008' },
   ],
   patients,
   practitioners,

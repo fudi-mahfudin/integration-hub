@@ -8,6 +8,12 @@ export type CaseId = Brand<string, 'CaseId'>;
 /** The source system's own visit number; unique per source system (#6). */
 export type VisitId = Brand<string, 'VisitId'>;
 
+/** The source system's prescription number: the `prescription/{org}` identifier's value (#6). */
+export type PrescriptionId = Brand<string, 'PrescriptionId'>;
+
+/** The source system's number for a prescription's drug item: the `prescription-item/{org}` identifier's value (#6). */
+export type PrescriptionItemId = Brand<string, 'PrescriptionItemId'>;
+
 /** The four source event types, 1:1 with the steps (#6). */
 export const EVENT_TYPES = ['visit.started', 'prescription.written', 'drug.dispensed', 'visit.finished'] as const;
 
@@ -43,7 +49,7 @@ export type RemoteId = Brand<string, 'RemoteId'>;
 
 /** A step's record at SATUSEHAT: its resource type, remote identifier and `meta.versionId` (#10). */
 export interface RemoteIdentifier {
-  type: 'Encounter';
+  type: 'Encounter' | 'MedicationRequest';
   id: RemoteId;
   /** `meta.versionId`, when SATUSEHAT sends one. */
   version: string | null;

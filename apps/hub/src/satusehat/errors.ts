@@ -24,3 +24,17 @@ export class SatusehatResponseError extends Error {
     this.name = 'SatusehatResponseError';
   }
 }
+
+/** SATUSEHAT did not answer a request within its time limit. Transient, like a 5xx. */
+export class SatusehatTimeoutError extends Error {
+  constructor(
+    readonly method: string,
+    readonly url: URL,
+    readonly timeoutMs: number,
+    options: { cause: unknown },
+  ) {
+    // Path only: the query may carry identifiers.
+    super(`SATUSEHAT ${method} ${url.pathname} did not answer within ${timeoutMs}ms`, options);
+    this.name = 'SatusehatTimeoutError';
+  }
+}

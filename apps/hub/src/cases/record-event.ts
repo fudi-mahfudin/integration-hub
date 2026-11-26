@@ -10,19 +10,28 @@ import {
   stepForEvent,
   type CaseId,
   type CaseStatus,
-  type EventType,
+  type PrescriptionId,
+  type PrescriptionItemId,
   type VisitId,
 } from './case-model.js';
 import { readSteps, writeCaseStatus } from './case-status.js';
 
+/** A prescription's one drug item, by the identifiers the source gave them (#6). */
+export interface PrescriptionItemKey {
+  prescriptionId: PrescriptionId;
+  itemId: PrescriptionItemId;
+}
+
 /** A source event that passed its schema, ready to be recorded against its visit. */
-export interface AcceptedEvent {
-  type: EventType;
+export type AcceptedEvent = {
   visitId: VisitId;
   occurredAt: Date;
   /** The envelope as received, stored with the event. */
   envelope: unknown;
-}
+} & (
+  | { type: 'visit.started'; prescriptionItem: null }
+  | { type: 'prescription.written'; prescriptionItem: PrescriptionItemKey }
+);
 
 /** Where a recorded event landed. */
 export interface RecordedEvent {
@@ -37,6 +46,7 @@ export interface RecordedEvent {
  * case status (#8). The released step is the outbox entry (ADR 0002): it
  * becomes claimable when this transaction commits.
  * @throws Problem `EVENT_ALREADY_RECORDED` (409) when the case already has an event of this type.
+ * @throws Problem `UNSUPPORTED_MULTI_ITEM` (422) when the case already has a prescription with another item (ADR 0004).
  */
 export async function recordEvent(
   trx: Transaction<Database>,
@@ -95,12 +105,14 @@ export async function recordEvent(
       type: event.type,
       occurred_at: event.occurredAt,
       envelope: JSON.stringify(event.envelope),
+      prescription_id: event.prescriptionItem?.prescriptionId ?? null,
+      item_id: event.prescriptionItem?.itemId ?? null,
       received_at: now,
     })
     .onConflict((oc) => oc.constraint('source_event_case_type_key').doNothing())
     .returning('id')
     .executeTakeFirst();
-  if (!stored) throw new Problem('EVENT_ALREADY_RECORDED', []);
+  if (!stored) throw await alreadyRecorded(trx, id, event);
 
   const steps = await readSteps(trx, id);
   const seq = stepForEvent(event.type).seq;
@@ -117,4 +129,28 @@ export async function recordEvent(
   const caseStatus = await writeCaseStatus(trx, id, after, now);
   // Postgres generated this uuid for the case; it is a case id by construction.
   return { caseId: id as CaseId, caseStatus };
+}
+
+/**
+ * Why an event of a type the case already has is rejected: a prescription
+ * with another prescription or item is a second drug item for the visit
+ * (`UNSUPPORTED_MULTI_ITEM`, #6); anything else is `EVENT_ALREADY_RECORDED`.
+ */
+async function alreadyRecorded(trx: Transaction<Database>, caseId: string, event: AcceptedEvent): Promise<Problem> {
+  if (event.type !== 'prescription.written') return new Problem('EVENT_ALREADY_RECORDED', []);
+  const recorded = await trx
+    .selectFrom('source_event')
+    .select(['prescription_id', 'item_id'])
+    .where('case_id', '=', caseId)
+    .where('type', '=', 'prescription.written')
+    .executeTakeFirstOrThrow();
+  const { prescriptionId, itemId } = event.prescriptionItem;
+  if (recorded.prescription_id === prescriptionId && recorded.item_id === itemId) return new Problem('EVENT_ALREADY_RECORDED', []);
+  return new Problem('UNSUPPORTED_MULTI_ITEM', [
+    {
+      path: '/data/items/0/itemId',
+      code: 'UNSUPPORTED_MULTI_ITEM',
+      message: 'the visit already has a prescription with another prescriptionId or itemId; a case supports one drug item',
+    },
+  ]);
 }
