@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 
 /** API keys of the two source systems `TEST_SOURCES` registers. */
@@ -62,4 +63,49 @@ export function getCase(baseUrl: URL, caseId: string, apiKey: string = SOURCE_AP
   return fetch(new URL(`v1/cases/${encodeURIComponent(caseId)}`, baseUrl), {
     headers: { authorization: `Bearer ${apiKey}` },
   });
+}
+
+const remoteSchema = z.object({ type: z.string(), id: z.string(), version: z.string().nullable() });
+
+/** `GET /v1/cases/{id}` as tests read it. */
+export const caseViewSchema = z.object({
+  caseId: z.string(),
+  visitId: z.string(),
+  status: z.string(),
+  waitingFor: z.string().nullable(),
+  waitingSince: z.string().nullable(),
+  steps: z.array(
+    z.object({
+      step: z.string(),
+      eventType: z.string(),
+      state: z.string(),
+      attempts: z.number().int(),
+      deadLetterReason: z.string().nullable(),
+      remote: remoteSchema.nullable(),
+    }),
+  ),
+});
+
+/** A case as `GET /v1/cases/{id}` shows it. */
+export type CaseView = z.infer<typeof caseViewSchema>;
+
+/** Polls `GET /v1/cases/{id}` until `done` holds for the case, and resolves to it. Fails after `timeoutMs`. */
+export async function waitForCase(
+  baseUrl: URL,
+  location: string | null,
+  done: (view: CaseView) => boolean,
+  options: { apiKey: string; timeoutMs?: number },
+): Promise<CaseView> {
+  const caseId = location?.split('/').at(-1);
+  if (!caseId) throw new Error(`expected a Location header naming a case, got ${JSON.stringify(location)}`);
+  const deadline = Date.now() + (options.timeoutMs ?? 5_000);
+  let last: unknown;
+  while (Date.now() < deadline) {
+    const res = await getCase(baseUrl, caseId, options.apiKey);
+    last = await res.json();
+    const view = caseViewSchema.safeParse(last);
+    if (res.status === 200 && view.success && done(view.data)) return view.data;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`case ${caseId} did not reach the expected state; last seen ${JSON.stringify(last)}`);
 }

@@ -13,6 +13,7 @@ import {
   type EventType,
   type VisitId,
 } from './case-model.js';
+import { readSteps, writeCaseStatus } from './case-status.js';
 
 /** A source event that passed its schema, ready to be recorded against its visit. */
 export interface AcceptedEvent {
@@ -33,7 +34,8 @@ export interface RecordedEvent {
  * Records an accepted source event inside the caller's transaction: opens the
  * case keyed by (source system, visitId) with all four step rows if needed,
  * stores the event, releases or blocks its step, and stores the re-derived
- * case status (#8).
+ * case status (#8). The released step is the outbox entry (ADR 0002): it
+ * becomes claimable when this transaction commits.
  * @throws Problem `EVENT_ALREADY_RECORDED` (409) when the case already has an event of this type.
  */
 export async function recordEvent(
@@ -50,6 +52,7 @@ export async function recordEvent(
       source_system_id: source.id,
       organization_id: source.organizationId,
       visit_id: event.visitId,
+      // Overwritten below, once the event's step is applied.
       status: deriveStatus(openingSteps()),
       opened_at: now,
       updated_at: now,
@@ -99,7 +102,7 @@ export async function recordEvent(
     .executeTakeFirst();
   if (!stored) throw new Problem('EVENT_ALREADY_RECORDED', []);
 
-  const steps = await trx.selectFrom('step').select(['seq', 'state']).where('case_id', '=', id).execute();
+  const steps = await readSteps(trx, id);
   const seq = stepForEvent(event.type).seq;
   const after = applyEventArrival(steps, seq);
   const arrived = after.find((s) => s.seq === seq);
@@ -111,8 +114,7 @@ export async function recordEvent(
     .where('seq', '=', seq)
     .execute();
 
-  const caseStatus = deriveStatus(after);
-  await trx.updateTable('case').set({ status: caseStatus, updated_at: now }).where('id', '=', id).execute();
+  const caseStatus = await writeCaseStatus(trx, id, after, now);
   // Postgres generated this uuid for the case; it is a case id by construction.
   return { caseId: id as CaseId, caseStatus };
 }

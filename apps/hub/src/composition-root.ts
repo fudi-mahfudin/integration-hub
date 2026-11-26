@@ -18,7 +18,13 @@ import type { IdempotencyStore } from './ingestion/idempotency-store.js';
 import { createIngest } from './ingestion/ingest.js';
 import { createNaiveRedisIdempotencyStore } from './ingestion/naive-redis-idempotency-store.js';
 import { createPostgresIdempotencyStore } from './ingestion/postgres-idempotency-store.js';
+import { loadLocationMappingSeed } from './mapping/location-mappings.js';
 import { log } from './observability/log.js';
+import { createOutbox } from './outbox/outbox.js';
+import { createSatusehatClient } from './satusehat/client.js';
+import { createAccessTokens } from './satusehat/token.js';
+import { createVisit } from './steps/create-visit.js';
+import { createWorkerLoop } from './worker/worker.js';
 import { DATABASE, INGEST, SOURCE_SYSTEMS } from './tokens.js';
 
 @Module({})
@@ -55,6 +61,7 @@ export interface Hub {
  */
 export async function createHub(config: HubConfig, runtime: HubRuntime): Promise<Hub> {
   const db = createDatabase(config.databaseUrl);
+  const { clock } = runtime;
   let redis: Redis;
   try {
     await checkPostgres(db, config.databaseUrl);
@@ -64,7 +71,6 @@ export async function createHub(config: HubConfig, runtime: HubRuntime): Promise
     throw err;
   }
 
-  const { clock } = runtime;
   const store: IdempotencyStore =
     config.idempotencyStore === 'naive-redis'
       ? createNaiveRedisIdempotencyStore({ db, redis, retentionHours: config.idempotencyRetentionHours })
@@ -116,6 +122,49 @@ export async function createHub(config: HubConfig, runtime: HubRuntime): Promise
       await app.close();
       await db.destroy();
       redis.disconnect();
+    },
+  };
+}
+
+/** A booted worker process that has connected to Postgres. */
+export interface HubWorker {
+  /** Starts claiming steps. */
+  start(): void;
+  /** Stops claiming, waits for the attempt in progress, then closes the Postgres pool. */
+  close(): Promise<void>;
+}
+
+/**
+ * The production composition root of the worker process (ADR 0001): the
+ * worker entry point and the test harness both boot it through here. Loads
+ * the location mapping seed, and fails fast if Postgres is unreachable.
+ */
+export async function createWorker(config: HubConfig, runtime: HubRuntime): Promise<HubWorker> {
+  const db = createDatabase(config.databaseUrl);
+  const { clock } = runtime;
+  try {
+    await checkPostgres(db, config.databaseUrl);
+    await loadLocationMappingSeed(db, clock());
+  } catch (err) {
+    await db.destroy();
+    throw err;
+  }
+
+  const satusehat = createSatusehatClient({
+    config: config.satusehat,
+    tokens: createAccessTokens({ config: config.satusehat, clock }),
+  });
+  const worker = createWorkerLoop({
+    outbox: createOutbox({ db, clock, leaseMs: config.workerLeaseMs }),
+    runners: { create_visit: (step) => createVisit({ db, satusehat }, step) },
+    pollIntervalMs: config.workerPollIntervalMs,
+  });
+
+  return {
+    start: () => worker.start(),
+    async close() {
+      await worker.stop();
+      await db.destroy();
     },
   };
 }

@@ -1,14 +1,41 @@
 import type { Kysely } from 'kysely';
 import type { SourceSystemId } from '../auth/source-systems.js';
 import type { Database } from '../db/database.js';
-import type { CaseId, CaseStatus, EventType, StepName, StepState, VisitId } from './case-model.js';
+import type {
+  CaseId,
+  CaseStatus,
+  DeadLetterReason,
+  EventType,
+  RemoteId,
+  RemoteIdentifier,
+  StepName,
+  StepState,
+  VisitId,
+} from './case-model.js';
 
-/** A case as `GET /v1/cases/{id}` shows it: its status and its step states, in order. */
+/** One step as the case view shows it. */
+export interface CaseStepView {
+  step: StepName;
+  eventType: EventType;
+  state: StepState;
+  /** How many times the step has been claimed. */
+  attempts: number;
+  /** Why the step was dead-lettered; null unless it was. */
+  deadLetterReason: DeadLetterReason | null;
+  /** The record the step's completion stored at SATUSEHAT; null until it completes. */
+  remote: RemoteIdentifier | null;
+}
+
+/** A case as `GET /v1/cases/{id}` shows it: its status, what a waiting case waits for, and its steps in order. */
 export interface CaseView {
   caseId: CaseId;
   visitId: VisitId;
   status: CaseStatus;
-  steps: { step: StepName; eventType: EventType; state: StepState }[];
+  /** The event a waiting case waits for; null unless `waiting`. */
+  waitingFor: EventType | null;
+  /** Since when a waiting case has waited for it, ISO 8601 UTC; null unless `waiting`. */
+  waitingSince: string | null;
+  steps: CaseStepView[];
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -32,14 +59,14 @@ export async function readCase(
     .execute(async (trx) => {
       const kase = await trx
         .selectFrom('case')
-        .select(['id', 'visit_id', 'status'])
+        .select(['id', 'visit_id', 'status', 'waiting_for', 'waiting_since'])
         .where('id', '=', caseId)
         .where('source_system_id', '=', sourceSystemId)
         .executeTakeFirst();
       if (!kase) return undefined;
       const steps = await trx
         .selectFrom('step')
-        .select(['name', 'event_type', 'state'])
+        .select(['name', 'event_type', 'state', 'attempts', 'dead_letter_reason', 'remote_type', 'remote_id', 'remote_version'])
         .where('case_id', '=', caseId)
         .orderBy('seq')
         .execute();
@@ -48,7 +75,20 @@ export async function readCase(
         caseId: kase.id as CaseId,
         visitId: kase.visit_id as VisitId,
         status: kase.status,
-        steps: steps.map((s) => ({ step: s.name, eventType: s.event_type, state: s.state })),
+        waitingFor: kase.waiting_for,
+        waitingSince: kase.waiting_since?.toISOString() ?? null,
+        steps: steps.map((s) => ({
+          step: s.name,
+          eventType: s.event_type,
+          state: s.state,
+          attempts: s.attempts,
+          deadLetterReason: s.dead_letter_reason,
+          remote:
+            s.remote_type !== null && s.remote_id !== null
+              ? // Stored only by lease-fenced completion, from a RemoteIdentifier.
+                { type: s.remote_type, id: s.remote_id as RemoteId, version: s.remote_version }
+              : null,
+        })),
       };
     });
 }

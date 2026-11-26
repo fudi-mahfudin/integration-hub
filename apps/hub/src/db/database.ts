@@ -1,6 +1,6 @@
 import { Kysely, PostgresDialect, type ColumnType, type Generated } from 'kysely';
 import pg from 'pg';
-import type { CaseStatus, EventType, StepName, StepState } from '../cases/case-model.js';
+import type { CaseStatus, DeadLetterReason, EventType, RemoteIdentifier, StepName, StepState } from '../cases/case-model.js';
 
 /** A `timestamptz` column: read as a `Date`, written as a `Date`. */
 type Timestamp = ColumnType<Date, Date, Date>;
@@ -12,6 +12,10 @@ export interface CaseTable {
   organization_id: string;
   visit_id: string;
   status: CaseStatus;
+  /** The event a `waiting` case waits for; null otherwise. */
+  waiting_for: EventType | null;
+  /** Since when the case has waited for `waiting_for`; null unless `waiting`. */
+  waiting_since: Timestamp | null;
   opened_at: Timestamp;
   updated_at: Timestamp;
 }
@@ -23,6 +27,16 @@ export interface StepTable {
   name: StepName;
   event_type: EventType;
   state: StepState;
+  /** How many times the step has been claimed. */
+  attempts: Generated<number>;
+  /** The current claim's lease token; null unless `in_flight`. */
+  lease_token: string | null;
+  lease_expires_at: Timestamp | null;
+  /** The record the step's completion stored at SATUSEHAT. */
+  remote_type: RemoteIdentifier['type'] | null;
+  remote_id: string | null;
+  remote_version: string | null;
+  dead_letter_reason: DeadLetterReason | null;
   updated_at: Timestamp;
 }
 
@@ -45,12 +59,22 @@ export interface IdempotencyKeyTable {
   created_at: Timestamp;
 }
 
+/** An operator-kept mapping of a source system's local location code to a SATUSEHAT Location (#10). */
+export interface LocationMappingTable {
+  source_system_id: string;
+  location_code: string;
+  location_id: string;
+  note: string | null;
+  updated_at: Timestamp;
+}
+
 /** Every table, as Kysely sees it. */
 export interface Database {
   case: CaseTable;
   step: StepTable;
   source_event: SourceEventTable;
   idempotency_key: IdempotencyKeyTable;
+  location_mapping: LocationMappingTable;
 }
 
 /**

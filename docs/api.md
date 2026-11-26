@@ -83,23 +83,45 @@ Unknown fields are ignored.
 
 ## `GET /v1/cases/{id}`
 
-A case's status and the state of its four steps, in order. A source system sees only its own cases; any other id is [`404 NOT_FOUND`](#not_found).
+A case's status, what a waiting case waits for, and its four steps in order. A source system sees only its own cases; any other id is [`404 NOT_FOUND`](#not_found).
 
 ```json
 {
   "caseId": "0b6f6c1e-8a0e-4d55-9b4b-3f1f1d7f2a10",
   "visitId": "V-2026-000123",
-  "status": "active",
+  "status": "waiting",
+  "waitingFor": "prescription.written",
+  "waitingSince": "2026-03-02T01:00:03.120Z",
   "steps": [
-    { "step": "create_visit", "eventType": "visit.started", "state": "ready" },
-    { "step": "submit_prescription", "eventType": "prescription.written", "state": "awaiting_event" },
-    { "step": "submit_dispense", "eventType": "drug.dispensed", "state": "awaiting_event" },
-    { "step": "update_visit", "eventType": "visit.finished", "state": "awaiting_event" }
+    {
+      "step": "create_visit", "eventType": "visit.started", "state": "completed", "attempts": 1, "deadLetterReason": null,
+      "remote": { "type": "Encounter", "id": "5f8d2c8e-7a51-4b0e-9a57-0d7c3f1e9b42", "version": "1" }
+    },
+    { "step": "submit_prescription", "eventType": "prescription.written", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null },
+    { "step": "submit_dispense", "eventType": "drug.dispensed", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null },
+    { "step": "update_visit", "eventType": "visit.finished", "state": "awaiting_event", "attempts": 0, "deadLetterReason": null, "remote": null }
   ]
 }
 ```
 
 Case status: `waiting`, `active`, `dead_lettered`, `completed`, `abandoned`. Step state: `awaiting_event`, `blocked`, `ready`, `in_flight`, `retry_wait`, `completed`, `dead_lettered`.
+
+| Field | Meaning |
+|---|---|
+| `waitingFor` | For a `waiting` case, the source event its next step needs; otherwise `null`. |
+| `waitingSince` | Since when a `waiting` case has waited for `waitingFor` (UTC); otherwise `null`. |
+| `steps[].attempts` | How many times a worker has claimed the step. |
+| `steps[].remote` | The record the step stored at SATUSEHAT, by its remote identifier and `meta.versionId`; `null` until the step completes. |
+| `steps[].deadLetterReason` | Why the step was dead-lettered; `null` unless it was. |
+
+### Dead-letter reasons
+
+| Code | Meaning |
+|---|---|
+| `MAPPING_MISSING` | The visit's `locationCode` has no location mapping for this source system. Nothing was sent. |
+| `PATIENT_NOT_FOUND` | SATUSEHAT has no single patient for the visit's `patient.nik`. Lookups other than by NIK are not yet made. |
+| `PRACTITIONER_NOT_FOUND` | SATUSEHAT has no single practitioner for the visit's `practitioner.nik`. |
+| `REMOTE_RECORD_AMBIGUOUS` | More than one record at SATUSEHAT already carries the step's identifier (for create visit, `encounter/{org}` with the `visitId`), so the hub can't tell which one is the visit's. |
 
 ## Errors
 

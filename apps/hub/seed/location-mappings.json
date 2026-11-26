@@ -1,0 +1,32 @@
+[
+  {
+    "source": "simulator",
+    "locationCode": "POLI-UMUM",
+    "locationId": "77ba0b34-3f32-4c56-816f-e9af07ad4d01",
+    "note": "Poli Umum"
+  },
+  {
+    "source": "simulator",
+    "locationCode": "POLI-ANAK",
+    "locationId": "d66bcf20-884d-4cb0-8b44-a53bf24d1e8f",
+    "note": "Poli Anak"
+  },
+  {
+    "source": "simulator",
+    "locationCode": "POLI-PENYAKIT-DALAM",
+    "locationId": "8b3bf778-4bcd-4723-8963-8eba17b2dd65",
+    "note": "Poli Penyakit Dalam"
+  },
+  {
+    "source": "simulator",
+    "locationCode": "IGD",
+    "locationId": "9b04b689-adaa-467d-89a1-1fb075bf67a4",
+    "note": "Instalasi Gawat Darurat"
+  },
+  {
+    "source": "simulator",
+    "locationCode": "FARMASI-RJ",
+    "locationId": "31346e29-cab2-4256-8818-1e1735c8a018",
+    "note": "Farmasi Rawat Jalan"
+  }
+]

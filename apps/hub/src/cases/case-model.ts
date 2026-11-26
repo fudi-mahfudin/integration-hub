@@ -37,6 +37,24 @@ export type StepState =
 /** A case's status: derived from its current step, except the operator-only `abandoned` (ADR 0007). */
 export type CaseStatus = 'waiting' | 'active' | 'dead_lettered' | 'completed' | 'abandoned';
 
+/** The identifier SATUSEHAT assigned to a record the hub created; learned at runtime, never hardcoded. */
+export type RemoteId = Brand<string, 'RemoteId'>;
+
+/** A step's record at SATUSEHAT: its resource type, remote identifier and `meta.versionId` (#10). */
+export interface RemoteIdentifier {
+  type: 'Encounter';
+  id: RemoteId;
+  /** `meta.versionId`, when SATUSEHAT sends one. */
+  version: string | null;
+}
+
+/**
+ * Why a step was dead-lettered: a stable code on the step (#8, #10).
+ * `REMOTE_RECORD_AMBIGUOUS`: search-then-create found more than one record
+ * under the step's business identifier (ADR 0005).
+ */
+export type DeadLetterReason = 'MAPPING_MISSING' | 'PATIENT_NOT_FOUND' | 'PRACTITIONER_NOT_FOUND' | 'REMOTE_RECORD_AMBIGUOUS';
+
 /** A step's position and state: all the state machine looks at. */
 export interface StepView {
   seq: number;
@@ -68,6 +86,32 @@ export function applyEventArrival(steps: readonly StepView[], seq: number): Step
     }
     return { seq, state: current?.seq === seq ? 'ready' : 'blocked' };
   });
+}
+
+/**
+ * Applies the completion of step `seq`, the current step (#8): it becomes
+ * `completed`, and the next step becomes `ready` if its event is already
+ * stored (`blocked`); otherwise it stays `awaiting_event` and the case waits.
+ */
+export function applyCompletion(steps: readonly StepView[], seq: number): StepView[] {
+  const current = currentStep(steps);
+  if (current?.seq !== seq || current.state !== 'in_flight') {
+    throw new Error(`invariant broken: step ${seq} completed, but the current step is ${current?.seq}:${current?.state}`);
+  }
+  return steps.map((s): StepView => {
+    if (s.seq === seq) return { seq, state: 'completed' };
+    if (s.seq === seq + 1 && s.state === 'blocked') return { seq: s.seq, state: 'ready' };
+    return s;
+  });
+}
+
+/** The event a waiting case waits for: the current step's, if it has not arrived; otherwise `null`. */
+export function waitingFor(steps: readonly StepView[]): EventType | null {
+  const current = currentStep(steps);
+  if (current?.state !== 'awaiting_event') return null;
+  const step = STEPS.find((s) => s.seq === current.seq);
+  if (!step) throw new Error(`no step ${current.seq}`);
+  return step.eventType;
 }
 
 /** Case status from the current step, the earliest non-completed one (#8). */
