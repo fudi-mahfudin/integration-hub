@@ -1,3 +1,6 @@
+// The mock's FHIR types are globals from @types/fhir; this keeps them visible
+// to packages that boot the mock through this entry (the hub's tests).
+/// <reference types="fhir" />
 import type { Clock } from './clock.js';
 import type { MockConfig } from './config.js';
 import { Platform } from './platform.js';

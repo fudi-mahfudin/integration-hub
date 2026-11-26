@@ -141,3 +141,27 @@ function valueAt(input: unknown, path: readonly PropertyKey[]): unknown {
   }
   return value;
 }
+
+/** The fields of a recorded `visit.started` that the create visit step sends. */
+export interface VisitStartedFacts {
+  patient: { nik?: string | undefined };
+  practitioner: { nik?: string | undefined };
+  encounterClass: 'AMB' | 'IMP' | 'EMER';
+  locationCode: string;
+  startedAt: Date;
+}
+
+/**
+ * Reads a recorded `visit.started` envelope back from storage. It passed this
+ * schema at ingest, so a failure here means the stored row was changed.
+ */
+export function readVisitStarted(storedEnvelope: unknown): VisitStartedFacts {
+  const parsed = envelope.safeParse(storedEnvelope);
+  if (!parsed.success) {
+    throw new Error(`a stored visit.started no longer matches its schema: ${parsed.error.issues.map((i) => pointer(i.path)).join(', ')}`);
+  }
+  const { patient, practitioner, encounterClass, locationCode, startedAt } = parsed.data.data;
+  const started = parseSourceTime(startedAt);
+  if (!started.ok) throw new Error(`a stored startedAt passed the schema but does not parse: ${started.reason}`);
+  return { patient, practitioner, encounterClass, locationCode, startedAt: started.instant };
+}

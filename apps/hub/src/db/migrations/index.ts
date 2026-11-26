@@ -1,5 +1,6 @@
 import type { Migration } from 'kysely/migration';
 import { ingestMigration } from './0001_ingest.js';
+import { createVisitMigration } from './0002_create_visit.js';
 
 /**
  * Every migration, in order. Keys are `NNNN_snake_case_name` and sort
@@ -8,4 +9,5 @@ import { ingestMigration } from './0001_ingest.js';
  */
 export const migrations: Record<string, Migration> = {
   '0001_ingest': ingestMigration,
+  '0002_create_visit': createVisitMigration,
 };

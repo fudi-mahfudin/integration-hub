@@ -30,17 +30,21 @@ describe('ingest: accepting visit.started', () => {
     expect(location).toMatch(/^\/v1\/cases\/[0-9a-f-]{36}$/);
 
     const res = await getCase(hub.baseUrl, location?.split('/').at(-1) ?? '');
+    // No worker runs against this database, so no step has been claimed.
+    const unworked = { attempts: 0, deadLetterReason: null, remote: null };
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       caseId: location?.split('/').at(-1),
       visitId: event.visitId,
       status: 'active',
+      waitingFor: null,
+      waitingSince: null,
       steps: [
-        { step: 'create_visit', eventType: 'visit.started', state: 'ready' },
-        { step: 'submit_prescription', eventType: 'prescription.written', state: 'awaiting_event' },
-        { step: 'submit_dispense', eventType: 'drug.dispensed', state: 'awaiting_event' },
-        { step: 'update_visit', eventType: 'visit.finished', state: 'awaiting_event' },
+        { step: 'create_visit', eventType: 'visit.started', state: 'ready', ...unworked },
+        { step: 'submit_prescription', eventType: 'prescription.written', state: 'awaiting_event', ...unworked },
+        { step: 'submit_dispense', eventType: 'drug.dispensed', state: 'awaiting_event', ...unworked },
+        { step: 'update_visit', eventType: 'visit.finished', state: 'awaiting_event', ...unworked },
       ],
     });
   });

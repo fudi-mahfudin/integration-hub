@@ -50,6 +50,10 @@ _Avoid_: Task, job, stage
 One try at carrying out a step. A step may take several attempts; a worker crashing mid-attempt still counts as one.
 _Avoid_: Try, run, execution
 
+**Lease**:
+A worker's time-limited claim on one step, taken when it starts an attempt. Only the worker holding the current lease may store the step's outcome; when a lease runs out, another worker may claim the step, and the first worker's late outcome is discarded.
+_Avoid_: Lock (that is the database's, and lasts one transaction), reservation
+
 **Retry**:
 A further attempt the hub makes on its own after a transient failure, up to a fixed limit. When the limit is reached, the case is dead-lettered.
 _Avoid_: Replay (that is an operator's deliberate action), resend (that is the source system's act)

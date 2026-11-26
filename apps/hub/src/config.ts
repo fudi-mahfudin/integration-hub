@@ -16,6 +16,25 @@ export interface SourceSystemConfig {
  */
 export type IdempotencyStoreKind = 'postgres' | 'naive-redis';
 
+/**
+ * Where and as whom the SATUSEHAT adapter connects. The defaults point at a
+ * mock SATUSEHAT on localhost:3001 with its public development credentials.
+ */
+export interface SatusehatConfig {
+  /** OAuth2 base, e.g. `https://api-satusehat-stg.dto.kemkes.go.id/oauth2/v1/`; the token is `accesstoken` under it. */
+  authUrl: URL;
+  /** FHIR R4 base, e.g. `https://api-satusehat-stg.dto.kemkes.go.id/fhir-r4/v1/`. */
+  fhirUrl: URL;
+  /**
+   * KFA v2 base, configured apart from the FHIR base because the sandbox
+   * documents two different hosts for it (#14). Used from the prescription step on.
+   */
+  kfaUrl: URL;
+  /** client_credentials pair; one client belongs to one organization. */
+  clientId: string;
+  clientSecret: string;
+}
+
 /** Everything the hub reads from its environment, validated once at startup. */
 export interface HubConfig {
   /** Interface the HTTP server binds to. */
@@ -34,6 +53,12 @@ export interface HubConfig {
   idempotencyRetentionHours: number;
   /** How often the hub service purges expired keys; `0` turns the timer off (tests trigger the purge). */
   idempotencyPurgeIntervalMs: number;
+  /** The SATUSEHAT the worker delivers to. */
+  satusehat: SatusehatConfig;
+  /** How long a worker's claim on a step lasts before another worker may take it (default 90s, #13). */
+  workerLeaseMs: number;
+  /** How long an idle worker waits before it looks for a claimable step again. */
+  workerPollIntervalMs: number;
 }
 
 type Env = Record<string, string | undefined>;
@@ -77,6 +102,16 @@ export function loadConfig(env: Env): HubConfig {
       'IDEMPOTENCY_PURGE_INTERVAL_MS',
       env.IDEMPOTENCY_PURGE_INTERVAL_MS ?? '3600000',
     ),
+    satusehat: {
+      authUrl: parseBaseUrl('SATUSEHAT_AUTH_URL', env.SATUSEHAT_AUTH_URL ?? 'http://localhost:3001/oauth2/v1/'),
+      fhirUrl: parseBaseUrl('SATUSEHAT_FHIR_URL', env.SATUSEHAT_FHIR_URL ?? 'http://localhost:3001/fhir-r4/v1/'),
+      kfaUrl: parseBaseUrl('SATUSEHAT_KFA_URL', env.SATUSEHAT_KFA_URL ?? 'http://localhost:3001/kfa-v2/'),
+      // The mock's public development pair; a real platform needs its own (set up through a /wizard).
+      clientId: parseNonEmpty('SATUSEHAT_CLIENT_ID', env.SATUSEHAT_CLIENT_ID ?? 'dev-satusehat-client'),
+      clientSecret: parseNonEmpty('SATUSEHAT_CLIENT_SECRET', env.SATUSEHAT_CLIENT_SECRET ?? 'dev-satusehat-secret'),
+    },
+    workerLeaseMs: parsePositiveInt('WORKER_LEASE_MS', env.WORKER_LEASE_MS ?? '90000'),
+    workerPollIntervalMs: parsePositiveInt('WORKER_POLL_INTERVAL_MS', env.WORKER_POLL_INTERVAL_MS ?? '1000'),
   };
 }
 
@@ -143,6 +178,26 @@ function parseNonNegativeInt(name: string, raw: string): number {
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 0) {
     throw new Error(`${name} must be a non-negative integer, got "${raw}"`);
+  }
+  return n;
+}
+
+/** An http(s) base URL; a missing trailing slash is added so relative paths resolve under it. */
+function parseBaseUrl(name: string, raw: string): URL {
+  parseUrl(name, raw, ['http:', 'https:']);
+  return new URL(raw.endsWith('/') ? raw : `${raw}/`);
+}
+
+function parseNonEmpty(name: string, raw: string): string {
+  // The value may be a secret, so it is not echoed back.
+  if (raw.trim() === '') throw new Error(`${name} must not be empty`);
+  return raw;
+}
+
+function parsePositiveInt(name: string, raw: string): number {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(`${name} must be a positive integer, got "${raw}"`);
   }
   return n;
 }
