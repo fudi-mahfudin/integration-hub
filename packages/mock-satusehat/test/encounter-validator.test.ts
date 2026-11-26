@@ -30,7 +30,7 @@ function withChange(change: (e: Draft) => void): Record<string, unknown> {
 
 describe('Encounter validator', () => {
   it('accepts a complete create-visit Encounter', () => {
-    expect(validateEncounter(validEncounter())).toEqual([]);
+    expect(validateEncounter(validEncounter(), ORG)).toEqual([]);
   });
 
   it('accepts a finished Encounter whose period ends after it starts', () => {
@@ -38,7 +38,7 @@ describe('Encounter validator', () => {
       e.status = 'finished';
       e.period = { start: '2026-03-02T01:00:00+00:00', end: '2026-03-02T02:00:00+00:00' };
     });
-    expect(validateEncounter(finished)).toEqual([]);
+    expect(validateEncounter(finished, ORG)).toEqual([]);
   });
 
   it.each([
@@ -59,7 +59,7 @@ describe('Encounter validator', () => {
     ['statusHistory entry without period.start', (e: Draft) => (e.statusHistory = [{ status: 'arrived', period: {} }]), 'Encounter.statusHistory[0].period.start'],
     ['serviceProvider missing (10124)', (e: Draft) => delete e.serviceProvider, 'Encounter.serviceProvider'],
   ])('rejects when %s', (_name, change, path) => {
-    const violations = validateEncounter(withChange(change));
+    const violations = validateEncounter(withChange(change), ORG);
     expect(violations).toContainEqual({ code: 'PAYLOAD_INVALID', path, message: expect.any(String) });
   });
 
@@ -72,7 +72,7 @@ describe('Encounter validator', () => {
     ['an impossible date', '2026-02-30T01:00:00+00:00'],
     ['an impossible time', '2026-03-02T24:00:00+00:00'],
   ])('rejects period.start with %s', (_name, start) => {
-    const violations = validateEncounter(withChange((e) => (e.period = { start })));
+    const violations = validateEncounter(withChange((e) => (e.period = { start })), ORG);
     expect(violations).toContainEqual({ code: 'PAYLOAD_INVALID', path: 'Encounter.period.start', message: expect.stringContaining(start) });
   });
 
@@ -82,7 +82,7 @@ describe('Encounter validator', () => {
     ['location period.start', (e: Draft, t: string) => (e.location = [{ location: { reference: 'Location/x' }, period: { start: t } }]), 'Encounter.location[0].period.start'],
     ['participant period.end', (e: Draft, t: string) => (e.participant = [{ individual: { reference: 'Practitioner/1' }, period: { end: t } }]), 'Encounter.participant[0].period.end'],
   ])('checks the time format of %s', (_name, change, path) => {
-    const violations = validateEncounter(withChange((e) => change(e, '2026-03-02T09:00:00+07:00')));
+    const violations = validateEncounter(withChange((e) => change(e, '2026-03-02T09:00:00+07:00')), ORG);
     expect(violations).toContainEqual({ code: 'PAYLOAD_INVALID', path, message: expect.any(String) });
   });
 
@@ -91,16 +91,16 @@ describe('Encounter validator', () => {
       e.period = { start: '2014-06-03T00:00:00+00:00' };
       e.statusHistory = [{ status: 'arrived', period: { start: '2014-06-03T00:00:00+00:00' } }];
     });
-    expect(validateEncounter(atFloor)).toEqual([]);
+    expect(validateEncounter(atFloor, ORG)).toEqual([]);
   });
 
   it('rejects a time one second before the date floor', () => {
-    const violations = validateEncounter(withChange((e) => (e.period = { start: '2014-06-02T23:59:59+00:00' })));
+    const violations = validateEncounter(withChange((e) => (e.period = { start: '2014-06-02T23:59:59+00:00' })), ORG);
     expect(violations).toContainEqual({ code: 'PAYLOAD_INVALID', path: 'Encounter.period.start', message: expect.stringContaining('2014-06-03') });
   });
 
   it('rejects a finished Encounter without period.end (10121)', () => {
-    const violations = validateEncounter(withChange((e) => (e.status = 'finished')));
+    const violations = validateEncounter(withChange((e) => (e.status = 'finished')), ORG);
     expect(violations).toContainEqual({ code: 'PAYLOAD_INVALID', path: 'Encounter.period.end', message: expect.any(String) });
   });
 
@@ -110,6 +110,7 @@ describe('Encounter validator', () => {
         e.status = 'finished';
         e.period = { start: '2026-03-02T01:00:00+00:00', end: '2026-03-02T01:00:00+00:00' };
       }),
+      ORG,
     );
     expect(violations).toContainEqual({ code: 'PAYLOAD_INVALID', path: 'Encounter.period.end', message: expect.any(String) });
   });
@@ -123,8 +124,21 @@ describe('Encounter validator', () => {
       { system: `http://sys-ids.kemkes.go.id/encounter/${ORG}`, value: 'V-2' },
     ]],
   ])('rejects an identifier with %s', (_name, identifier) => {
-    const violations = validateEncounter(withChange((e) => (e.identifier = identifier)));
+    const violations = validateEncounter(withChange((e) => (e.identifier = identifier)), ORG);
     expect(violations).toContainEqual({ code: 'PAYLOAD_INVALID', path: 'Encounter.identifier', message: expect.any(String) });
+  });
+
+  it("rejects an Encounter for an organization other than the client's, even when self-consistent", () => {
+    const foreign = withChange((e) => {
+      e.identifier = [{ system: 'http://sys-ids.kemkes.go.id/encounter/12345', value: 'V-1' }];
+      e.serviceProvider = { reference: 'Organization/12345' };
+    });
+    expect(validateEncounter(foreign, ORG)).toEqual(
+      expect.arrayContaining([
+        { code: 'PAYLOAD_INVALID', path: 'Encounter.serviceProvider', message: expect.stringContaining(ORG) },
+        { code: 'PAYLOAD_INVALID', path: 'Encounter.identifier', message: expect.stringContaining(ORG) },
+      ]),
+    );
   });
 
   it('reports every violation at once', () => {
@@ -134,6 +148,7 @@ describe('Encounter validator', () => {
         delete e.serviceProvider;
         e.period = { start: '2026-03-02T01:00:00Z' };
       }),
+      ORG,
     );
     expect(violations.map((v) => v.path)).toEqual(
       expect.arrayContaining(['Encounter.subject', 'Encounter.serviceProvider', 'Encounter.period.start']),
@@ -141,6 +156,6 @@ describe('Encounter validator', () => {
   });
 
   it('rejects a body that is not an object', () => {
-    expect(validateEncounter('nope')).toEqual([{ code: 'PAYLOAD_INVALID', path: 'Encounter', message: expect.any(String) }]);
+    expect(validateEncounter('nope', ORG)).toEqual([{ code: 'PAYLOAD_INVALID', path: 'Encounter', message: expect.any(String) }]);
   });
 });

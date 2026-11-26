@@ -18,7 +18,7 @@ node packages/mock-satusehat/dist/main.js     # serves http://localhost:3001
 | `MOCK_TOKEN_EXPIRES_IN_SECONDS` | `3599` | `expires_in` of issued tokens (sent as a string) |
 | `MOCK_TOKEN_THROTTLE_WINDOW_SECONDS` | `60` | After a failed token request, token requests within this window get `429` |
 
-Fault rules, holds and extra seed data are set only through the API.
+Extra seed data is set only through the API, as fault rules and holds will be (#33). The log's `fault` field and the report's `faultSeed` stay `null` until then.
 
 ## SATUSEHAT-facing paths
 

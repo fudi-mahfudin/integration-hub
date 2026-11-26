@@ -25,6 +25,11 @@ export interface PlatformSettings {
   tokenThrottleWindowSeconds: number;
 }
 
+/** What a request that changed nothing and concerned no one visit was about. */
+export function noEffect(resourceType: string | null): Omit<PlatformResponse, 'status' | 'body'> {
+  return { resourceType, visitKey: null, businessIdentifier: null, effect: 'none' };
+}
+
 const ENCOUNTER_SYSTEM = /^http:\/\/sys-ids\.kemkes\.go\.id\/encounter\/\d+$/;
 
 /** In-memory SATUSEHAT state and behaviour. */
@@ -72,10 +77,8 @@ export class Platform {
    */
   requestToken(grantType: string | null, clientId: unknown, clientSecret: unknown): PlatformResponse {
     const now = this.clock();
-    const answer = (status: number, body: unknown): PlatformResponse => ({
-      status, body, resourceType: null, visitKey: null, businessIdentifier: null, effect: 'none',
-    });
-    if (now.getTime() < this.throttledUntilMs) return answer(429, templates.tokenThrottled());
+    const answer = (status: number, body: unknown): PlatformResponse => ({ status, body, ...noEffect(null) });
+    if (now.getTime() < this.throttledUntilMs) return answer(429, templates.tokenThrottled(this.settings.tokenThrottleWindowSeconds));
 
     const fail = (status: number, reason: string): PlatformResponse => {
       this.throttledUntilMs = now.getTime() + this.settings.tokenThrottleWindowSeconds * 1000;
@@ -117,8 +120,8 @@ export class Platform {
     const names = [...params.keys()];
     const single = (name: string): string | undefined =>
       names.length === 1 && names[0] === name && params.getAll(name).length === 1 ? params.get(name) ?? undefined : undefined;
-    const answer = (resources: fhir4.FhirResource[], extra: Partial<PlatformResponse> = {}): PlatformResponse => ({
-      status: 200, body: templates.searchBundle(resources), resourceType, visitKey: null, businessIdentifier: null, effect: 'none', ...extra,
+    const answer = (resources: fhir4.FhirResource[], about: Partial<PlatformResponse>): PlatformResponse => ({
+      status: 200, body: templates.searchBundle(resources), ...noEffect(resourceType), ...about,
     });
     const identifier = splitToken(single('identifier'));
 
@@ -133,7 +136,7 @@ export class Platform {
     const locationId = resourceType === 'Location' ? single('_id') : undefined;
     if (locationId !== undefined) {
       const hits = this.world.locations.filter((l) => l.id === locationId);
-      return answer(hits.map((l) => templates.locationResource(l, this.world.organization)));
+      return answer(hits.map((l) => templates.locationResource(l, this.world.organization)), {});
     }
     if (resourceType === 'Encounter' && identifier && ENCOUNTER_SYSTEM.test(identifier.system)) {
       const hits = this.encounters.filter((e) =>
@@ -144,7 +147,7 @@ export class Platform {
     return {
       status: 400,
       body: templates.unsupportedSearch(resourceType, [...params].map(([k, v]) => `${k}=${v}`)),
-      resourceType, visitKey: null, businessIdentifier: null, effect: 'none',
+      ...noEffect(resourceType),
     };
   }
 
@@ -160,7 +163,7 @@ export class Platform {
       visitKey: visitIdentifier?.value ?? null,
       businessIdentifier: visitIdentifier ? `${visitIdentifier.system}|${visitIdentifier.value}` : null,
     };
-    const violations = validateEncounter(body);
+    const violations = validateEncounter(body, this.world.organization.id);
     if (violations.length > 0) {
       return { status: 400, body: templates.payloadRejected(violations), effect: 'none', ...about };
     }

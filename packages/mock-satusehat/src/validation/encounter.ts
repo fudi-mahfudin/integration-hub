@@ -16,10 +16,11 @@ type Json = Record<string, unknown>;
  * Checks a submitted Encounter against the rules the mock enforces: the
  * mandatory fields (rule dictionary 10117-10124 plus the resource page's
  * stars), `+00:00` times, the date floor, `finished` needing an end after
- * its start (10121), and exactly one `encounter/{org}` identifier for the
- * serviceProvider's organization. Returns every violation; empty means valid.
+ * its start (10121), and exactly one `encounter/{org}` identifier, where
+ * `{org}` and the serviceProvider are the submitting client's organization
+ * (one client maps to one organization). Returns every violation; empty means valid.
  */
-export function validateEncounter(body: unknown): Violation[] {
+export function validateEncounter(body: unknown, clientOrganizationId: string): Violation[] {
   if (!isObject(body)) {
     return [violation('Encounter', `expected a JSON object, got ${describe(body)}`)];
   }
@@ -80,13 +81,15 @@ export function validateEncounter(body: unknown): Violation[] {
     : undefined;
   if (organizationId === undefined) {
     fail('Encounter.serviceProvider', `must reference "Organization/{org}", got ${describe(body.serviceProvider)} (10124)`);
+  } else if (organizationId !== clientOrganizationId) {
+    fail('Encounter.serviceProvider', `must be the client's organization "Organization/${clientOrganizationId}", got "Organization/${organizationId}"`);
   }
-  checkIdentifier(body.identifier, organizationId, fail);
+  checkIdentifier(body.identifier, clientOrganizationId, fail);
 
   return violations;
 }
 
-function checkIdentifier(identifier: unknown, organizationId: string | undefined, fail: (path: string, message: string) => void): void {
+function checkIdentifier(identifier: unknown, organizationId: string, fail: (path: string, message: string) => void): void {
   const path = 'Encounter.identifier';
   const identifiers = nonEmptyArray(identifier);
   if (!identifiers) return fail(path, 'needs an identifier under http://sys-ids.kemkes.go.id/encounter/{org} (10117)');
@@ -98,8 +101,8 @@ function checkIdentifier(identifier: unknown, organizationId: string | undefined
   if (!isObject(visitIdentifier)) return; // narrowed by the filter above
   const system = String(visitIdentifier.system);
   const systemOrg = ENCOUNTER_SYSTEM.exec(system)?.[1];
-  if (organizationId !== undefined && systemOrg !== organizationId) {
-    fail(path, `system "${system}" must be encounter/${organizationId}, the serviceProvider's organization`);
+  if (systemOrg !== organizationId) {
+    fail(path, `system "${system}" must be encounter/${organizationId}, the client's organization`);
   }
   if (!nonEmptyString(visitIdentifier.value)) fail(path, 'the encounter/{org} identifier needs a non-empty value');
 }

@@ -54,16 +54,19 @@ export const tokenThrottled = defineTemplate(
     tag: 'satusehat-docs',
     note: 'Akses Token page documents the rate-limit message after a failed attempt',
     link: DOCS.token,
-    fields: { status: { tag: 'assumed', note: 'the docs give no status code; 429 is our choice' } },
+    fields: {
+      status: { tag: 'assumed', note: 'the docs give no status code; 429 is our choice' },
+      'issue.details.text': { tag: 'assumed', note: 'the documented message, with the window made configurable' },
+    },
   },
-  (): fhir4.OperationOutcome => ({
+  (windowSeconds: number): fhir4.OperationOutcome => ({
     resourceType: 'OperationOutcome',
     issue: [
       {
         severity: 'error',
         code: 'throttled',
         details: {
-          text: 'Authentication temporarily cannot be performed due to the rate limit policy. Rate limit: 1 request per minute after a failed attempt.',
+          text: `Authentication temporarily cannot be performed due to the rate limit policy. Rate limit: 1 request per ${windowSeconds}s after a failed attempt.`,
         },
       },
     ],

@@ -112,7 +112,19 @@ _Avoid_: Replacement, swap
 A synthetic response that the mock SATUSEHAT sends in place of the real platform, success or error, filled with fake values. Each fixture records where its shape came from and whether that shape has been confirmed against the sandbox.
 _Avoid_: Replay fixture (replay is an operator action on a dead-lettered case), recording (that is a real sandbox response, which is never committed)
 
-**World dataset**:
+**Submission log**:
+The mock SATUSEHAT's record of every request it received, in arrival order, with what it answered and what it changed (created, updated, or nothing). Its report of invariant violations is computed from it.
+_Avoid_: Request log, audit log, attempt log (that is the hub's record of its attempts)
+
+**Visit key**:
+The value of a visit's `encounter/{org}` identifier, which the mock SATUSEHAT uses to group a visit's requests in its submission log.
+_Avoid_: Visit ID (that is the source system's field), Encounter ID (that is the remote identifier)
+
+**Business identifier**:
+The `system|value` identifier the hub gives a record it submits, such as `encounter/{org}|V-1`, by which SATUSEHAT can be searched for it. ADR 0005 calls it the local identifier.
+_Avoid_: Remote identifier (that is the id SATUSEHAT assigns), external ID
+
+
 The one synthetic set of fake national records (KFA products, patients, practitioners, locations and the organization) that the mock SATUSEHAT answers from, the source simulator draws visits from, and the hub's mapping seed points at. It includes deliberate near-miss patients for the lookup fallbacks and canary values for redaction tests. Its size is a big-run commitment.
 _Avoid_: Test data, fixtures (a fixture is a response, not a record), seed data (seeding adds to the world until the next reset)
 

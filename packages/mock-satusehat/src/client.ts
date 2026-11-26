@@ -1,6 +1,7 @@
 // The thin typed client for the mock's inspection and control API. Tests,
 // the source simulator and the big-run harness talk to the mock only through
 // this and the SATUSEHAT-facing paths, never through its internals.
+import { z } from 'zod';
 import type { MockReport } from './report.js';
 import type { LogEntry, LogQuery } from './submission-log.js';
 import type { WorldEntries } from './world/world.js';
@@ -8,6 +9,30 @@ import type { WorldEntries } from './world/world.js';
 export type { DuplicateSubmission, MockReport, OutOfOrderEffect, OverlappingRequests } from './report.js';
 export type { Effect, LogEntry, LogQuery } from './submission-log.js';
 export type { WorldEntries } from './world/world.js';
+
+const logEntrySchema = z.object({
+  seq: z.number().int(),
+  receivedAt: z.string(),
+  respondedAt: z.string(),
+  method: z.string(),
+  path: z.string(),
+  resourceType: z.string().nullable(),
+  visitKey: z.string().nullable(),
+  businessIdentifier: z.string().nullable(),
+  request: z.object({ body: z.unknown() }),
+  response: z.object({ status: z.number().int(), body: z.unknown() }),
+  fault: z.string().nullable(),
+  effect: z.enum(['created', 'updated', 'none']),
+}) satisfies z.ZodType<LogEntry>;
+
+const reportSchema = z.object({
+  faultSeed: z.number().nullable(),
+  duplicates: z.array(
+    z.object({ resourceType: z.string(), businessIdentifier: z.string(), visitKey: z.string().nullable(), seqs: z.array(z.number()) }),
+  ),
+  outOfOrder: z.array(z.object({ visitKey: z.string(), seq: z.number(), effect: z.string(), reason: z.string() })),
+  overlap: z.array(z.object({ visitKey: z.string(), seqs: z.tuple([z.number(), z.number()]) })),
+}) satisfies z.ZodType<MockReport>;
 
 /** Thrown when the mock answers a control request with an unexpected status. */
 export class MockRequestError extends Error {
@@ -34,23 +59,23 @@ export class MockSatusehatClient {
     const params = new URLSearchParams();
     for (const [name, value] of Object.entries(query)) if (value !== undefined) params.set(name, String(value));
     const res = await this.request('GET', `__mock/log?${params}`);
-    // The mock serves this shape; the client and server ship in one package.
-    return ((await res.json()) as { entries: LogEntry[] }).entries;
+    return z.object({ entries: z.array(logEntrySchema) }).parse(await res.json()).entries;
   }
 
   /** The whole submission log from `GET /__mock/log.ndjson`. */
   async logNdjson(): Promise<LogEntry[]> {
     const res = await this.request('GET', '__mock/log.ndjson');
     const text = await res.text();
-    // One LogEntry per line, written by the same package.
-    return text.split('\n').filter((line) => line !== '').map((line) => JSON.parse(line) as LogEntry);
+    return text
+      .split('\n')
+      .filter((line) => line !== '')
+      .map((line) => logEntrySchema.parse(JSON.parse(line)));
   }
 
   /** Invariant violations computed from the log; empty sections mean every invariant held. */
   async report(): Promise<MockReport> {
     const res = await this.request('GET', '__mock/report');
-    // Same-package server shape.
-    return (await res.json()) as MockReport;
+    return reportSchema.parse(await res.json());
   }
 
   /** Clears records, log, tokens and throttle state, then reloads the world dataset. */

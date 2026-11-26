@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Clock } from './clock.js';
-import type { Platform, PlatformResponse } from './platform.js';
+import { noEffect, type Platform, type PlatformResponse } from './platform.js';
 import { computeReport } from './report.js';
 import type { LogQuery, SubmissionLog } from './submission-log.js';
 import * as templates from './templates/index.js';
@@ -8,6 +8,7 @@ import { worldEntriesSchema } from './world/world.js';
 
 const FHIR_BASE = '/fhir-r4/v1';
 const TOKEN_PATH = '/oauth2/v1/accesstoken';
+const FHIR_JSON = 'application/fhir+json';
 const MAX_LOG_LIMIT = 10_000;
 
 /** What the HTTP server serves from. */
@@ -29,7 +30,7 @@ export function buildServer({ platform, log, clock }: ServerDeps): FastifyInstan
   app.addContentTypeParser('*', { parseAs: 'string' }, (_req, body, done) => done(null, body));
 
   /** Answers a platform request and appends it to the submission log. */
-  function platformRoute(handle: (req: FastifyRequest) => PlatformResponse & { requestBody: unknown }) {
+  function platformRoute(contentType: string, handle: (req: FastifyRequest) => PlatformResponse & { requestBody: unknown }) {
     return async (req: FastifyRequest, reply: FastifyReply) => {
       const receivedAt = clock().toISOString();
       const { requestBody, status, body, ...about } = handle(req);
@@ -43,13 +44,13 @@ export function buildServer({ platform, log, clock }: ServerDeps): FastifyInstan
         fault: null,
         ...about,
       });
-      return reply.status(status).type(status === 200 && req.url.startsWith(TOKEN_PATH) ? 'application/json' : 'application/fhir+json').send(body);
+      return reply.status(status).type(contentType).send(body);
     };
   }
 
   app.post(
     TOKEN_PATH,
-    platformRoute((req) => {
+    platformRoute('application/json', (req) => {
       const form = new URLSearchParams(typeof req.body === 'string' ? req.body : '');
       const clientId = form.get('client_id');
       const answer = platform.requestToken(queryOf(req).get('grant_type'), clientId, form.get('client_secret'));
@@ -59,12 +60,12 @@ export function buildServer({ platform, log, clock }: ServerDeps): FastifyInstan
   );
 
   const unauthorizedFor = (resourceType: string, requestBody: unknown) => ({
-    status: 401, body: templates.unauthorized(), resourceType, visitKey: null, businessIdentifier: null, effect: 'none' as const, requestBody,
+    status: 401, body: templates.unauthorized(), ...noEffect(resourceType), requestBody,
   });
 
   app.get(
     `${FHIR_BASE}/:resourceType`,
-    platformRoute((req) => {
+    platformRoute(FHIR_JSON, (req) => {
       const { resourceType } = req.params as { resourceType: string }; // the route has exactly this parameter
       if (!platform.isAuthorized(req.headers.authorization)) return unauthorizedFor(resourceType, null);
       return { ...platform.search(resourceType, queryOf(req)), requestBody: null };
@@ -73,7 +74,7 @@ export function buildServer({ platform, log, clock }: ServerDeps): FastifyInstan
 
   app.post(
     `${FHIR_BASE}/Encounter`,
-    platformRoute((req) => {
+    platformRoute(FHIR_JSON, (req) => {
       const requestBody = parseJson(req.body);
       if (!platform.isAuthorized(req.headers.authorization)) return unauthorizedFor('Encounter', requestBody);
       return { ...platform.createEncounter(requestBody), requestBody };
@@ -116,11 +117,11 @@ export function buildServer({ platform, log, clock }: ServerDeps): FastifyInstan
 
   // Every other request is a platform request too, and is logged as a 404.
   app.setNotFoundHandler(
-    platformRoute((req) => {
+    platformRoute(FHIR_JSON, (req) => {
       const resourceType = req.url.startsWith(`${FHIR_BASE}/`) ? (req.url.slice(FHIR_BASE.length + 1).split(/[/?]/)[0] ?? null) : null;
       return {
-        status: 404, body: templates.notFound(req.url.split('?')[0] ?? req.url), resourceType: resourceType || null,
-        visitKey: null, businessIdentifier: null, effect: 'none', requestBody: parseJson(req.body),
+        status: 404, body: templates.notFound(req.url.split('?')[0] ?? req.url), ...noEffect(resourceType || null),
+        requestBody: parseJson(req.body),
       };
     }),
   );
