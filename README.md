@@ -101,6 +101,8 @@ node apps/hub/dist/worker-main.js           # claims steps from the Postgres out
 
 The worker loads the mapping seeds at boot: `apps/hub/seed/location-mappings.json` (the simulator's location codes mapped to the world dataset's locations) and `apps/hub/seed/drug-mappings.json` (its local drug codes mapped to the world's KFA codes, plus two entries noted as deliberately wrong for the KFA failure paths). Loading them again changes nothing. KFA details are fetched from KFA v2 the first time a code is used and stored.
 
+The worker keeps under a rate limit per platform API (100 rps for FHIR and 50 for KFA v2 against the mock; 5 and 2 with `SATUSEHAT_PROFILE=live-sandbox`), shared by all worker processes through Redis. Without Redis, each worker keeps to its share of it, by `WORKER_PROCESSES` (default 2). While a platform API's circuit breaker is open, the worker claims nothing.
+
 To see why Redis alone can't detect duplicate ingests (ADR 0003), run `npm run demo:naive-race` (after `pnpm deps:up` and `pnpm migrate`). It fires 20 identical requests at once against the deliberately broken `IDEMPOTENCY_STORE=naive-redis` and then against the Postgres store, and prints how the answers differ.
 
 To run the mock SATUSEHAT on its own (it needs no Postgres or Redis), see [packages/mock-satusehat/README.md](packages/mock-satusehat/README.md).

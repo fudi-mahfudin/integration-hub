@@ -24,7 +24,9 @@ import { loadDrugMappingSeed } from './mapping/drug-mappings.js';
 import { loadLocationMappingSeed } from './mapping/location-mappings.js';
 import { log } from './observability/log.js';
 import { createOutbox } from './outbox/outbox.js';
+import { createCircuitBreaker, type PlatformApi } from './satusehat/circuit-breaker.js';
 import { createSatusehatClient } from './satusehat/client.js';
+import { createRateLimiter } from './satusehat/rate-limiter.js';
 import { createAccessTokens } from './satusehat/token.js';
 import { createRedisTokenBackoff } from './satusehat/token-backoff.js';
 import { createSatusehatTransport, type AttemptCalls } from './satusehat/transport.js';
@@ -162,12 +164,23 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
   // One connection pool per process, with the connect timeout (#13).
   const dispatcher = new Agent({ connect: { timeout: config.satusehat.connectTimeoutMs } });
   // KFA v2 takes the same access token as FHIR (#14), so both share the process's tokens.
-  // Redis only shares the token backoff; the worker runs without it (#13).
+  // Redis only shares the token backoff and the rate limit; the worker runs without it (#13).
   const redis = connectOptionalRedis(config.redisUrl);
   const shared = createRedisTokenBackoff({ redis, authUrl: config.satusehat.authUrl, clock });
-  const tokens = createAccessTokens({ config: config.satusehat, dispatcher, clock, shared });
+  // One breaker per platform API, in this process's memory (#13).
+  const breakerOf = (api: PlatformApi) => createCircuitBreaker({ api, clock, openMs: config.satusehat.breakerOpenMs });
+  const breakers = { fhir: breakerOf('fhir'), kfa: breakerOf('kfa'), auth: breakerOf('auth') };
+  const tokens = createAccessTokens({ config: config.satusehat, dispatcher, clock, shared, breaker: breakers.auth });
   const transport = createSatusehatTransport({
     tokens,
+    breakers,
+    limiter: createRateLimiter({
+      redis,
+      clock,
+      urls: { fhir: config.satusehat.fhirUrl, kfa: config.satusehat.kfaUrl },
+      rps: config.satusehat.rateLimitRps,
+      workerProcesses: config.workerProcesses,
+    }),
     dispatcher,
     callTimeoutMs: config.satusehat.callTimeoutMs,
     connectTimeoutMs: config.satusehat.connectTimeoutMs,
@@ -186,6 +199,7 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
       submit_dispense: (step, calls) => submitDispense({ db, ...clientsFor(calls), clock }, step),
       update_visit: (step, calls) => updateVisit({ db, ...clientsFor(calls) }, step),
     },
+    breakers: Object.values(breakers),
     pollIntervalMs: config.workerPollIntervalMs,
     attemptBudgetMs: config.attemptBudgetMs,
   });

@@ -1,5 +1,6 @@
 import type { StepName } from '../cases/case-model.js';
 import { log } from '../observability/log.js';
+import type { CircuitBreaker } from '../satusehat/circuit-breaker.js';
 import type { ClaimedStep, Outbox } from '../outbox/outbox.js';
 import { SatusehatRequestError } from '../satusehat/errors.js';
 import type { AttemptCalls } from '../satusehat/transport.js';
@@ -25,16 +26,19 @@ export interface Worker {
  * lease fence; when nothing is claimable, wait `pollIntervalMs`. An attempt
  * that throws is classified (#13): a permanent failure dead-letters the step,
  * a transient one sends it to `retry_wait` (or, on its last allowed attempt,
- * dead-letters it `RETRIES_EXHAUSTED`).
+ * dead-letters it `RETRIES_EXHAUSTED`). While any of `breakers` is open, it
+ * claims nothing (#13), so a down platform consumes no attempts.
  */
 export function createWorkerLoop(deps: {
   outbox: Outbox;
   runners: Partial<Record<StepName, StepRunner>>;
+  /** The process's circuit breakers, one per platform API. */
+  breakers: readonly CircuitBreaker[];
   pollIntervalMs: number;
   /** How long one attempt may go on making calls (#13). */
   attemptBudgetMs: number;
 }): Worker {
-  const { outbox, runners, pollIntervalMs, attemptBudgetMs } = deps;
+  const { outbox, runners, breakers, pollIntervalMs, attemptBudgetMs } = deps;
   let running = false;
   let loop: Promise<void> | undefined;
   let wake: (() => void) | undefined;
@@ -109,6 +113,10 @@ export function createWorkerLoop(deps: {
   async function run(): Promise<void> {
     while (running) {
       let step: ClaimedStep | undefined;
+      if (breakers.some((b) => b.isOpen())) {
+        await idle();
+        continue;
+      }
       try {
         step = await outbox.claim();
       } catch (err) {

@@ -44,7 +44,7 @@ const lookupSchema = z.object({
  */
 export function createKfaClient(deps: { config: Pick<SatusehatConfig, 'kfaUrl'>; transport: SatusehatTransport; calls: AttemptCalls }): KfaClient {
   const { config, transport, calls } = deps;
-  const get = (url: URL) => transport.send(calls, { method: 'GET', url, accept: 'application/json' });
+  const get = (url: URL) => transport.send(calls, { api: 'kfa', method: 'GET', url, accept: 'application/json' });
 
   return {
     async findProduct(code) {
