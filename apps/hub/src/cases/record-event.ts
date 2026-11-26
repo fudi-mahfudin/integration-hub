@@ -196,7 +196,9 @@ const VISIT_PAIR = {
 /**
  * The one ordering between times (#9, dictionary rule 10121): when the second
  * event of the visit.started/visit.finished pair arrives, `finishedAt` must be
- * later than `startedAt`, compared as instants. Throwing rolls back the event just stored.
+ * later than `startedAt`, compared as instants to the whole second: SATUSEHAT
+ * takes times to the second (#9), so a later end within the same second would
+ * reach it as an end at its start. Throwing rolls back the event just stored.
  */
 async function checkVisitPeriod(trx: Transaction<Database>, caseId: string, type: keyof typeof VISIT_PAIR, time: Date): Promise<void> {
   const { other: otherType, path, expected } = VISIT_PAIR[type];
@@ -209,7 +211,7 @@ async function checkVisitPeriod(trx: Transaction<Database>, caseId: string, type
   if (!other) return;
   if (other.visit_time === null) throw new Error(`invariant broken: the ${otherType} of case ${caseId} has no visit_time`);
   const [startedAt, finishedAt] = type === 'visit.started' ? [time, other.visit_time] : [other.visit_time, time];
-  if (finishedAt > startedAt) return;
+  if (wholeSeconds(finishedAt) > wholeSeconds(startedAt)) return;
   throw new Problem('FINISHED_BEFORE_STARTED', [
     {
       path,
@@ -218,6 +220,9 @@ async function checkVisitPeriod(trx: Transaction<Database>, caseId: string, type
     },
   ]);
 }
+
+/** An instant truncated to its second, as SATUSEHAT will take it; the date floor keeps it positive. */
+const wholeSeconds = (instant: Date) => Math.floor(instant.getTime() / 1000);
 
 /**
  * Why an event of a type the case already has is rejected: a prescription

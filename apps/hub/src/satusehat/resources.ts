@@ -45,7 +45,7 @@ export interface VisitEncounter {
 export function visitEncounterResource(e: VisitEncounter): FhirResource {
   const start = platformTime(e.startedAt);
   return {
-    ...encounterOf(e, 'arrived'),
+    ...encounterBase(e, 'arrived'),
     period: { start },
     statusHistory: [{ status: 'arrived', period: { start } }],
   };
@@ -67,7 +67,7 @@ export interface FinishedVisitEncounter extends VisitEncounter {
 export function finishedEncounterResource(e: FinishedVisitEncounter): FhirResource {
   const start = platformTime(e.startedAt);
   const end = platformTime(e.finishedAt);
-  const { resourceType, ...rest } = encounterOf(e, 'finished');
+  const { resourceType, ...rest } = encounterBase(e, 'finished');
   return {
     resourceType,
     id: e.encounter.id,
@@ -81,7 +81,7 @@ export function finishedEncounterResource(e: FinishedVisitEncounter): FhirResour
 }
 
 /** The fields an Encounter of a visit has whatever its status, in the order they are sent. */
-function encounterOf(e: VisitEncounter, status: 'arrived' | 'finished') {
+function encounterBase(e: VisitEncounter, status: 'arrived' | 'finished') {
   return {
     resourceType: 'Encounter',
     identifier: [{ system: encounterSystem(e.identifier.organizationId), value: e.identifier.visitId }],

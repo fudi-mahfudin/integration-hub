@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SourceSystems } from '../src/auth/source-systems.js';
+import type { RemoteId } from '../src/cases/case-model.js';
 import { parseKfaProduct, type KfaProduct } from '../src/kfa/kfa-product.js';
 import { validateStepPayload, type StepPayload } from '../src/validation/validation.js';
 
@@ -369,6 +370,8 @@ describe('validateStepPayload: a dispense’s MedicationDispense', () => {
 });
 
 describe('validateStepPayload: an update visit’s finished Encounter', () => {
+  /** A remote identifier is any id SATUSEHAT assigned; a non-empty string stands in for one here. */
+  const isRemoteId = (id: string): id is RemoteId => id.length > 0;
   const ENCOUNTER_ID = 'b2d7c3a0-0000-4000-8000-000000000001';
   const finished = (overrides: Record<string, unknown> = {}) =>
     encounter({
@@ -377,14 +380,10 @@ describe('validateStepPayload: an update visit’s finished Encounter', () => {
       period: { start: '2026-03-02T01:00:00+00:00', end: '2026-03-02T02:00:00+00:00' },
       ...overrides,
     });
-  const updateVisit = (body: unknown): StepPayload => ({
-    step: 'update_visit',
-    organizationId: ORG,
-    missingMappings: [],
-    // The id create visit stored, as completed-steps reads it back.
-    encounterId: ENCOUNTER_ID as Extract<StepPayload, { step: 'update_visit' }>['encounterId'],
-    encounter: body,
-  });
+  const updateVisit = (body: unknown): StepPayload => {
+    if (!isRemoteId(ENCOUNTER_ID)) throw new Error('the test encounter id must be non-empty');
+    return { step: 'update_visit', organizationId: ORG, missingMappings: [], encounterId: ENCOUNTER_ID, encounter: body };
+  };
 
   it('a finished Encounter of the stored record, ending after its start, passes', () => {
     expect(validateStepPayload(updateVisit(finished()))).toEqual([]);

@@ -102,7 +102,7 @@ A dispense and its prescription may arrive in either order. Whichever arrives se
 |---|---|
 | `finishedAt` | When the visit ended. A time (see [Times](#times)), not before the date floor. |
 
-A visit's two events may arrive in either order. Whichever arrives second is checked against the first: `finishedAt` must be later than `startedAt`, compared as instants, or it is [`422 FINISHED_BEFORE_STARTED`](#finished_before_started). A second `visit.finished` for the visit is `409 EVENT_ALREADY_RECORDED`. The visit's Encounter is updated once the dispense has been submitted, and the case is then `completed`.
+A visit's two events may arrive in either order. Whichever arrives second is checked against the first: `finishedAt` must be later than `startedAt`, compared as instants truncated to the second (as SATUSEHAT takes them), or it is [`422 FINISHED_BEFORE_STARTED`](#finished_before_started). A second `visit.finished` for the visit is `409 EVENT_ALREADY_RECORDED`. The visit's Encounter is updated once the dispense has been submitted, and the case is then `completed`.
 
 **Update visit.** The hub sends the Encounter create visit stored again, `PUT Encounter/{id}`, with `status: finished` and `period.end`, using the patient, practitioner and Location create visit pinned. `Encounter.diagnosis` is not sent (see the README's known risks). It first searches the visit's `encounter/{org}` identifier: if the Encounter there is already finished at the same end, an earlier attempt's update landed, and the hub adopts it instead of sending it again. The step stores the Encounter's new `meta.versionId`.
 

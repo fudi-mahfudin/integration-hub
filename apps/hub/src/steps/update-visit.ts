@@ -85,10 +85,19 @@ async function attemptUpdateVisit(deps: UpdateVisitDeps, step: ClaimedStep, atte
     // A stale or missing stored id is re-searched and classified with #35; until then the attempt fails.
     throw new Error(`the visit's Encounter at SATUSEHAT is ${current ? `"${current.remote.id}"` : 'missing'}, not the stored "${stored.id}"`);
   }
-  if (current.status === 'finished' && current.periodEnd === platformTime(finishedAt)) {
+  if (current.status === 'finished' && endsAt(current.periodEnd, finishedAt)) {
     return { completed: current.remote, pins, attempt };
   }
 
   const updated = await satusehat.updateEncounter(stored.id, encounter);
   return { completed: updated, pins, attempt };
+}
+
+/**
+ * Whether SATUSEHAT's `period.end` is the instant `finishedAt` as sent: compared
+ * as instants to the second, since SATUSEHAT may write the same time another way.
+ */
+function endsAt(periodEnd: string | null, finishedAt: Date): boolean {
+  const held = periodEnd === null ? Number.NaN : Date.parse(periodEnd);
+  return !Number.isNaN(held) && platformTime(new Date(held)) === platformTime(finishedAt);
 }

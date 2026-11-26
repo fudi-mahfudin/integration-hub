@@ -62,6 +62,8 @@ describe('ingest: visit.finished', () => {
   it.each([
     ['before', '2026-03-02T07:59:59+07:00'],
     ['at the same instant as', '2026-03-02T01:00:00+00:00'],
+    // SATUSEHAT takes times to the second, so a sub-second visit would reach it with its end at its start.
+    ['within the same second as', '2026-03-02T08:00:00.700+07:00'],
   ])('rejects a visit.finished %s its startedAt as 422 FINISHED_BEFORE_STARTED, recording nothing', async (_, finishedAt) => {
     const visitId = newVisitId();
     const started = await postEvent(hub.baseUrl, { body: visitStarted({ visitId }) });
