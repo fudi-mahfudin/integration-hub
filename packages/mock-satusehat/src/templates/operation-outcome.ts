@@ -8,7 +8,12 @@ export const MOCK_RULE_SYSTEM = 'urn:integration-hub:mock-satusehat:rule';
  * 2-5 (#9), plus `REFERENCE_NOT_FOUND` for a reference to a record the mock
  * does not hold (#12).
  */
-export type RejectionCode = 'KFA_LEVEL_INVALID' | 'PAYLOAD_INVALID' | 'REFERENCE_NOT_FOUND';
+export type RejectionCode =
+  | 'KFA_LEVEL_INVALID'
+  | 'UNSUPPORTED_THERAPEUTIC_SUBSTITUTION'
+  | 'SUBSTITUTION_MISMATCH'
+  | 'PAYLOAD_INVALID'
+  | 'REFERENCE_NOT_FOUND';
 
 /** One rule a payload broke. */
 export interface Violation {

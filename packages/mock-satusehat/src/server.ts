@@ -100,6 +100,15 @@ export function buildServer({ platform, log, clock }: ServerDeps): FastifyInstan
     }),
   );
 
+  app.post(
+    `${FHIR_BASE}/MedicationDispense`,
+    platformRoute(FHIR_JSON, (req) => {
+      const requestBody = parseJson(req.body);
+      if (!platform.isAuthorized(req.headers.authorization)) return unauthorizedFor('MedicationDispense', requestBody);
+      return { ...platform.createMedicationDispense(requestBody), requestBody };
+    }),
+  );
+
   app.get('/__mock/log', async (req, reply) => {
     const query = parseLogQuery(queryOf(req));
     if (typeof query === 'string') return reply.status(400).send({ error: query });

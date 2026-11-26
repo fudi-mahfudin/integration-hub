@@ -69,7 +69,7 @@ export interface SourceEventTable {
   type: EventType;
   occurred_at: Timestamp;
   envelope: ColumnType<unknown, string, never>;
-  /** For a `prescription.written`: its `prescriptionId` and its one item's `itemId`; null for other types. */
+  /** For a `prescription.written` or `drug.dispensed`: the `prescriptionId` and `itemId` it names; null for other types. */
   prescription_id: string | null;
   item_id: string | null;
   received_at: Timestamp;

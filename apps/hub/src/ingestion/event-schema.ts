@@ -3,10 +3,10 @@ import type { AcceptedEvent } from '../cases/record-event.js';
 import { EVENT_TYPES, type EventType, type PrescriptionId, type PrescriptionItemId, type VisitId } from '../cases/case-model.js';
 import { Problem, type FieldError } from '../http/problem.js';
 import type { RequestBody } from './fingerprint.js';
-import { DATE_FLOOR, isCalendarDate, parseSourceTime } from './source-time.js';
+import { DATE_FLOOR, DATE_FLOOR_DAY, isCalendarDate, parseSourceTime } from './source-time.js';
 
 /** The per-field codes of `VALIDATION_FAILED` this schema reports (#9). */
-type FieldCode = 'REQUIRED' | 'INVALID_FORMAT' | 'TIME_OFFSET_MISSING' | 'DATE_BEFORE_FLOOR';
+type FieldCode = 'REQUIRED' | 'INVALID_FORMAT' | 'TIME_OFFSET_MISSING' | 'DATE_BEFORE_FLOOR' | 'BATCH_INCOMPLETE' | 'INVALID_SUBSTITUTION_REASON';
 
 const NIK = /^\d{16}$/;
 
@@ -108,10 +108,61 @@ const prescriptionWrittenData = z.object({
   items: z.array(prescriptionItem, 'must be an array'),
 });
 
+/** Why a dispense is a substitution, as the source declares it (#9). */
+const SUBSTITUTION_REASONS = ['OS', 'FP', 'DRUG_INTERACTION', 'PATIENT_CHOICE', 'PRESCRIPTION_ERROR'] as const;
+
+/** A declared substitution's reason code. */
+export type SubstitutionReason = (typeof SUBSTITUTION_REASONS)[number];
+
+const isSubstitutionReason = (value: unknown): value is SubstitutionReason => (SUBSTITUTION_REASONS as readonly unknown[]).includes(value);
+
+/** `substitution.reasonCode`: missing is REQUIRED; anything other than a known code is INVALID_SUBSTITUTION_REASON. */
+const substitutionReason = z.unknown().transform((value, ctx): SubstitutionReason => {
+  if (isSubstitutionReason(value)) return value;
+  ctx.addIssue(
+    value === undefined
+      ? issue('REQUIRED', 'is required')
+      : issue('INVALID_SUBSTITUTION_REASON', `must be one of ${SUBSTITUTION_REASONS.join(', ')}`),
+  );
+  return z.NEVER;
+});
+
+/** `batch.expiry`: a plain calendar date, never converted, not before the floor's date (#9). */
+const expiryDate = z.string().superRefine((value, ctx) => {
+  if (!isCalendarDate(value)) ctx.addIssue(issue('INVALID_FORMAT', 'must be a calendar date written YYYY-MM-DD'));
+  // Both are YYYY-MM-DD, so they compare as strings.
+  else if (value < DATE_FLOOR_DAY) ctx.addIssue(issue('DATE_BEFORE_FLOOR', `must not be before ${DATE_FLOOR_DAY}`));
+});
+
+/** `batch { lot, expiry }`: both or neither (#6); "neither" means no batch at all, so an empty one is incomplete too. */
+const batch = z
+  .object({ lot: text(64).optional(), expiry: expiryDate.optional() })
+  .superRefine(
+    (b, ctx) => {
+      if (!has(b.lot) || !has(b.expiry)) ctx.addIssue(issue('BATCH_INCOMPLETE', 'needs both lot and expiry; send no batch when neither is known'));
+    },
+    { when: () => true },
+  );
+
+/** A dispense of the case's one prescription item (#6, #9). */
+const drugDispensedData = z.object({
+  // Checked by text(64), as for prescription.written.
+  prescriptionId: text(64).transform((id) => id as PrescriptionId),
+  itemId: text(64).transform((id) => id as PrescriptionItemId),
+  drugCode: text(64),
+  quantity: positive,
+  preparedAt: sourceTime({ floor: true }),
+  handedOverAt: sourceTime({ floor: true }),
+  pharmacist: practitioner,
+  batch: batch.optional(),
+  substitution: z.object({ reasonCode: substitutionReason }).optional(),
+});
+
 /** The event types ingest accepts so far, each with its `data` schema. */
 const DATA_SCHEMAS = {
   'visit.started': visitStartedData,
   'prescription.written': prescriptionWrittenData,
+  'drug.dispensed': drugDispensedData,
 } as const;
 
 const ACCEPTED_TYPES = Object.keys(DATA_SCHEMAS) as (keyof typeof DATA_SCHEMAS)[]; // the keys of the object just above
@@ -127,6 +178,7 @@ const envelope = z.object({
 
 const visitStartedEnvelope = envelope.extend({ type: z.literal('visit.started'), data: visitStartedData });
 const prescriptionWrittenEnvelope = envelope.extend({ type: z.literal('prescription.written'), data: prescriptionWrittenData });
+const drugDispensedEnvelope = envelope.extend({ type: z.literal('drug.dispensed'), data: drugDispensedData });
 
 /**
  * Checks a request body against the source event schema and returns the event
@@ -163,6 +215,10 @@ export function parseEvent(body: RequestBody): AcceptedEvent {
     envelope: body.value,
   };
   if (type.data === 'visit.started') return { ...accepted, type: 'visit.started', prescriptionItem: null };
+  if (type.data === 'drug.dispensed') {
+    const { prescriptionId, itemId } = drugDispensedData.parse(data);
+    return { ...accepted, type: 'drug.dispensed', prescriptionItem: { prescriptionId, itemId } };
+  }
 
   const { prescriptionId, items } = prescriptionWrittenData.parse(data);
   const [item] = items;
@@ -260,4 +316,53 @@ export function readPrescriptionWritten(storedEnvelope: unknown): PrescriptionWr
   const authored = parseSourceTime(authoredAt);
   if (!authored.ok) throw new Error(`a stored authoredAt passed the schema but does not parse: ${authored.reason}`);
   return { prescriptionId, authoredAt: authored.instant, requester, item };
+}
+
+/** The fields of a recorded `drug.dispensed` that the submit dispense step sends. */
+export interface DrugDispensedFacts {
+  /** The prescription this dispense fills; ingest checked it against the case's prescription. */
+  prescriptionId: PrescriptionId;
+  /** The prescription item it fills. */
+  itemId: PrescriptionItemId;
+  /** The local code of the product handed over. */
+  drugCode: string;
+  /** How much was handed over, in the dispensed product's dose form. */
+  quantity: number;
+  preparedAt: Date;
+  handedOverAt: Date;
+  /** How to find the pharmacist's IHS number. */
+  pharmacist: { nik?: string | undefined };
+  /** The batch handed over; null when the source sent none. `expiry` stays a plain date. */
+  batch: { lot: string; expiry: string } | null;
+  /** The source's substitution declaration; null when it declared none. */
+  substitution: { reasonCode: SubstitutionReason } | null;
+}
+
+/**
+ * Reads a recorded `drug.dispensed` envelope back from storage. It passed this
+ * schema at ingest, so a failure here means the stored row was changed.
+ */
+export function readDrugDispensed(storedEnvelope: unknown): DrugDispensedFacts {
+  const parsed = drugDispensedEnvelope.safeParse(storedEnvelope);
+  if (!parsed.success) {
+    throw new Error(`a stored drug.dispensed no longer matches its schema: ${parsed.error.issues.map((i) => pointer(i.path)).join(', ')}`);
+  }
+  const { prescriptionId, itemId, drugCode, quantity, preparedAt, handedOverAt, pharmacist, batch, substitution } = parsed.data.data;
+  const prepared = parseSourceTime(preparedAt);
+  if (!prepared.ok) throw new Error(`a stored preparedAt passed the schema but does not parse: ${prepared.reason}`);
+  const handedOver = parseSourceTime(handedOverAt);
+  if (!handedOver.ok) throw new Error(`a stored handedOverAt passed the schema but does not parse: ${handedOver.reason}`);
+  const { lot, expiry } = batch ?? {};
+  return {
+    prescriptionId,
+    itemId,
+    drugCode,
+    quantity,
+    preparedAt: prepared.instant,
+    handedOverAt: handedOver.instant,
+    pharmacist,
+    // The schema takes lot and expiry both or neither.
+    batch: lot !== undefined && expiry !== undefined ? { lot, expiry } : null,
+    substitution: substitution ?? null,
+  };
 }

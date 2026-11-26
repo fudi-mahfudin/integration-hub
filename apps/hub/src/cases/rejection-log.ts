@@ -9,7 +9,7 @@ import type { EventType, VisitId } from './case-model.js';
  * (authentication, the `Idempotency-Key` header, a key reused for another
  * body) are not about the visit and are not logged.
  */
-export const REJECTION_CODES = ['VALIDATION_FAILED', 'UNSUPPORTED_MULTI_ITEM', 'EVENT_ALREADY_RECORDED'] as const;
+export const REJECTION_CODES = ['VALIDATION_FAILED', 'UNSUPPORTED_MULTI_ITEM', 'PRESCRIPTION_MISMATCH', 'EVENT_ALREADY_RECORDED'] as const;
 
 /** A code the rejection log keeps. */
 export type RejectionCode = (typeof REJECTION_CODES)[number];

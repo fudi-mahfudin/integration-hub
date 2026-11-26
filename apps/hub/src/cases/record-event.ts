@@ -1,7 +1,7 @@
 import type { Transaction } from 'kysely';
 import type { SourceSystem } from '../auth/source-systems.js';
 import type { Database } from '../db/database.js';
-import { Problem } from '../http/problem.js';
+import { Problem, type FieldError } from '../http/problem.js';
 import {
   applyEventArrival,
   deriveStatus,
@@ -30,7 +30,7 @@ export type AcceptedEvent = {
   envelope: unknown;
 } & (
   | { type: 'visit.started'; prescriptionItem: null }
-  | { type: 'prescription.written'; prescriptionItem: PrescriptionItemKey }
+  | { type: 'prescription.written' | 'drug.dispensed'; prescriptionItem: PrescriptionItemKey }
 );
 
 /** Where a recorded event landed. */
@@ -47,6 +47,8 @@ export interface RecordedEvent {
  * becomes claimable when this transaction commits.
  * @throws Problem `EVENT_ALREADY_RECORDED` (409) when the case already has an event of this type.
  * @throws Problem `UNSUPPORTED_MULTI_ITEM` (422) when the case already has a prescription with another item (ADR 0004).
+ * @throws Problem `PRESCRIPTION_MISMATCH` (422) when the other event of the prescription/dispense pair is recorded
+ *   with another `prescriptionId` or `itemId` (#6).
  */
 export async function recordEvent(
   trx: Transaction<Database>,
@@ -113,6 +115,8 @@ export async function recordEvent(
     .returning('id')
     .executeTakeFirst();
   if (!stored) throw await alreadyRecorded(trx, id, event);
+  // Postgres generated this uuid for the case; it is a case id by construction.
+  if (event.prescriptionItem) await checkPair(trx, id as CaseId, event.type, event.prescriptionItem);
 
   const steps = await readSteps(trx, id);
   const seq = stepForEvent(event.type).seq;
@@ -129,6 +133,49 @@ export async function recordEvent(
   const caseStatus = await writeCaseStatus(trx, id, after, now);
   // Postgres generated this uuid for the case; it is a case id by construction.
   return { caseId: id as CaseId, caseStatus };
+}
+
+/** Each event of the prescription/dispense pair: the other one, how messages name it, and where the event carries its itemId. */
+const PAIR = {
+  'prescription.written': { other: 'drug.dispensed', otherName: 'the dispense', itemIdPath: '/data/items/0/itemId' },
+  'drug.dispensed': { other: 'prescription.written', otherName: 'the prescription', itemIdPath: '/data/itemId' },
+} as const;
+
+/**
+ * The cross-event check of #6 (amended by #9): when the second event of the
+ * prescription/dispense pair arrives, it must name the prescription and item
+ * the first one did. Throwing rolls back the event just stored.
+ */
+async function checkPair(
+  trx: Transaction<Database>,
+  caseId: CaseId,
+  type: keyof typeof PAIR,
+  item: PrescriptionItemKey,
+): Promise<void> {
+  const { other: otherType, otherName, itemIdPath } = PAIR[type];
+  const other = await trx
+    .selectFrom('source_event')
+    .select(['prescription_id', 'item_id'])
+    .where('case_id', '=', caseId)
+    .where('type', '=', otherType)
+    .executeTakeFirst();
+  if (!other) return;
+  const errors: FieldError[] = [];
+  if (other.prescription_id !== item.prescriptionId) {
+    errors.push({
+      path: '/data/prescriptionId',
+      code: 'PRESCRIPTION_MISMATCH',
+      message: `must be "${other.prescription_id}", the prescriptionId ${otherName} recorded for this visit named`,
+    });
+  }
+  if (other.item_id !== item.itemId) {
+    errors.push({
+      path: itemIdPath,
+      code: 'PRESCRIPTION_MISMATCH',
+      message: `must be "${other.item_id}", the itemId ${otherName} recorded for this visit named`,
+    });
+  }
+  if (errors.length > 0) throw new Problem('PRESCRIPTION_MISMATCH', errors);
 }
 
 /**

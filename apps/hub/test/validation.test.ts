@@ -168,16 +168,68 @@ const prescription = (product: KfaProduct | null, missing = product === null, bu
   medicationRequest: built,
 });
 
+const REQUESTER = 'Practitioner/10009880728';
+const PHARMACIST = 'Practitioner/10009000030';
+
+/** The substitution block of a substituted dispense, as the hub sends it; overrides are shallow-merged. */
+function substituted(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    wasSubstituted: true,
+    type: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/v3-substanceAdminSubstitution', code: 'G' }] },
+    reason: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/v3-ActReason', code: 'OS' }] }],
+    responsibleParty: [{ reference: REQUESTER }, { reference: PHARMACIST }],
+    ...overrides,
+  };
+}
+
+/** A dispense's MedicationDispense that passes every PAYLOAD_INVALID rule, not a substitution; overrides are shallow-merged. */
+function medicationDispense(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    resourceType: 'MedicationDispense',
+    contained: [
+      {
+        resourceType: 'Medication',
+        id: 'medication',
+        code: { coding: [{ system: 'http://sys-ids.kemkes.go.id/kfa', code: '93000101' }] },
+        batch: { lotNumber: 'LOT-1', expirationDate: '2027-04-24' },
+      },
+    ],
+    identifier: [
+      { system: `http://sys-ids.kemkes.go.id/prescription/${ORG}`, value: 'RX-1' },
+      { system: `http://sys-ids.kemkes.go.id/prescription-item/${ORG}`, value: 'ITEM-1' },
+    ],
+    status: 'completed',
+    medicationReference: { reference: '#medication' },
+    subject: { reference: 'Patient/P02478375538' },
+    context: { reference: 'Encounter/5f8d2c8e-7a51-4b0e-9a57-0d7c3f1e9b42' },
+    performer: [{ actor: { reference: PHARMACIST } }],
+    authorizingPrescription: [{ reference: 'MedicationRequest/0b6f6c1e-8a0e-4d55-9b4b-3f1f1d7f2a10' }],
+    quantity: { value: 10, unit: 'Tablet', system: 'http://terminology.kemkes.go.id/CodeSystem/medication-form', code: 'BS066' },
+    whenPrepared: '2026-03-02T01:20:00+00:00',
+    whenHandedOver: '2026-03-02T01:30:00+00:00',
+    substitution: { wasSubstituted: false },
+    ...overrides,
+  };
+}
+
+/**
+ * A dispense step payload. `sentSubstituted` is the `wasSubstituted` of the
+ * MedicationDispense built for it; `null` builds none (as a missing mapping does).
+ */
 const dispense = (
   prescribed: KfaProduct,
   dispensed: KfaProduct | null,
   declaredSubstitution: boolean,
+  sentSubstituted: boolean | null = dispensed === null ? null : declaredSubstitution,
+  built: unknown = sentSubstituted === null ? null : medicationDispense({ substitution: sentSubstituted ? substituted() : { wasSubstituted: false } }),
 ): StepPayload => ({
   step: 'submit_dispense',
+  organizationId: ORG,
   missingMappings: dispensed === null ? [{ kind: 'drug', localCode: 'OBAT-2' }] : [],
   prescribed,
   dispensed,
   declaredSubstitution,
+  medicationDispense: built,
 });
 
 describe('validateStepPayload: KFA_LEVEL_INVALID', () => {
@@ -203,25 +255,116 @@ describe('validateStepPayload: KFA_LEVEL_INVALID', () => {
 });
 
 describe('validateStepPayload: substitution on a dispense', () => {
-  it.each<[string, KfaProduct, KfaProduct, boolean, string[]]>([
-    ['the prescribed actual product, not declared', PARACETAMOL_500_BRAND_A, PARACETAMOL_500_BRAND_A, false, []],
-    ['a child of the prescribed virtual product, not declared', PARACETAMOL_500, PARACETAMOL_500_BRAND_B, false, []],
-    ['another brand of the same virtual product, declared', PARACETAMOL_500_BRAND_A, PARACETAMOL_500_BRAND_B, true, []],
-    ['another strength with the same 91 set, declared', PARACETAMOL_500, PARACETAMOL_650, true, []],
-    ['the same 91 set in another order, declared', AMOXICLAV, AMOXICLAV_OTHER_BRAND, true, []],
-    ['another strength, not declared', PARACETAMOL_500, PARACETAMOL_650, false, ['SUBSTITUTION_MISMATCH']],
-    ['the prescribed actual product, declared', PARACETAMOL_500_BRAND_A, PARACETAMOL_500_BRAND_A, true, ['SUBSTITUTION_MISMATCH']],
-    ['a child of the prescribed virtual product, declared', PARACETAMOL_500, PARACETAMOL_500_BRAND_A, true, ['SUBSTITUTION_MISMATCH']],
-    ['different active ingredients, declared', PARACETAMOL_500, AMOXICILLIN, true, ['UNSUPPORTED_THERAPEUTIC_SUBSTITUTION']],
-    ['different active ingredients, not declared', PARACETAMOL_500_BRAND_A, AMOXICILLIN, false, ['UNSUPPORTED_THERAPEUTIC_SUBSTITUTION']],
-    ['a 91 superset, declared', AMOXICILLIN, AMOXICLAV, true, ['UNSUPPORTED_THERAPEUTIC_SUBSTITUTION']],
-    ['a 91 subset, declared', AMOXICLAV, AMOXICILLIN, true, ['UNSUPPORTED_THERAPEUTIC_SUBSTITUTION']],
-  ])('%s', (_name, prescribed, dispensed, declared, expected) => {
-    expect(codes(dispense(prescribed, dispensed, declared))).toEqual(expected);
+  // Columns: prescribed, dispensed, declared by the source, wasSubstituted the hub sends (its KFA judgement), expected codes.
+  it.each<[string, KfaProduct, KfaProduct, boolean, boolean, string[]]>([
+    ['the prescribed actual product, not declared', PARACETAMOL_500_BRAND_A, PARACETAMOL_500_BRAND_A, false, false, []],
+    ['a child of the prescribed virtual product, not declared', PARACETAMOL_500, PARACETAMOL_500_BRAND_B, false, false, []],
+    ['another brand of the same virtual product, declared', PARACETAMOL_500_BRAND_A, PARACETAMOL_500_BRAND_B, true, true, []],
+    ['another strength with the same 91 set, declared', PARACETAMOL_500, PARACETAMOL_650, true, true, []],
+    ['the same 91 set in another order, declared', AMOXICLAV, AMOXICLAV_OTHER_BRAND, true, true, []],
+    ['another strength, not declared', PARACETAMOL_500, PARACETAMOL_650, false, true, ['SUBSTITUTION_MISMATCH']],
+    ['the prescribed actual product, declared', PARACETAMOL_500_BRAND_A, PARACETAMOL_500_BRAND_A, true, false, ['SUBSTITUTION_MISMATCH']],
+    ['a child of the prescribed virtual product, declared', PARACETAMOL_500, PARACETAMOL_500_BRAND_A, true, false, ['SUBSTITUTION_MISMATCH']],
+    ['different active ingredients, declared', PARACETAMOL_500, AMOXICILLIN, true, true, ['UNSUPPORTED_THERAPEUTIC_SUBSTITUTION']],
+    ['different active ingredients, not declared', PARACETAMOL_500_BRAND_A, AMOXICILLIN, false, true, ['UNSUPPORTED_THERAPEUTIC_SUBSTITUTION']],
+    ['a 91 superset, declared', AMOXICILLIN, AMOXICLAV, true, true, ['UNSUPPORTED_THERAPEUTIC_SUBSTITUTION']],
+    ['a 91 subset, declared', AMOXICLAV, AMOXICILLIN, true, true, ['UNSUPPORTED_THERAPEUTIC_SUBSTITUTION']],
+  ])('%s', (_name, prescribed, dispensed, declared, sent, expected) => {
+    expect(codes(dispense(prescribed, dispensed, declared, sent))).toEqual(expected);
   });
 
   it('a dispensed drug code with no mapping is MAPPING_MISSING only', () => {
     expect(codes(dispense(PARACETAMOL_500, null, false))).toEqual(['MAPPING_MISSING']);
+  });
+
+  it('a substitution the hub judged but the source did not declare is sent without a reason, which is no PAYLOAD_INVALID of its own', () => {
+    const built = medicationDispense({ substitution: substituted({ reason: undefined }) });
+    expect(codes(dispense(PARACETAMOL_500, PARACETAMOL_650, false, true, built))).toEqual(['SUBSTITUTION_MISMATCH']);
+  });
+});
+
+describe('validateStepPayload: a dispense’s MedicationDispense', () => {
+  const pathsOf = (built: unknown, dispensed = PARACETAMOL_500_BRAND_A, declared = false) =>
+    validateStepPayload(dispense(PARACETAMOL_500, dispensed, declared, null, built)).map((v) => [v.code, v.path]);
+  const invalid = (path: string) => [['PAYLOAD_INVALID', `MedicationDispense.${path}`]];
+
+  it('a complete MedicationDispense passes, substituted or not', () => {
+    expect(pathsOf(medicationDispense())).toEqual([]);
+    expect(pathsOf(medicationDispense({ substitution: substituted() }), PARACETAMOL_650, true)).toEqual([]);
+  });
+
+  it('nothing built with no mapping missing is PAYLOAD_INVALID', () => {
+    expect(pathsOf(null)).toEqual([['PAYLOAD_INVALID', null]]);
+  });
+
+  it.each([
+    ['status', 'status'],
+    ['subject', 'subject'],
+    ['context', 'context'],
+    ['performer', 'performer'],
+    ['authorizingPrescription', 'authorizingPrescription'],
+    ['quantity', 'quantity'],
+    ['whenPrepared', 'whenPrepared'],
+    ['whenHandedOver', 'whenHandedOver'],
+    ['substitution', 'substitution.wasSubstituted'],
+    ['medicationReference', 'medicationReference'],
+  ])('requires %s', (field, path) => {
+    expect(pathsOf(medicationDispense({ [field]: undefined }))).toEqual(invalid(path));
+  });
+
+  it('takes the payload constant only: a completed dispense', () => {
+    expect(pathsOf(medicationDispense({ status: 'in-progress' }))).toEqual(invalid('status'));
+  });
+
+  it('needs one prescription and one prescription-item identifier of the case organization', () => {
+    expect(pathsOf(medicationDispense({ identifier: [] }))).toEqual([...invalid('identifier'), ...invalid('identifier')]);
+  });
+
+  it('needs exactly one authorizing MedicationRequest', () => {
+    const two = [{ reference: 'MedicationRequest/a' }, { reference: 'MedicationRequest/b' }];
+    expect(pathsOf(medicationDispense({ authorizingPrescription: two }))).toEqual(invalid('authorizingPrescription'));
+  });
+
+  it.each(['whenPrepared', 'whenHandedOver'])('takes %s only as a +00:00 time not before the floor', (field) => {
+    expect(pathsOf(medicationDispense({ [field]: '2026-03-02T08:20:00+07:00' }))).toEqual(invalid(field));
+    expect(pathsOf(medicationDispense({ [field]: '2014-06-02T23:59:59+00:00' }))).toEqual(invalid(field));
+  });
+
+  it('takes no batch, or a lot with a plain expiry date not before the floor', () => {
+    const withBatch = (batch: unknown) =>
+      medicationDispense({
+        contained: [{ resourceType: 'Medication', id: 'medication', code: { coding: [{ system: 'http://sys-ids.kemkes.go.id/kfa', code: '93000101' }] }, batch }],
+      });
+    expect(pathsOf(withBatch(undefined))).toEqual([]);
+    expect(pathsOf(withBatch({ lotNumber: 'LOT-1', expirationDate: '2014-06-02' }))).toEqual(invalid('contained.Medication.batch.expirationDate'));
+    expect(pathsOf(withBatch({ lotNumber: 'LOT-1', expirationDate: '2027-04-24T00:00:00+00:00' }))).toEqual(invalid('contained.Medication.batch.expirationDate'));
+    expect(pathsOf(withBatch({ expirationDate: '2027-04-24' }))).toEqual(invalid('contained.Medication.batch.lotNumber'));
+  });
+
+  it('a dispense that is no substitution carries only wasSubstituted: false', () => {
+    expect(pathsOf(medicationDispense({ substitution: { wasSubstituted: false, type: substituted().type } }))).toEqual(invalid('substitution'));
+  });
+
+  it('a substitution is of type G, with the requester and pharmacist responsible, and a known reason when it has one', () => {
+    const at = (overrides: Record<string, unknown>) => pathsOf(medicationDispense({ substitution: substituted(overrides) }), PARACETAMOL_650, true);
+    expect(at({ type: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/v3-substanceAdminSubstitution', code: 'TG' }] } })).toEqual(
+      invalid('substitution.type'),
+    );
+    expect(at({ responsibleParty: [{ reference: PHARMACIST }] })).toEqual(invalid('substitution.responsibleParty'));
+    expect(at({ reason: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/v3-ActReason', code: 'CT' }] }] })).toEqual(invalid('substitution.reason'));
+  });
+
+  it.each([
+    ['http://terminology.hl7.org/CodeSystem/v3-ActReason', 'FP'],
+    ['http://terminology.kemkes.go.id', 'TK000017'],
+    ['http://terminology.kemkes.go.id', 'TK000018'],
+    ['http://snomed.info/sct', '661000124108'],
+  ])('takes the substitution reason %s|%s', (system, code) => {
+    expect(pathsOf(medicationDispense({ substitution: substituted({ reason: [{ coding: [{ system, code }] }] }) }), PARACETAMOL_650, true)).toEqual([]);
+  });
+
+  it('a wasSubstituted that disagrees with the KFA judgement is PAYLOAD_INVALID: the hub must send what it judged', () => {
+    expect(pathsOf(medicationDispense({ substitution: substituted() }))).toEqual(invalid('substitution.wasSubstituted'));
   });
 });
 

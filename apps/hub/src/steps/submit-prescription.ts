@@ -1,6 +1,6 @@
 import type { Kysely } from 'kysely';
-import type { DeadLetterReason, RemoteId, RemoteIdentifier } from '../cases/case-model.js';
-import { kfaProductPins, readCreateVisitPins, type SubmitPrescriptionPins } from '../cases/pins.js';
+import type { DeadLetterReason } from '../cases/case-model.js';
+import { kfaProductPins, type SubmitPrescriptionPins } from '../cases/pins.js';
 import type { Clock } from '../clock.js';
 import type { Database } from '../db/database.js';
 import { readPrescriptionWritten } from '../ingestion/event-schema.js';
@@ -11,6 +11,7 @@ import type { ClaimedStep } from '../outbox/outbox.js';
 import type { SatusehatClient } from '../satusehat/client.js';
 import { prescriptionMedicationRequestResource } from '../satusehat/resources.js';
 import { validateStepPayload, type MissingMapping } from '../validation/validation.js';
+import { readCompletedCreateVisit } from './completed-steps.js';
 import { lookUpByNik } from './person-lookup.js';
 import { AttemptFailed, rejected, type AttemptFacts, type StepOutcome } from './step-outcome.js';
 
@@ -56,6 +57,7 @@ async function attemptSubmitPrescription(deps: SubmitPrescriptionDeps, step: Cla
     .executeTakeFirstOrThrow();
   const prescription = readPrescriptionWritten(envelope);
   const visit = await readCompletedCreateVisit(db, step);
+  const patient = visit.pins.patientIhsNumber;
   const deadLettered = (reason: DeadLetterReason): StepOutcome => ({ deadLettered: reason, attempt });
   const mappingMissing = (mapping: MissingMapping): StepOutcome => {
     attempt.violations = validateStepPayload({
@@ -90,7 +92,7 @@ async function attemptSubmitPrescription(deps: SubmitPrescriptionDeps, step: Cla
     identifier,
     itemId: prescription.item.itemId,
     encounter: visit.encounter,
-    patient: visit.patientIhsNumber,
+    patient,
     requester,
     authoredAt: prescription.authoredAt,
     medication,
@@ -117,27 +119,4 @@ async function attemptSubmitPrescription(deps: SubmitPrescriptionDeps, step: Cla
   const created = await satusehat.createMedicationRequest(medicationRequest);
   attempt.httpStatus = 201;
   return { completed: created, pins, attempt };
-}
-
-/**
- * The Encounter create visit stored and the patient it pinned. The step is
- * claimable only once create visit completed (ADR 0004), so both are there.
- */
-async function readCompletedCreateVisit(db: Kysely<Database>, step: ClaimedStep) {
-  const row = await db
-    .selectFrom('step')
-    .select(['state', 'remote_type', 'remote_id', 'remote_version', 'pins'])
-    .where('case_id', '=', step.caseId)
-    .where('name', '=', 'create_visit')
-    .executeTakeFirstOrThrow();
-  if (row.state !== 'completed' || row.remote_type !== 'Encounter' || row.remote_id === null) {
-    throw new Error(`invariant broken: submit prescription of case ${step.caseId} runs, but create visit is ${row.state} with no Encounter`);
-  }
-  const encounter: RemoteIdentifier = {
-    type: 'Encounter',
-    // Stored only by create visit's lease-fenced completion, from the Encounter SATUSEHAT returned.
-    id: row.remote_id as RemoteId,
-    version: row.remote_version,
-  };
-  return { encounter, patientIhsNumber: readCreateVisitPins(row.pins).patientIhsNumber };
 }

@@ -60,9 +60,12 @@ export function worldEnv(mockBaseUrl: URL, databaseUrl: string): Record<string, 
 export const worldVisit = (() => {
   const [patient] = world.patients;
   const physician = world.practitioners.find((p) => p.role === 'physician');
+  const pharmacist = world.practitioners.find((p) => p.role === 'pharmacist');
   const [location] = world.locations;
-  if (!patient || !physician || !location) throw new Error('the world dataset needs a patient, a physician and a location');
-  return { patient, physician, location };
+  if (!patient || !physician || !pharmacist || !location) {
+    throw new Error('the world dataset needs a patient, a physician, a pharmacist and a location');
+  }
+  return { patient, physician, pharmacist, location };
 })();
 
 /** A `visit.started` for a world patient, physician and location, with a fresh visit id. */
@@ -114,6 +117,34 @@ export function worldPrescriptionWritten(
         },
       ],
       ...overrides.data,
+    },
+  };
+}
+
+/**
+ * A `drug.dispensed` of `prescription`'s item, handed over by the world's
+ * pharmacist with a batch. The default drug code `PCT500-FFA` maps to KFA
+ * 93000001, a child of the 92000001 `worldPrescriptionWritten()` prescribes,
+ * so it is no substitution; `data` overrides are shallow-merged.
+ */
+export function worldDrugDispensed(
+  prescription: { visitId: string; data: { prescriptionId: string } },
+  data: Record<string, unknown> = {},
+) {
+  return {
+    type: 'drug.dispensed',
+    visitId: prescription.visitId,
+    occurredAt: '2026-03-02T08:30:00+07:00',
+    data: {
+      prescriptionId: prescription.data.prescriptionId,
+      itemId: 'ITEM-1',
+      drugCode: 'PCT500-FFA',
+      quantity: 10,
+      preparedAt: '2026-03-02T08:20:00+07:00',
+      handedOverAt: '2026-03-02T08:30:00.900+07:00',
+      pharmacist: { nik: worldVisit.pharmacist.nik },
+      batch: { lot: 'LOT-2026-001', expiry: '2027-04-24' },
+      ...data,
     },
   };
 }
@@ -184,5 +215,33 @@ export function createMedicationRequestAtMock(mockBaseUrl: URL, encounterId: str
       performer: { reference: `Organization/${org}` },
     },
     substitution: { allowedBoolean: true },
+  });
+}
+
+/**
+ * Creates a MedicationDispense of 93000001 for prescription `prescriptionId`,
+ * authorized by MedicationRequest `medicationRequestId` on Encounter
+ * `encounterId`, straight at the mock, as another client of the platform
+ * would; resolves to its id.
+ */
+export function createMedicationDispenseAtMock(mockBaseUrl: URL, ids: { encounterId: string; medicationRequestId: string; prescriptionId: string }): Promise<string> {
+  const org = world.organization.id;
+  return createAtMock(mockBaseUrl, 'MedicationDispense', {
+    resourceType: 'MedicationDispense',
+    contained: [{ resourceType: 'Medication', id: 'medication', code: { coding: [{ system: 'http://sys-ids.kemkes.go.id/kfa', code: '93000001' }] } }],
+    identifier: [
+      { system: PRESCRIPTION_SYSTEM, value: ids.prescriptionId },
+      { system: `http://sys-ids.kemkes.go.id/prescription-item/${org}`, value: 'ITEM-1' },
+    ],
+    status: 'completed',
+    medicationReference: { reference: '#medication' },
+    subject: { reference: `Patient/${worldVisit.patient.ihsNumber}` },
+    context: { reference: `Encounter/${ids.encounterId}` },
+    performer: [{ actor: { reference: `Practitioner/${worldVisit.pharmacist.ihsNumber}` } }],
+    authorizingPrescription: [{ reference: `MedicationRequest/${ids.medicationRequestId}` }],
+    quantity: { value: 10, unit: 'Tablet', system: 'http://terminology.kemkes.go.id/CodeSystem/medication-form', code: 'BS066' },
+    whenPrepared: '2026-03-02T01:20:00+00:00',
+    whenHandedOver: '2026-03-02T01:30:00+00:00',
+    substitution: { wasSubstituted: false },
   });
 }

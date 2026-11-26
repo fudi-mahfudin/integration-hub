@@ -62,3 +62,27 @@ export interface KfaDetails {
   /** Null for a code without one, such as an ingredient (91). */
   doseForm: KfaDoseForm | null;
 }
+
+/**
+ * How a dispensed actual product relates to the prescribed product (#9):
+ * `as_prescribed` when it is the prescribed product or derives from the
+ * prescribed virtual product; otherwise a `substitution` (a strength change
+ * or a brand swap) when the 91 sets are exactly equal, else a
+ * `therapeutic_substitution`, which the hub does not support.
+ */
+export type DispenseJudgement = 'as_prescribed' | 'substitution' | 'therapeutic_substitution';
+
+/**
+ * Judges a dispensed product against the prescribed one by their KFA details
+ * (#9). The dispense step sets `wasSubstituted` from it, and the Validation
+ * module checks the source's declaration against it. Strength is never
+ * compared directly: only the 92 parentage and the 91 sets.
+ */
+export function judgeDispense(prescribed: KfaProduct, dispensed: KfaProduct): DispenseJudgement {
+  const asPrescribed = dispensed.code === prescribed.code || (prescribed.level === 92 && dispensed.parent92 === prescribed.code);
+  if (asPrescribed) return 'as_prescribed';
+  const ingredients = new Set(prescribed.activeIngredients);
+  const dispensedIngredients = new Set(dispensed.activeIngredients);
+  const sameSet = ingredients.size === dispensedIngredients.size && [...ingredients].every((c) => dispensedIngredients.has(c));
+  return sameSet ? 'substitution' : 'therapeutic_substitution';
+}

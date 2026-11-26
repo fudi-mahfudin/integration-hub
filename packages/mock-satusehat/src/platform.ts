@@ -1,5 +1,5 @@
 // The mock SATUSEHAT itself: tokens, searches, the KFA v2 product lookup and
-// Encounter and MedicationRequest create, answered
+// Encounter, MedicationRequest and MedicationDispense create, answered
 // from the world dataset and the records it holds. Each handler returns the
 // response and what it did; the server logs it. All state is in memory.
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -8,6 +8,7 @@ import type { Effect } from './submission-log.js';
 import * as templates from './templates/index.js';
 import { NIK_SYSTEM } from './templates/resources.js';
 import { validateEncounter } from './validation/encounter.js';
+import { validateMedicationDispense } from './validation/medication-dispense.js';
 import { validateMedicationRequest } from './validation/medication-request.js';
 import type { World, WorldEntries } from './world/world.js';
 
@@ -42,6 +43,7 @@ export class Platform {
   private throttledUntilMs = 0;
   private encounters: fhir4.Encounter[] = [];
   private medicationRequests: fhir4.MedicationRequest[] = [];
+  private medicationDispenses: fhir4.MedicationDispense[] = [];
 
   constructor(
     private readonly baseWorld: World,
@@ -58,6 +60,7 @@ export class Platform {
     this.throttledUntilMs = 0;
     this.encounters = [];
     this.medicationRequests = [];
+    this.medicationDispenses = [];
   }
 
   /** Adds entries to the world until the next reset. Entries that clash with existing ones are kept, so tests can make a lookup ambiguous. */
@@ -159,6 +162,16 @@ export class Platform {
         businessIdentifier: `${identifier.system}|${identifier.value}`,
       });
     }
+    if (resourceType === 'MedicationDispense' && identifier && PRESCRIPTION_SYSTEM.test(identifier.system)) {
+      const hits = this.medicationDispenses.filter((m) =>
+        m.identifier?.some((i) => i.system === identifier.system && i.value === identifier.value),
+      );
+      const [first] = hits;
+      return answer(hits, {
+        visitKey: first ? this.visitKeyOf(first.context?.reference) : null,
+        businessIdentifier: `${identifier.system}|${identifier.value}`,
+      });
+    }
     return {
       status: 400,
       body: templates.unsupportedSearch(resourceType, [...params].map(([k, v]) => `${k}=${v}`)),
@@ -256,6 +269,47 @@ export class Platform {
     return { status: 201, body: stored, effect: 'created', ...about };
   }
 
+  /**
+   * `POST /MedicationDispense`. A valid dispense on an Encounter the mock
+   * holds, authorized by a MedicationRequest it holds, is stored with a new id
+   * and `meta.versionId` "1"; its product is judged against that
+   * MedicationRequest's (93 only, the 92 → 93 parentage and `wasSubstituted`
+   * agreeing). A second create for the same prescription identifier is stored
+   * too, so the duplicate shows in the report. Logged under the visit of the
+   * Encounter it references.
+   */
+  createMedicationDispense(body: unknown): PlatformResponse {
+    const prescription = findIdentifier(body, PRESCRIPTION_SYSTEM);
+    const encounterReference = isRecord(body) && isRecord(body.context) ? body.context.reference : undefined;
+    const about = {
+      resourceType: 'MedicationDispense',
+      visitKey: this.visitKeyOf(encounterReference),
+      businessIdentifier: prescription ? `${prescription.system}|${prescription.value}` : null,
+    };
+    const violations = validateMedicationDispense(body, {
+      organizationId: this.world.organization.id,
+      kfaProducts: this.world.kfaProducts,
+      kfaIngredients: this.world.kfaIngredients,
+      encounterExists: (id) => this.encounters.some((e) => e.id === id),
+      prescribedKfaCode: (id) => {
+        const held = this.medicationRequests.find((m) => m.id === id);
+        return held && prescribedKfaCodeOf(held);
+      },
+    });
+    if (violations.length > 0) {
+      return { status: 400, body: templates.payloadRejected(violations), effect: 'none', ...about };
+    }
+    const stored = templates.storedMedicationDispense({
+      // validateMedicationDispense accepted it, so it has every field the mock relies on.
+      body: body as fhir4.MedicationDispense,
+      id: randomUUID(),
+      versionId: '1',
+      lastUpdated: this.clock(),
+    });
+    this.medicationDispenses.push(stored);
+    return { status: 201, body: stored, effect: 'created', ...about };
+  }
+
   /** The visit key of the Encounter an `Encounter/{id}` reference names, when the mock holds it. */
   private visitKeyOf(reference: unknown): string | null {
     if (typeof reference !== 'string' || !reference.startsWith('Encounter/')) return null;
@@ -266,6 +320,15 @@ export class Platform {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** The KFA code of a held MedicationRequest's contained Medication; its validator made sure there is one. */
+function prescribedKfaCodeOf(held: fhir4.MedicationRequest): string {
+  const reference = held.medicationReference?.reference?.slice(1);
+  const medication = held.contained?.find((c): c is fhir4.Medication => c.resourceType === 'Medication' && c.id === reference);
+  const code = medication?.code?.coding?.find((c) => c.system === 'http://sys-ids.kemkes.go.id/kfa')?.code;
+  if (code === undefined) throw new Error(`held MedicationRequest ${held.id ?? '(no id)'} has no KFA-coded Medication, yet its create was accepted`);
+  return code;
 }
 
 /** Splits a FHIR token search value `system|value`. */

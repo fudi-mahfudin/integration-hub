@@ -1,5 +1,5 @@
 import type { DeadLetterReason, RemoteIdentifier } from '../cases/case-model.js';
-import type { CreateVisitPins, StepPins, SubmitPrescriptionPins } from '../cases/pins.js';
+import type { CreateVisitPins, StepPins, SubmitDispensePins, SubmitPrescriptionPins } from '../cases/pins.js';
 import type { Violation } from '../validation/validation.js';
 
 /** How a person's IHS number was found (#10, #32). Only by NIK so far. */
@@ -13,9 +13,9 @@ export interface AttemptFacts {
   /** The status of the last SATUSEHAT response the attempt read; null when it sent nothing. */
   httpStatus: number | null;
   /** The resolved values the attempt used, as far as it got: the values its step pins once it completes. */
-  valuesUsed: Partial<CreateVisitPins> | Partial<SubmitPrescriptionPins>;
+  valuesUsed: Partial<CreateVisitPins> | Partial<SubmitPrescriptionPins> | Partial<SubmitDispensePins>;
   /** How each person it looked up was found. */
-  lookupMethods: { patient?: LookupMethod; practitioner?: LookupMethod; requester?: LookupMethod };
+  lookupMethods: { patient?: LookupMethod; practitioner?: LookupMethod; requester?: LookupMethod; pharmacist?: LookupMethod };
   /** Every violation the Validation module found; empty when the payload passed or was never checked. */
   violations: readonly Violation[];
 }

@@ -15,23 +15,32 @@ export interface CreateVisitPins {
   locationId: LocationId;
 }
 
-/**
- * What a completed submit prescription sent (#10): the prescribed KFA product
- * as the KFA rules judge it, and the requester. The dispense step compares
- * its product against these, never the live drug mapping.
- */
-export interface SubmitPrescriptionPins {
+/** A KFA product a drug step sent, as the KFA rules judge it (#9, #10). */
+export interface KfaProductPins {
   kfaCode: KfaCode;
   kfaLevel: number;
   /** For an actual product (93), its virtual product; otherwise null. */
   parent92: KfaCode | null;
   /** The 91 codes of its active ingredients. */
   activeIngredients: KfaCode[];
+}
+
+/**
+ * What a completed submit prescription sent (#10): the prescribed KFA product
+ * and the requester. The dispense step compares its product against these,
+ * never the live drug mapping.
+ */
+export interface SubmitPrescriptionPins extends KfaProductPins {
   requesterIhsNumber: IhsNumber;
 }
 
-/** A step's pins. The dispense step adds its own (#30). */
-export type StepPins = CreateVisitPins | SubmitPrescriptionPins;
+/** What a completed submit dispense sent (#30): the dispensed KFA product and the pharmacist. */
+export interface SubmitDispensePins extends KfaProductPins {
+  pharmacistIhsNumber: IhsNumber;
+}
+
+/** A step's pins. */
+export type StepPins = CreateVisitPins | SubmitPrescriptionPins | SubmitDispensePins;
 
 const createVisitPinsSchema = z.object({
   patientIhsNumber: z.string().min(1),
@@ -50,6 +59,7 @@ export function readPins(step: StepName, stored: unknown): StepPins {
     case 'submit_prescription':
       return readSubmitPrescriptionPins(stored);
     case 'submit_dispense':
+      return readSubmitDispensePins(stored);
     case 'update_visit':
       throw new Error(`step ${step} has no pins defined yet, but its row holds ${stored === null ? 'null' : 'a value'}`);
   }
@@ -68,13 +78,14 @@ export function readCreateVisitPins(stored: unknown): CreateVisitPins {
   return { patientIhsNumber: patientIhsNumber as IhsNumber, practitionerIhsNumber: practitionerIhsNumber as IhsNumber, locationId: locationId as LocationId };
 }
 
-const submitPrescriptionPinsSchema = z.object({
+const kfaProductPinsSchema = z.object({
   kfaCode: z.string(),
   kfaLevel: z.number().int(),
   parent92: z.string().nullable(),
   activeIngredients: z.array(z.string()),
-  requesterIhsNumber: z.string().min(1),
 });
+const submitPrescriptionPinsSchema = kfaProductPinsSchema.extend({ requesterIhsNumber: z.string().min(1) });
+const submitDispensePinsSchema = kfaProductPinsSchema.extend({ pharmacistIhsNumber: z.string().min(1) });
 
 /**
  * Reads a submit prescription's stored pins back.
@@ -85,9 +96,24 @@ export function readSubmitPrescriptionPins(stored: unknown): SubmitPrescriptionP
   if (!parsed.success) throw new Error(`stored submit prescription pins do not match their schema at ${pinProblems(parsed.error)}`);
   const { kfaCode, kfaLevel, parent92, activeIngredients, requesterIhsNumber } = parsed.data;
   return {
-    ...kfaProductPins(parseKfaProduct({ code: kfaCode, level: kfaLevel, parent92, activeIngredients })),
+    ...kfaProductPins(kfaProductOf({ kfaCode, kfaLevel, parent92, activeIngredients })),
     // Written only by lease-fenced completion, from the requester's IHS number the step sent.
     requesterIhsNumber: requesterIhsNumber as IhsNumber,
+  };
+}
+
+/**
+ * Reads a submit dispense's stored pins back.
+ * @throws Error when the stored value is not submit dispense pins, which means the row was changed outside the hub.
+ */
+export function readSubmitDispensePins(stored: unknown): SubmitDispensePins {
+  const parsed = submitDispensePinsSchema.safeParse(stored);
+  if (!parsed.success) throw new Error(`stored submit dispense pins do not match their schema at ${pinProblems(parsed.error)}`);
+  const { kfaCode, kfaLevel, parent92, activeIngredients, pharmacistIhsNumber } = parsed.data;
+  return {
+    ...kfaProductPins(kfaProductOf({ kfaCode, kfaLevel, parent92, activeIngredients })),
+    // Written only by lease-fenced completion, from the pharmacist's IHS number the step sent.
+    pharmacistIhsNumber: pharmacistIhsNumber as IhsNumber,
   };
 }
 
@@ -96,7 +122,12 @@ function pinProblems(error: z.ZodError): string {
   return error.issues.map((i) => i.path.join('.') || '(root)').join(', ');
 }
 
-/** The pin fields of a prescribed KFA product. */
-export function kfaProductPins(product: KfaProduct): Omit<SubmitPrescriptionPins, 'requesterIhsNumber'> {
+/** The pin fields of a KFA product a drug step sent. */
+export function kfaProductPins(product: KfaProduct): KfaProductPins {
   return { kfaCode: product.code, kfaLevel: product.level, parent92: product.parent92, activeIngredients: [...product.activeIngredients] };
+}
+
+/** The KFA product pins describe, as the KFA rules judge it. */
+export function kfaProductOf(pins: { kfaCode: string; kfaLevel: number; parent92: string | null; activeIngredients: readonly string[] }): KfaProduct {
+  return parseKfaProduct({ code: pins.kfaCode, level: pins.kfaLevel, parent92: pins.parent92, activeIngredients: pins.activeIngredients });
 }

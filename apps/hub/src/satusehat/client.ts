@@ -43,6 +43,10 @@ export interface SatusehatClient {
   findMedicationRequests(identifier: PrescriptionIdentifier): Promise<RemoteIdentifier[]>;
   /** Sends a built MedicationRequest (see `prescriptionMedicationRequestResource`); resolves to the record SATUSEHAT stored. */
   createMedicationRequest(medicationRequest: FhirResource): Promise<RemoteIdentifier>;
+  /** Every MedicationDispense under the prescription's business identifier (a dispense reuses it, #9). */
+  findMedicationDispenses(identifier: PrescriptionIdentifier): Promise<RemoteIdentifier[]>;
+  /** Sends a built MedicationDispense (see `dispenseMedicationDispenseResource`); resolves to the record SATUSEHAT stored. */
+  createMedicationDispense(medicationDispense: FhirResource): Promise<RemoteIdentifier>;
 }
 
 const NIK_SYSTEM = 'https://fhir.kemkes.go.id/id/nik';
@@ -112,6 +116,7 @@ export function createSatusehatClient(deps: {
     });
   const encounterRecord = remoteIdentifierOf('Encounter');
   const medicationRequestRecord = remoteIdentifierOf('MedicationRequest');
+  const medicationDispenseRecord = remoteIdentifierOf('MedicationDispense');
 
   return {
     findPatientsByNik: async (nik) => ihsNumbers(await search('Patient', `${NIK_SYSTEM}|${nik}`)),
@@ -127,6 +132,12 @@ export function createSatusehatClient(deps: {
     async createMedicationRequest(medicationRequest) {
       const stored = parse(storedRecordSchema, 'POST', await call('POST', 'MedicationRequest', 201, medicationRequest));
       return medicationRequestRecord(stored);
+    },
+    findMedicationDispenses: async ({ organizationId, prescriptionId }) =>
+      (await search('MedicationDispense', `${prescriptionSystem(organizationId)}|${prescriptionId}`)).map(medicationDispenseRecord),
+    async createMedicationDispense(medicationDispense) {
+      const stored = parse(storedRecordSchema, 'POST', await call('POST', 'MedicationDispense', 201, medicationDispense));
+      return medicationDispenseRecord(stored);
     },
   };
 }

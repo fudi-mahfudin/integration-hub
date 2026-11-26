@@ -92,6 +92,23 @@ export const storedMedicationRequest = defineTemplate(
   }),
 );
 
+/** A stored MedicationDispense as the 201 body of its create and as a search hit. */
+export const storedMedicationDispense = defineTemplate(
+  {
+    tag: 'fhir-spec',
+    note: 'FHIR R4 create returns the stored resource with server-assigned id and meta',
+    fields: {
+      'meta.versionId': { tag: 'assumed', note: 'SATUSEHAT versionId format is unverified; the mock counts from "1"' },
+    },
+  },
+  (args: { body: fhir4.MedicationDispense; id: string; versionId: string; lastUpdated: Date }): fhir4.MedicationDispense => ({
+    ...args.body,
+    resourceType: 'MedicationDispense',
+    id: args.id,
+    meta: { versionId: args.versionId, lastUpdated: args.lastUpdated.toISOString() },
+  }),
+);
+
 /** A search result Bundle with 0, 1 or more hits. */
 export const searchBundle = defineTemplate(
   { tag: 'fhir-spec', note: 'FHIR R4 searchset Bundle with total and one entry per hit' },

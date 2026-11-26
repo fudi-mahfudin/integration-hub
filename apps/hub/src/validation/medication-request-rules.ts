@@ -1,12 +1,21 @@
 // The hub's PAYLOAD_INVALID rules for a MedicationRequest (#9). Internal to
 // the Validation module: callers go through `validateStepPayload`.
 import type { OrganizationId } from '../auth/source-systems.js';
-import { checkTime, describe, isObject, isReferenceTo, nonEmptyArray, nonEmptyString, type Fail } from './payload-checks.js';
+import {
+  checkBusinessIdentifier,
+  checkTime,
+  containedMedication,
+  describe,
+  isObject,
+  isReferenceTo,
+  nonEmptyArray,
+  nonEmptyString,
+  type Fail,
+} from './payload-checks.js';
 
 // Written out here, not imported from the builder in satusehat/resources.ts:
 // the check must not trust the code it checks.
 const SYSTEM_PREFIX = 'http://sys-ids.kemkes.go.id/';
-const KFA_SYSTEM = 'http://sys-ids.kemkes.go.id/kfa';
 const CATEGORY_SYSTEM = 'http://terminology.hl7.org/CodeSystem/medicationrequest-category';
 
 /**
@@ -24,7 +33,9 @@ export function checkMedicationRequest(body: unknown, organizationId: Organizati
   const at = (path: string) => `MedicationRequest.${path}`;
 
   if (body.resourceType !== 'MedicationRequest') fail(at('resourceType'), `must be "MedicationRequest", got ${describe(body.resourceType)}`);
-  for (const name of ['prescription', 'prescription-item']) checkIdentifier(body.identifier, `${SYSTEM_PREFIX}${name}/`, organizationId, fail);
+  for (const name of ['prescription', 'prescription-item']) {
+    checkBusinessIdentifier(body.identifier, at('identifier'), `${SYSTEM_PREFIX}${name}/`, organizationId, fail);
+  }
   // The hub's payload constants (#9): a completed order in the community category, substitution allowed.
   if (body.status !== 'completed') fail(at('status'), `must be "completed", got ${describe(body.status)}`);
   if (body.intent !== 'order') fail(at('intent'), `must be "order", got ${describe(body.intent)}`);
@@ -45,7 +56,7 @@ export function checkMedicationRequest(body: unknown, organizationId: Organizati
   }
   if (body.authoredOn === undefined) fail(at('authoredOn'), 'is required');
   else checkTime(body.authoredOn, at('authoredOn'), fail);
-  checkMedication(body, fail);
+  containedMedication(body, 'MedicationRequest', fail);
 
   const dispenseRequest = isObject(body.dispenseRequest) ? body.dispenseRequest : {};
   const expectedPerformer = `Organization/${organizationId}`;
@@ -58,33 +69,5 @@ export function checkMedicationRequest(body: unknown, organizationId: Organizati
   }
   if (!nonEmptyString(quantity.unit) || !nonEmptyString(quantity.code)) {
     fail(at('dispenseRequest.quantity'), `needs a unit and a code (the KFA dose form), got ${describe(dispenseRequest.quantity)}`);
-  }
-}
-
-function checkIdentifier(identifier: unknown, prefix: string, organizationId: OrganizationId, fail: Fail): void {
-  const path = 'MedicationRequest.identifier';
-  const expectedSystem = `${prefix}${organizationId}`;
-  const matching = (nonEmptyArray(identifier) ?? []).filter(
-    (id) => isObject(id) && typeof id.system === 'string' && id.system.startsWith(prefix) && /^\d+$/.test(id.system.slice(prefix.length)),
-  );
-  const [only] = matching;
-  if (matching.length !== 1 || !isObject(only)) return fail(path, `needs exactly one identifier under ${prefix}{org}, got ${matching.length}`);
-  if (only.system !== expectedSystem) fail(path, `system must be ${expectedSystem}, the case's organization, got ${describe(only.system)}`);
-  if (!nonEmptyString(only.value)) fail(path, `the ${expectedSystem} identifier needs a value, got ${describe(only.value)}`);
-}
-
-function checkMedication(body: Record<string, unknown>, fail: Fail): void {
-  const path = 'MedicationRequest.medicationReference';
-  const reference = isObject(body.medicationReference) ? body.medicationReference.reference : undefined;
-  if (typeof reference !== 'string' || !reference.startsWith('#')) {
-    return fail(path, `must reference a contained Medication ("#{id}"), got ${describe(body.medicationReference)}`);
-  }
-  const medication = (nonEmptyArray(body.contained) ?? []).find(
-    (c) => isObject(c) && c.resourceType === 'Medication' && c.id === reference.slice(1),
-  );
-  if (!isObject(medication)) return fail(path, `references ${describe(reference)}, which is not a contained Medication`);
-  const codings = isObject(medication.code) ? (nonEmptyArray(medication.code.coding) ?? []) : [];
-  if (!codings.some((c) => isObject(c) && c.system === KFA_SYSTEM && nonEmptyString(c.code))) {
-    fail('MedicationRequest.contained.Medication.code', `needs a coding under ${KFA_SYSTEM}, got ${describe(medication.code)}`);
   }
 }
