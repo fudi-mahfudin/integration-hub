@@ -327,7 +327,7 @@ export function buildServer({ platform, log, faults, parking, clock }: ServerDep
   app.setNotFoundHandler(
     platformRoute(FHIR_JSON, (req) => {
       const resourceType = req.url.startsWith(`${FHIR_BASE}/`) ? (req.url.slice(FHIR_BASE.length + 1).split(/[/?]/)[0] ?? null) : null;
-      const answer = { status: 404, body: templates.notFound(req.url.split('?')[0] ?? req.url), ...noEffect(resourceType || null) };
+      const answer = { status: 404, body: templates.notFound(pathOf(req.url)), ...noEffect(resourceType || null) };
       return { pending: { about: noEffect(resourceType || null), apply: () => answer }, requestBody: parseJson(req.body) };
     }),
   );

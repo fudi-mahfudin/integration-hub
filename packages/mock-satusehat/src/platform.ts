@@ -14,8 +14,11 @@ import type { World, WorldEntries } from './world/world.js';
 
 /** What a request is about, for the submission log and for fault rules to match on. */
 export interface About {
+  /** The FHIR resource type addressed (`KfaProduct` for KFA v2), or null (token endpoint, unknown paths). */
   resourceType: string | null;
+  /** The visit's `encounter/{org}` identifier value, when the request is about one visit. */
   visitKey: string | null;
+  /** `{system}|{value}` of the record the request concerns, when it has one. */
   businessIdentifier: string | null;
 }
 
@@ -436,7 +439,7 @@ export class Platform {
    * `REFERENCE_NOT_FOUND`. Logged as an admin entry under the record's visit.
    */
   deleteRecord(type: RecordType, id: string): PlatformResponse {
-    const records = this.held(type);
+    const records = this.stored(type);
     const index = records.findIndex((r) => r.id === id);
     const record = records[index];
     if (!record) return { status: 404, body: templates.notFound(`/${type}/${id}`), ...noEffect(type) };
@@ -451,7 +454,7 @@ export class Platform {
    * bumps `meta.versionId`. A patch may not change `id` or `resourceType`.
    */
   patchRecord(type: RecordType, id: string, patch: unknown): PlatformResponse {
-    const records = this.held(type);
+    const records = this.stored(type);
     const index = records.findIndex((r) => r.id === id);
     const record = records[index];
     if (!record) return { status: 404, body: templates.notFound(`/${type}/${id}`), ...noEffect(type) };
@@ -469,7 +472,7 @@ export class Platform {
 
   /**
    * `POST /__mock/records`: stores a record directly, unvalidated, under its
-   * own `id` if it has one (409 if that id is held) or a new one, with
+   * own `id` if it has one (409 if that id is stored) or a new one, with
    * `meta.versionId` "1". For a record the hub never created, or a second
    * match for one search.
    */
@@ -481,9 +484,9 @@ export class Platform {
     if (body.id !== undefined && (typeof body.id !== 'string' || body.id === '')) {
       return { status: 400, body: { error: `a record id must be a non-empty string, got ${JSON.stringify(body.id)}` }, ...noEffect(type) };
     }
-    const records = this.held(type);
+    const records = this.stored(type);
     if (body.id !== undefined && records.some((r) => r.id === body.id)) {
-      return { status: 409, body: { error: `${type} "${body.id}" is already held` }, ...noEffect(type) };
+      return { status: 409, body: { error: `${type} "${body.id}" is already stored` }, ...noEffect(type) };
     }
     const stored = {
       // Deliberately unvalidated: a direct insert stands for whatever the platform may hold. Its resourceType was checked above.
@@ -496,11 +499,11 @@ export class Platform {
   }
 
   /**
-   * The records held of `type`, as the very list the platform reads, typed as
+   * The records stored of `type`, as the very list the platform reads, typed as
    * plain resources so admin mutations treat every type alike. Only records
    * of `type` are ever put in.
    */
-  private held(type: RecordType): fhir4.Resource[] {
+  private stored(type: RecordType): fhir4.Resource[] {
     switch (type) {
       case 'Encounter':
         return this.encounters;
@@ -511,7 +514,7 @@ export class Platform {
     }
   }
 
-  /** What a held record is about: its visit, and its business identifier (visit or prescription). */
+  /** What a stored record is about: its visit, and its business identifier (visit or prescription). */
   private aboutRecord(record: fhir4.Resource): About {
     const fields: Record<string, unknown> = { ...record };
     const reference = (field: unknown) => (isRecord(field) ? field.reference : undefined);

@@ -134,12 +134,12 @@ export class MockSatusehatClient {
     await this.request('POST', `__mock/holds/${encodeURIComponent(id)}/release`);
   }
 
-  /** Deletes a held record behind the hub's back: later searches miss it and a PUT of it gets 404. */
+  /** Deletes a stored record behind the hub's back: later searches miss it and a PUT of it gets 404. */
   async deleteRecord(type: RecordType, id: string): Promise<void> {
     await this.request('DELETE', `__mock/records/${type}/${encodeURIComponent(id)}`);
   }
 
-  /** Changes a held record behind the hub's back with a JSON merge patch; bumps its `meta.versionId`. */
+  /** Changes a stored record behind the hub's back with a JSON merge patch; bumps its `meta.versionId`. */
   async patchRecord(type: RecordType, id: string, patch: Record<string, unknown>): Promise<StoredRecord> {
     const res = await this.request('PATCH', `__mock/records/${type}/${encodeURIComponent(id)}`, patch, 'application/merge-patch+json');
     return storedRecordSchema.parse(await res.json());

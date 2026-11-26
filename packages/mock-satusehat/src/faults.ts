@@ -32,7 +32,9 @@ const kindSchema = z.discriminatedUnion('kind', [
       z
         .object({ minMs: holdMs, maxMs: holdMs })
         .strict()
-        .refine((p) => p.minMs <= p.maxMs, { message: 'minMs must not exceed maxMs' }),
+        .superRefine((p, ctx) => {
+          if (p.minMs > p.maxMs) ctx.addIssue({ code: 'custom', message: `minMs must not exceed maxMs, got ${p.minMs} > ${p.maxMs}` });
+        }),
     ]),
   }),
   z.object({ kind: z.literal('hold'), params: noParams }),
@@ -53,15 +55,21 @@ const ruleSchema = z
     firstN: z.number().int().min(1).optional(),
   })
   .and(kindSchema)
-  .refine((r) => [r.rate, r.everyNth, r.firstN].filter((m) => m !== undefined).length === 1, {
-    message: 'a rule needs exactly one of rate, everyNth or firstN',
+  .superRefine((r, ctx) => {
+    const modes = (['rate', 'everyNth', 'firstN'] as const).filter((m) => r[m] !== undefined);
+    if (modes.length !== 1) {
+      ctx.addIssue({ code: 'custom', message: `rule "${r.id}" needs exactly one of rate, everyNth or firstN, got ${modes.join(', ') || 'none'}` });
+    }
   });
 
 /** The body of `PUT /__mock/faults`: a seed and the rules, tried in order; the first that hits a request wins. */
 export const faultRulesSchema = z
   .object({ seed: z.number().int(), rules: z.array(ruleSchema) })
   .strict()
-  .refine((f) => new Set(f.rules.map((r) => r.id)).size === f.rules.length, { message: 'rule ids must be unique' });
+  .superRefine((f, ctx) => {
+    const repeated = f.rules.map((r) => r.id).filter((id, i, ids) => ids.indexOf(id) !== i);
+    if (repeated.length > 0) ctx.addIssue({ code: 'custom', message: `rule ids must be unique, got "${[...new Set(repeated)].join('", "')}" more than once` });
+  });
 
 /** Fault rules as sent to `PUT /__mock/faults`. */
 export type FaultRulesInput = z.input<typeof faultRulesSchema>;
@@ -80,12 +88,15 @@ export type Fault = { ruleId: string } & (
 
 /** What a fault decision looks at. */
 export interface FaultedRequest {
+  /** HTTP method, as `match.method` names it. */
   method: string;
   /** Path without the query string, which `match.path` is compared with. */
   path: string;
   /** Path and query string, the identifier of a request that has no business identifier. */
   url: string;
+  /** The resource type the log files the request under, which `match.resourceType` is compared with. */
   resourceType: string | null;
+  /** The record's `system|value` identifier, by which its requests are counted. */
   businessIdentifier: string | null;
 }
 
@@ -113,12 +124,20 @@ export class FaultRules {
 
   /**
    * Counts the request and returns the fault of the first rule that matches
-   * and hits it, or null. A request is identified by its method and business
-   * identifier, or its path and query when it has none (token, KFA, Location).
+   * and hits it, or null. A request is identified by its method, resource
+   * type and business identifier, or its path and query when it has none
+   * (token, KFA, Location). Requests of one record come from one case, one at
+   * a time, so their fates don't depend on other cases; requests without a
+   * business identifier are shared across cases, so the same seed gives the
+   * same fates to the nth request of each URL, but which case sends the nth
+   * depends on arrival order.
    */
   decide(request: FaultedRequest): Fault | null {
     if (this.config === null) return null;
-    const identifier = `${request.method} ${request.businessIdentifier ?? request.url}`;
+    const identifier =
+      request.businessIdentifier === null
+        ? `${request.method} ${request.url}`
+        : `${request.method} ${request.resourceType ?? ''} ${request.businessIdentifier}`;
     const nth = (this.counts.get(identifier) ?? 0) + 1;
     this.counts.set(identifier, nth);
 

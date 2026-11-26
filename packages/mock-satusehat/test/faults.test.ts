@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { accessToken, bootMock, createdId, encounter, fhir, manualClock, requestToken, world, type BootedMock } from './support/boot-mock.js';
+import {
+  accessToken, bootMock, createdId, encounter, fhir, manualClock, medicationDispense, medicationRequest, requestToken, world, type BootedMock,
+} from './support/boot-mock.js';
 
 const ENCOUNTER_SYSTEM = `http://sys-ids.kemkes.go.id/encounter/${world.organization.id}`;
 
@@ -95,6 +97,16 @@ describe('fault rules', () => {
     expect(withoutMs.status).toBe(400);
     expect(await withoutMs.json()).toMatchObject({ error: expect.stringContaining('params') });
 
+    await expect(
+      mock.client.setFaults({
+        seed: 2,
+        rules: [
+          { id: 'twin', match: {}, kind: 'http_500', firstN: 1 },
+          { id: 'twin', match: {}, kind: 'http_503', firstN: 1 },
+        ],
+      }),
+    ).rejects.toThrow(/twin.{0,3} more than once/);
+
     expect((await search('V-kept')).status).toBe(500);
     expect((await mock.client.report()).faultSeed).toBe(1);
   });
@@ -163,6 +175,19 @@ describe('fault rules', () => {
 
       expect(await statuses('V-a')).toEqual([503, 201, 500, 201]);
       expect(await statuses('V-b')).toEqual([503, 201, 500, 201]);
+    });
+
+    it('counts a prescription and its dispense apart, though they share a business identifier', async () => {
+      const encounterId = await createdId(await fhir(mock.baseUrl, token, 'Encounter', encounter('V-rx')));
+      await mock.client.setFaults({ seed: 1, rules: [{ id: 'first', match: { method: 'POST' }, kind: 'http_503', firstN: 1 }] });
+
+      const prescribe = () => fhir(mock.baseUrl, token, 'MedicationRequest', medicationRequest(encounterId, 'RX-shared'));
+      expect((await prescribe()).status).toBe(503);
+      const requestId = await createdId(await prescribe());
+      const dispense = () => fhir(mock.baseUrl, token, 'MedicationDispense', medicationDispense(encounterId, requestId, 'RX-shared'));
+
+      expect((await dispense()).status).toBe(503);
+      expect((await dispense()).status).toBe(201);
     });
   });
 

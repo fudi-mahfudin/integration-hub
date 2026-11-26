@@ -7,11 +7,15 @@ export interface Hold {
   id: string;
   /** The fault rule that parked it. */
   ruleId: string;
+  /** HTTP method of the parked request. */
   method: string;
   /** Path and query string as received. */
   path: string;
+  /** What the request is about, as the submission log will file it. */
   resourceType: string | null;
+  /** The visit the request is about, if one. */
   visitKey: string | null;
+  /** The record's `system|value` identifier, if it has one. */
   businessIdentifier: string | null;
   /** ISO-8601 UTC. */
   parkedAt: string;
@@ -19,7 +23,9 @@ export interface Hold {
 
 /**
  * Requests the mock keeps waiting: for a fixed time (a latency or timeout
- * fault), or parked by a hold until a test releases it. Reset and close drop
+ * fault), or parked by a hold until a test releases it. A request whose
+ * client has gone stays waiting, and is applied when its wait ends, as a
+ * request that reached the platform would be. Reset and close drop
  * every one of them, so none outlives the state it was received against.
  */
 export class Parking {
