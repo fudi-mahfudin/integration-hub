@@ -1,0 +1,28 @@
+{
+  "name": "@integration-hub/mock-satusehat",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./client": "./src/client.ts",
+    "./server": "./src/composition-root.ts",
+    "./world": "./src/world/world.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/main.js",
+    "test": "vitest run",
+    "world:generate": "tsx scripts/generate-world.ts"
+  },
+  "dependencies": {
+    "fastify": "5.12.8",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/fhir": "^0.0.44",
+    "@types/node": "^24.19.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.1"
+  }
+}
