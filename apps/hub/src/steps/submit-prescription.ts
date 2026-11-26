@@ -1,6 +1,6 @@
 import type { Kysely } from 'kysely';
 import type { DeadLetterReason, RemoteId, RemoteIdentifier } from '../cases/case-model.js';
-import { readCreateVisitPins, type SubmitPrescriptionPins } from '../cases/pins.js';
+import { kfaProductPins, readCreateVisitPins, type SubmitPrescriptionPins } from '../cases/pins.js';
 import type { Clock } from '../clock.js';
 import type { Database } from '../db/database.js';
 import { readPrescriptionWritten } from '../ingestion/event-schema.js';
@@ -57,7 +57,7 @@ async function attemptSubmitPrescription(deps: SubmitPrescriptionDeps, step: Cla
   const prescription = readPrescriptionWritten(envelope);
   const visit = await readCompletedCreateVisit(db, step);
   const deadLettered = (reason: DeadLetterReason): StepOutcome => ({ deadLettered: reason, attempt });
-  const missing = (mapping: MissingMapping): StepOutcome => {
+  const mappingMissing = (mapping: MissingMapping): StepOutcome => {
     attempt.violations = validateStepPayload({
       step: 'submit_prescription',
       organizationId: step.organizationId,
@@ -70,13 +70,15 @@ async function attemptSubmitPrescription(deps: SubmitPrescriptionDeps, step: Cla
 
   const { drugCode } = prescription.item;
   const kfaCode = await findKfaCode(db, step.sourceSystemId, drugCode);
-  if (!kfaCode) return missing({ kind: 'drug', localCode: drugCode });
+  if (!kfaCode) return mappingMissing({ kind: 'drug', localCode: drugCode });
   attempt.valuesUsed.kfaCode = kfaCode;
 
-  const medication = await resolveKfaDetails({ db, kfa }, kfaCode, clock());
-  if (!medication) return missing({ kind: 'kfa', localCode: drugCode, kfaCode });
+  const resolved = await resolveKfaDetails({ db, kfa }, kfaCode, clock());
+  if (resolved.httpStatus !== null) attempt.httpStatus = resolved.httpStatus;
+  const medication = resolved.details;
+  if (!medication) return mappingMissing({ kind: 'kfa', localCode: drugCode, kfaCode });
   const { product } = medication;
-  Object.assign(attempt.valuesUsed, { kfaLevel: product.level, parent92: product.parent92, activeIngredients: [...product.activeIngredients] });
+  Object.assign(attempt.valuesUsed, kfaProductPins(product));
 
   const requester = await lookUpByNik('requester', prescription.requester.nik, (nik) => satusehat.findPractitionersByNik(nik), attempt);
   if (!requester) return deadLettered('PRACTITIONER_NOT_FOUND');
@@ -104,13 +106,7 @@ async function attemptSubmitPrescription(deps: SubmitPrescriptionDeps, step: Cla
   });
   if (attempt.violations.length > 0) return rejected(attempt);
 
-  const pins: SubmitPrescriptionPins = {
-    kfaCode: product.code,
-    kfaLevel: product.level,
-    parent92: product.parent92,
-    activeIngredients: [...product.activeIngredients],
-    requesterIhsNumber: requester,
-  };
+  const pins: SubmitPrescriptionPins = { ...kfaProductPins(product), requesterIhsNumber: requester };
   const existing = await satusehat.findMedicationRequests(identifier);
   // The client resolves a search only on 200 and a create only on 201; any other status throws.
   attempt.httpStatus = 200;

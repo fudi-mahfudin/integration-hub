@@ -4,12 +4,20 @@ import type { Database } from '../db/database.js';
 import type { EventType, VisitId } from './case-model.js';
 
 /**
- * The ingest rejections the rejection log keeps (#8): the ones that judged a
- * visit's event. Rejections that never got that far (authentication, the
- * `Idempotency-Key` header, a key reused for another body) are not about the
- * visit and are not logged.
+ * The ingest rejection codes the rejection log keeps (#8): the ones that
+ * judged a visit's event. Rejections that never got that far
+ * (authentication, the `Idempotency-Key` header, a key reused for another
+ * body) are not about the visit and are not logged.
  */
-export type RejectionCode = 'VALIDATION_FAILED' | 'UNSUPPORTED_MULTI_ITEM' | 'EVENT_ALREADY_RECORDED';
+export const REJECTION_CODES = ['VALIDATION_FAILED', 'UNSUPPORTED_MULTI_ITEM', 'EVENT_ALREADY_RECORDED'] as const;
+
+/** A code the rejection log keeps. */
+export type RejectionCode = (typeof REJECTION_CODES)[number];
+
+/** Whether an ingest problem's code is one the rejection log keeps. */
+export function isLoggedRejection(code: string): code is RejectionCode {
+  return (REJECTION_CODES as readonly string[]).includes(code);
+}
 
 /** One logged rejection as the case view shows it. */
 export interface RejectionView {
@@ -39,7 +47,7 @@ export async function logRejection(db: Kysely<Database>, event: RejectedEvent, c
 }
 
 /** A visit's logged rejections, oldest first. `db` may be a transaction, so the case view reads them from its snapshot. */
-export async function readRejections(db: Kysely<Database>, sourceSystemId: SourceSystemId, visitId: string): Promise<RejectionView[]> {
+export async function readRejections(db: Kysely<Database>, sourceSystemId: SourceSystemId, visitId: VisitId): Promise<RejectionView[]> {
   const rows = await db
     .selectFrom('rejection')
     .select(['code', 'event_type', 'rejected_at'])

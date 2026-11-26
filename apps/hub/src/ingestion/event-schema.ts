@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { AcceptedEvent } from '../cases/record-event.js';
-import { EVENT_TYPES, type EventType, type VisitId } from '../cases/case-model.js';
+import { EVENT_TYPES, type EventType, type PrescriptionId, type PrescriptionItemId, type VisitId } from '../cases/case-model.js';
 import { Problem, type FieldError } from '../http/problem.js';
 import type { RequestBody } from './fingerprint.js';
 import { DATE_FLOOR, isCalendarDate, parseSourceTime } from './source-time.js';
@@ -87,7 +87,8 @@ const positive = z.number('must be a number').positive('must be greater than 0')
 
 /** One drug item of a prescription (#6). */
 const prescriptionItem = z.object({
-  itemId: text(64),
+  // Checked by text(64): this is where the source's item number becomes a PrescriptionItemId.
+  itemId: text(64).transform((id) => id as PrescriptionItemId),
   drugCode: text(64),
   quantity: positive,
   dosage: z.object({
@@ -100,7 +101,8 @@ const prescriptionItem = z.object({
 
 /** `items` takes any length here; a count other than one is judged after the schema (`UNSUPPORTED_MULTI_ITEM`). */
 const prescriptionWrittenData = z.object({
-  prescriptionId: text(64),
+  // Checked by text(64): this is where the source's prescription number becomes a PrescriptionId.
+  prescriptionId: text(64).transform((id) => id as PrescriptionId),
   authoredAt: sourceTime({ floor: true }),
   requester: practitioner,
   items: z.array(prescriptionItem, 'must be an array'),
@@ -137,26 +139,26 @@ export function parseEvent(body: RequestBody): AcceptedEvent {
   if (!body.json) {
     throw new Problem('VALIDATION_FAILED', [{ path: '', code: 'INVALID_FORMAT', message: 'the body must be JSON' }]);
   }
-  const head = envelope.safeParse(body.value);
-  const issues = head.success ? [] : [...head.error.issues];
+  const parsedEnvelope = envelope.safeParse(body.value);
+  const issues = parsedEnvelope.success ? [] : [...parsedEnvelope.error.issues];
   const type = eventType.safeParse(valueAt(body.value, ['type']));
   const data = valueAt(body.value, ['data']);
   if (type.success && typeof data === 'object' && data !== null && !Array.isArray(data)) {
     const parsedData = DATA_SCHEMAS[type.data].safeParse(data);
     if (!parsedData.success) issues.push(...parsedData.error.issues.map((i) => ({ ...i, path: ['data', ...i.path] })));
   }
-  if (!head.success || issues.length > 0 || !type.success) {
+  if (!parsedEnvelope.success || issues.length > 0 || !type.success) {
     throw new Problem(
       'VALIDATION_FAILED',
       issues.map((i) => fieldError(i, body.value)),
     );
   }
 
-  const occurredAt = parseSourceTime(head.data.occurredAt);
+  const occurredAt = parseSourceTime(parsedEnvelope.data.occurredAt);
   if (!occurredAt.ok) throw new Error(`occurredAt passed the schema but does not parse: ${occurredAt.reason}`);
   const accepted = {
     // The schema checked it: a non-empty visit number of at most 64 characters.
-    visitId: head.data.visitId as VisitId,
+    visitId: parsedEnvelope.data.visitId as VisitId,
     occurredAt: occurredAt.instant,
     envelope: body.value,
   };
@@ -236,7 +238,7 @@ export function readVisitStarted(storedEnvelope: unknown): VisitStartedFacts {
 
 /** The fields of a recorded `prescription.written` that the submit prescription step sends. */
 export interface PrescriptionWrittenFacts {
-  prescriptionId: string;
+  prescriptionId: PrescriptionId;
   authoredAt: Date;
   requester: { nik?: string | undefined };
   item: z.infer<typeof prescriptionItem>;

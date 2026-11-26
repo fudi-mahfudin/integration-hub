@@ -7,12 +7,14 @@ import { checkTime, describe, isObject, isReferenceTo, nonEmptyArray, nonEmptySt
 // the check must not trust the code it checks.
 const SYSTEM_PREFIX = 'http://sys-ids.kemkes.go.id/';
 const KFA_SYSTEM = 'http://sys-ids.kemkes.go.id/kfa';
+const CATEGORY_SYSTEM = 'http://terminology.hl7.org/CodeSystem/medicationrequest-category';
 
 /**
  * The mandatory fields (the union of the guide, the resource page and the
  * rule dictionary: identifier, status, intent, category, medication,
- * subject, encounter, authoredOn, requester, dispenseRequest.performer), a
- * `+00:00` authoredOn not before the floor, exactly one `prescription/{org}`
+ * subject, encounter, authoredOn, requester, dispenseRequest.performer,
+ * substitution.allowedBoolean), the payload constants (`completed`, `order`,
+ * `community`, substitution allowed), a `+00:00` authoredOn not before the floor, exactly one `prescription/{org}`
  * and one `prescription-item/{org}` identifier of the case's organization,
  * the case's organization as the dispense performer, a contained Medication
  * coded by KFA, and a positive quantity with a unit.
@@ -23,10 +25,19 @@ export function checkMedicationRequest(body: unknown, organizationId: Organizati
 
   if (body.resourceType !== 'MedicationRequest') fail(at('resourceType'), `must be "MedicationRequest", got ${describe(body.resourceType)}`);
   for (const name of ['prescription', 'prescription-item']) checkIdentifier(body.identifier, `${SYSTEM_PREFIX}${name}/`, organizationId, fail);
-  for (const field of ['status', 'intent'] as const) {
-    if (!nonEmptyString(body[field])) fail(at(field), `is required, got ${describe(body[field])}`);
+  // The hub's payload constants (#9): a completed order in the community category, substitution allowed.
+  if (body.status !== 'completed') fail(at('status'), `must be "completed", got ${describe(body.status)}`);
+  if (body.intent !== 'order') fail(at('intent'), `must be "order", got ${describe(body.intent)}`);
+  const community = (nonEmptyArray(body.category) ?? []).some(
+    (c) =>
+      isObject(c) &&
+      (nonEmptyArray(c.coding) ?? []).some((coding) => isObject(coding) && coding.system === CATEGORY_SYSTEM && coding.code === 'community'),
+  );
+  if (!community) fail(at('category'), `must be ${CATEGORY_SYSTEM}|community, got ${describe(body.category)}`);
+  const substitution = isObject(body.substitution) ? body.substitution : {};
+  if (substitution.allowedBoolean !== true) {
+    fail(at('substitution.allowedBoolean'), `must be true, got ${describe(substitution.allowedBoolean)}`);
   }
-  if (!nonEmptyArray(body.category)) fail(at('category'), `needs at least one category, got ${describe(body.category)}`);
   if (!isReferenceTo(body.subject, 'Patient')) fail(at('subject'), `must reference "Patient/{ihs}", got ${describe(body.subject)}`);
   if (!isReferenceTo(body.encounter, 'Encounter')) fail(at('encounter'), `must reference "Encounter/{id}", got ${describe(body.encounter)}`);
   if (!isReferenceTo(body.requester, 'Practitioner')) {

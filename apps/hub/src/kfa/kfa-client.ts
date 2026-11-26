@@ -4,15 +4,22 @@ import { SatusehatRequestError, SatusehatResponseError, SatusehatTimeoutError } 
 import type { AccessTokens } from '../satusehat/token.js';
 import { parseKfaProduct, type KfaCode, type KfaDetails } from './kfa-product.js';
 
+/** What a KFA v2 lookup answered: the status read, and the details, or `undefined` when KFA has no such code. */
+export interface KfaLookup {
+  httpStatus: 200 | 404;
+  details: KfaDetails | undefined;
+}
+
 /** The KFA v2 call the hub makes. It takes the same access token as FHIR (#14). */
 export interface KfaClient {
   /**
-   * The KFA details of `code`, or `undefined` when KFA has no such code. Any
-   * status but 200 throws `SatusehatRequestError`; a body of the wrong shape
+   * Looks `code` up. KFA has no such code when it answers 200 with no result
+   * or 404 (which of the two the real KFA v2 sends is unverified). Any other
+   * status throws `SatusehatRequestError`; a body of the wrong shape
    * throws `SatusehatResponseError`; no full answer within the time limit
    * throws `SatusehatTimeoutError`.
    */
-  findProduct(code: KfaCode): Promise<KfaDetails | undefined>;
+  findProduct(code: KfaCode): Promise<KfaLookup>;
 }
 
 const kfaRef = z.object({ kfa_code: z.string().min(1) });
@@ -52,6 +59,7 @@ export function createKfaClient(deps: { config: Pick<SatusehatConfig, 'kfaUrl' |
       const url = new URL(`products?${new URLSearchParams({ identifier: 'kfa', code })}`, config.kfaUrl);
       const res = await get(url);
       const { text } = res;
+      if (res.status === 404) return { httpStatus: 404, details: undefined };
       if (res.status !== 200) throw new SatusehatRequestError('GET', url, res.status, text);
       let json: unknown;
       try {
@@ -65,9 +73,9 @@ export function createKfaClient(deps: { config: Pick<SatusehatConfig, 'kfaUrl' |
         throw new SatusehatResponseError('GET', url, `an unexpected KFA body; ${problems.join('; ')}`);
       }
       const { result } = parsed.data;
-      if (result === null) return undefined;
+      if (result === null) return { httpStatus: 200, details: undefined };
       if (result.kfa_code !== code) throw new SatusehatResponseError('GET', url, `KFA ${result.kfa_code} for the lookup of ${code}`);
-      return {
+      const details: KfaDetails = {
         product: parseKfaProduct({
           code: result.kfa_code,
           // KFA v2 carries no level field: a code's level is its two-digit prefix (91 ingredient, 92 virtual, 93 actual product).
@@ -78,6 +86,7 @@ export function createKfaClient(deps: { config: Pick<SatusehatConfig, 'kfaUrl' |
         display: result.name,
         doseForm: result.dosage_form ? { code: result.dosage_form.code, display: result.dosage_form.name } : null,
       };
+      return { httpStatus: 200, details };
     },
   };
 }

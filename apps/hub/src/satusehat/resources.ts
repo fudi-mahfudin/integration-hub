@@ -1,5 +1,5 @@
 import type { OrganizationId } from '../auth/source-systems.js';
-import type { RemoteIdentifier } from '../cases/case-model.js';
+import type { PrescriptionItemId, RemoteIdentifier } from '../cases/case-model.js';
 import type { KfaDetails } from '../kfa/kfa-product.js';
 import type { IhsNumber, LocationId, PrescriptionIdentifier, VisitIdentifier } from './client.js';
 import { platformTime } from './platform-time.js';
@@ -14,13 +14,13 @@ export const encounterSystem = (org: OrganizationId) => `http://sys-ids.kemkes.g
 export const prescriptionSystem = (org: OrganizationId) => `http://sys-ids.kemkes.go.id/prescription/${org}`;
 
 /** The `prescription-item/{org}` identifier system of an organization's prescription items. */
-export const prescriptionItemSystem = (org: OrganizationId) => `http://sys-ids.kemkes.go.id/prescription-item/${org}`;
+const prescriptionItemSystem = (org: OrganizationId) => `http://sys-ids.kemkes.go.id/prescription-item/${org}`;
 
 /** The `medication/{org}` identifier system of an organization's Medications. */
-export const medicationSystem = (org: OrganizationId) => `http://sys-ids.kemkes.go.id/medication/${org}`;
+const medicationSystem = (org: OrganizationId) => `http://sys-ids.kemkes.go.id/medication/${org}`;
 
 /** The coding system of KFA codes. */
-export const KFA_SYSTEM = 'http://sys-ids.kemkes.go.id/kfa';
+const KFA_SYSTEM = 'http://sys-ids.kemkes.go.id/kfa';
 
 /** The coding system of KFA dose forms. */
 const MEDICATION_FORM_SYSTEM = 'http://terminology.kemkes.go.id/CodeSystem/medication-form';
@@ -75,7 +75,7 @@ export function visitEncounterResource(e: VisitEncounter): FhirResource {
 /** What a prescription's MedicationRequest says: the one drug item, on the visit's Encounter. */
 export interface PrescriptionRequest {
   identifier: PrescriptionIdentifier;
-  itemId: string;
+  itemId: PrescriptionItemId;
   /** The Encounter create visit stored. */
   encounter: RemoteIdentifier;
   /** The patient create visit pinned. */

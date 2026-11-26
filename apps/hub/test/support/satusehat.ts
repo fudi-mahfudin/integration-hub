@@ -179,6 +179,10 @@ export function createMedicationRequestAtMock(mockBaseUrl: URL, encounterId: str
     encounter: { reference: `Encounter/${encounterId}` },
     authoredOn: '2026-03-02T01:10:00+00:00',
     requester: { reference: `Practitioner/${worldVisit.physician.ihsNumber}` },
-    dispenseRequest: { performer: { reference: `Organization/${org}` } },
+    dispenseRequest: {
+      quantity: { value: 10, unit: 'Tablet', system: 'http://terminology.kemkes.go.id/CodeSystem/medication-form', code: 'BS066' },
+      performer: { reference: `Organization/${org}` },
+    },
+    substitution: { allowedBoolean: true },
   });
 }

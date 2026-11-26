@@ -8,6 +8,12 @@ export type CaseId = Brand<string, 'CaseId'>;
 /** The source system's own visit number; unique per source system (#6). */
 export type VisitId = Brand<string, 'VisitId'>;
 
+/** The source system's prescription number: the `prescription/{org}` identifier's value (#6). */
+export type PrescriptionId = Brand<string, 'PrescriptionId'>;
+
+/** The source system's number for a prescription's drug item: the `prescription-item/{org}` identifier's value (#6). */
+export type PrescriptionItemId = Brand<string, 'PrescriptionItemId'>;
+
 /** The four source event types, 1:1 with the steps (#6). */
 export const EVENT_TYPES = ['visit.started', 'prescription.written', 'drug.dispensed', 'visit.finished'] as const;
 

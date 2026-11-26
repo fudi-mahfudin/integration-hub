@@ -119,6 +119,19 @@ describe('MedicationRequest validator', () => {
     expect(codesAt(draft)).toEqual([['PAYLOAD_INVALID', 'MedicationRequest.dispenseRequest.performer']]);
   });
 
+  it('requires substitution.allowedBoolean', () => {
+    expect(codesAt(withChange((m) => delete m.substitution))).toEqual([['PAYLOAD_INVALID', 'MedicationRequest.substitution.allowedBoolean']]);
+  });
+
+  it('requires a quantity with a unit', () => {
+    const noQuantity = withChange((m) => (m.dispenseRequest = { performer: { reference: `Organization/${ORG}` } }));
+    expect(codesAt(noQuantity)).toEqual([['PAYLOAD_INVALID', 'MedicationRequest.dispenseRequest.quantity']]);
+    const noUnit = withChange((m) => {
+      m.dispenseRequest = { performer: { reference: `Organization/${ORG}` }, quantity: { value: 10, code: 'BS066' } };
+    });
+    expect(codesAt(noUnit)).toEqual([['PAYLOAD_INVALID', 'MedicationRequest.dispenseRequest.quantity']]);
+  });
+
   it('needs a positive quantity counted in the product’s KFA dose form', () => {
     const wrongForm = validMedicationRequest('92000001', 'BS019');
     expect(codesAt(wrongForm)).toEqual([['PAYLOAD_INVALID', 'MedicationRequest.dispenseRequest.quantity']]);

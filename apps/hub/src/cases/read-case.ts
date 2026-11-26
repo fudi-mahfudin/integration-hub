@@ -101,7 +101,8 @@ export async function readCase(
         .orderBy('seq')
         .orderBy('attempt')
         .execute();
-      const rejections = await readRejections(trx, sourceSystemId, kase.visit_id);
+      // Read back from the row this case's visit id was written to.
+      const rejections = await readRejections(trx, sourceSystemId, kase.visit_id as VisitId);
       return {
         // Read back from the row this case's ids were written to.
         caseId: kase.id as CaseId,

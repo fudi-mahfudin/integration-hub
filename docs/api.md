@@ -162,7 +162,7 @@ Just before a step sends anything, step-time validation checks what it built. An
 
 | Code | Meaning |
 |---|---|
-| `MAPPING_MISSING` | A local code the step needs has no mapping for this source system (for create visit, the visit's `locationCode`; for submit prescription, the item's `drugCode`), or the drug code maps to a KFA code that KFA v2 does not know. Nothing was sent. |
+| `MAPPING_MISSING` | A local code the step needs has no mapping for this source system (for create visit, the visit's `locationCode`; for submit prescription, the item's `drugCode`), or the drug code maps to a KFA code that KFA v2 does not know (it answers no result, or `404`). Nothing was sent. |
 | `KFA_LEVEL_INVALID` | The mapped KFA product has the wrong level: a prescription needs a 92 or 93, a dispense a 93. |
 | `UNSUPPORTED_THERAPEUTIC_SUBSTITUTION` | The dispensed product's active ingredients (its set of KFA 91 codes) differ from the prescribed product's. |
 | `SUBSTITUTION_MISMATCH` | Whether the dispense is a substitution, as judged from KFA, disagrees with the source's `substitution` declaration. |

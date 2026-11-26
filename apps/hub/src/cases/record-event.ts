@@ -10,14 +10,16 @@ import {
   stepForEvent,
   type CaseId,
   type CaseStatus,
+  type PrescriptionId,
+  type PrescriptionItemId,
   type VisitId,
 } from './case-model.js';
 import { readSteps, writeCaseStatus } from './case-status.js';
 
 /** A prescription's one drug item, by the identifiers the source gave them (#6). */
 export interface PrescriptionItemKey {
-  prescriptionId: string;
-  itemId: string;
+  prescriptionId: PrescriptionId;
+  itemId: PrescriptionItemId;
 }
 
 /** A source event that passed its schema, ready to be recorded against its visit. */

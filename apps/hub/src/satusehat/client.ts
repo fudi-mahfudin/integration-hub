@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { OrganizationId } from '../auth/source-systems.js';
 import type { Brand } from '../brand.js';
-import type { RemoteId, RemoteIdentifier, VisitId } from '../cases/case-model.js';
+import type { PrescriptionId, RemoteId, RemoteIdentifier, VisitId } from '../cases/case-model.js';
 import type { SatusehatConfig } from '../config.js';
 import { SatusehatRequestError, SatusehatResponseError } from './errors.js';
 import { encounterSystem, prescriptionSystem, type FhirResource } from './resources.js';
@@ -22,7 +22,7 @@ export interface VisitIdentifier {
 /** A prescription's business identifier (ADR 0005): `prescription/{org}|{prescriptionId}`. */
 export interface PrescriptionIdentifier {
   organizationId: OrganizationId;
-  prescriptionId: string;
+  prescriptionId: PrescriptionId;
 }
 
 /**
@@ -102,7 +102,7 @@ export function createSatusehatClient(deps: {
 
   // The resource id of a Patient or Practitioner is its IHS number.
   const ihsNumbers = (hits: { id: string }[]) => hits.map((h) => h.id as IhsNumber);
-  const record =
+  const remoteIdentifierOf =
     (type: RemoteIdentifier['type']) =>
     (r: z.infer<typeof storedRecordSchema>): RemoteIdentifier => ({
       type,
@@ -110,8 +110,8 @@ export function createSatusehatClient(deps: {
       id: r.id as RemoteId,
       version: r.meta?.versionId ?? null,
     });
-  const encounterRecord = record('Encounter');
-  const medicationRequestRecord = record('MedicationRequest');
+  const encounterRecord = remoteIdentifierOf('Encounter');
+  const medicationRequestRecord = remoteIdentifierOf('MedicationRequest');
 
   return {
     findPatientsByNik: async (nik) => ihsNumbers(await search('Patient', `${NIK_SYSTEM}|${nik}`)),

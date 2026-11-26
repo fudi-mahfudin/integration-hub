@@ -6,7 +6,7 @@
  * checks the same payloads with its own code (ADR 0006).
  */
 import type { OrganizationId } from '../auth/source-systems.js';
-import type { KfaProduct } from '../kfa/kfa-product.js';
+import type { KfaCode, KfaProduct } from '../kfa/kfa-product.js';
 import { checkEncounter } from './encounter-rules.js';
 import { checkMedicationRequest } from './medication-request-rules.js';
 
@@ -46,7 +46,7 @@ export type MissingMapping =
       /** The source system's local drug code. */
       localCode: string;
       /** The KFA code it maps to, which KFA does not know. */
-      kfaCode: string;
+      kfaCode: KfaCode;
     };
 
 /**

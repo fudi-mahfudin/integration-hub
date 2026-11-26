@@ -29,7 +29,8 @@ export interface MedicationRequestContext {
  * Checks a submitted MedicationRequest: the mandatory fields (the union of the
  * guide, the resource page and the rule dictionary: identifier, status,
  * intent, category, medication, subject, encounter, authoredOn, requester,
- * dispenseRequest.performer), a `+00:00` authoredOn on or after the floor,
+ * dispenseRequest.performer, dispenseRequest.quantity,
+ * substitution.allowedBoolean), a `+00:00` authoredOn on or after the floor,
  * exactly one `prescription/{org}` and one `prescription-item/{org}`
  * identifier of the client's organization, a KFA 92 or 93 product from its
  * own catalogue, a positive quantity counted in that product's dose form, and
@@ -47,6 +48,10 @@ export function validateMedicationRequest(body: unknown, context: MedicationRequ
   if (!nonEmptyString(body.status)) fail('status', 'is required');
   if (!nonEmptyString(body.intent)) fail('intent', 'is required');
   if (!Array.isArray(body.category) || body.category.length === 0) fail('category', 'needs at least one category');
+  const substitution = isObject(body.substitution) ? body.substitution : {};
+  if (typeof substitution.allowedBoolean !== 'boolean') {
+    fail('substitution.allowedBoolean', `is required as a boolean, got ${describe(substitution.allowedBoolean)}`);
+  }
   if (!isReferenceTo(body.subject, 'Patient')) fail('subject', `must reference "Patient/{ihs}", got ${describe(body.subject)}`);
   if (!isReferenceTo(body.requester, 'Practitioner')) fail('requester', `must reference "Practitioner/{ihs}", got ${describe(body.requester)}`);
 
@@ -122,10 +127,11 @@ function checkDispenseRequest(dispenseRequest: unknown, organizationId: string, 
   } else if (performer !== `Organization/${organizationId}`) {
     fail('dispenseRequest.performer', `must be the client's organization "Organization/${organizationId}", got "${performer}"`);
   }
-  if (request.quantity === undefined) return;
   const quantity = isObject(request.quantity) ? request.quantity : {};
   if (typeof quantity.value !== 'number' || !(quantity.value > 0)) {
     fail('dispenseRequest.quantity', `needs a positive value, got ${describe(quantity.value)}`);
+  } else if (!nonEmptyString(quantity.unit)) {
+    fail('dispenseRequest.quantity', `needs a unit, got ${describe(quantity.unit)}`);
   } else if (doseFormCode !== undefined && quantity.code !== doseFormCode) {
     fail('dispenseRequest.quantity', `must be counted in the product's dose form "${doseFormCode}", got ${describe(quantity.code)}`);
   }

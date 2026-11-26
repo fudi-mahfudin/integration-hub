@@ -261,6 +261,21 @@ describe('validateStepPayload: a prescription’s MedicationRequest', () => {
     expect(pathsOf(without(field))).toEqual([['PAYLOAD_INVALID', path]]);
   });
 
+  it('takes the payload constants only: completed, order, community, substitution allowed', () => {
+    const built = medicationRequest({
+      status: 'active',
+      intent: 'plan',
+      category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/medicationrequest-category', code: 'inpatient' }] }],
+      substitution: { allowedBoolean: false },
+    });
+    expect(pathsOf(built)).toEqual([
+      ['PAYLOAD_INVALID', 'MedicationRequest.status'],
+      ['PAYLOAD_INVALID', 'MedicationRequest.intent'],
+      ['PAYLOAD_INVALID', 'MedicationRequest.category'],
+      ['PAYLOAD_INVALID', 'MedicationRequest.substitution.allowedBoolean'],
+    ]);
+  });
+
   it('needs the case organization as the dispense performer, and a quantity with a value and a dose-form unit', () => {
     const built = medicationRequest({ dispenseRequest: { quantity: { value: 0 }, performer: { reference: 'Organization/10000002' } } });
     expect(pathsOf(built)).toEqual([
@@ -302,7 +317,7 @@ describe('validateStepPayload: a prescription’s MedicationRequest', () => {
     const payload: StepPayload = {
       step: 'submit_prescription',
       organizationId: ORG,
-      missingMappings: [{ kind: 'kfa', localCode: 'OBAT-1', kfaCode: '93999999' }],
+      missingMappings: [{ kind: 'kfa', localCode: 'OBAT-1', kfaCode: kfa('93999999', 93, []).code }],
       product: null,
       medicationRequest: null,
     };

@@ -2,7 +2,7 @@ import type { Kysely } from 'kysely';
 import type { SourceSystem } from '../auth/source-systems.js';
 import type { Clock } from '../clock.js';
 import { recordEvent, type AcceptedEvent, type RecordedEvent } from '../cases/record-event.js';
-import { logRejection, type RejectionCode } from '../cases/rejection-log.js';
+import { isLoggedRejection, logRejection, type RejectionCode } from '../cases/rejection-log.js';
 import type { Database } from '../db/database.js';
 import { Problem } from '../http/problem.js';
 import { log } from '../observability/log.js';
@@ -20,9 +20,6 @@ export interface Ingest {
   /** Deletes idempotency keys older than the retention window; resolves to how many. */
   purgeExpiredKeys(): Promise<number>;
 }
-
-/** The rejections that judged a visit's event, and so go to its rejection log (#8). */
-const LOGGED_REJECTIONS: ReadonlySet<string> = new Set<RejectionCode>(['VALIDATION_FAILED', 'UNSUPPORTED_MULTI_ITEM', 'EVENT_ALREADY_RECORDED']);
 
 /** Builds ingest over an idempotency store and the hub database (for the rejection log). Only the composition root calls this. */
 export function createIngest(deps: { store: IdempotencyStore; db: Kysely<Database>; clock: Clock }): Ingest {
@@ -59,10 +56,8 @@ export function createIngest(deps: { store: IdempotencyStore; db: Kysely<Databas
       try {
         return await accept(source, key, body);
       } catch (err) {
-        if (err instanceof Problem && LOGGED_REJECTIONS.has(err.code)) {
-          // Checked just above: the code is one of the logged rejection codes.
-          await noteRejection(source, body, err.code as RejectionCode);
-        }
+        const { code } = err instanceof Problem ? err : { code: undefined };
+        if (code !== undefined && isLoggedRejection(code)) await noteRejection(source, body, code);
         throw err;
       }
     },
