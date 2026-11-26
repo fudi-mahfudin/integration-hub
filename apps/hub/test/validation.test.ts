@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SourceSystems } from '../src/auth/source-systems.js';
+import type { RemoteId } from '../src/cases/case-model.js';
 import { parseKfaProduct, type KfaProduct } from '../src/kfa/kfa-product.js';
 import { validateStepPayload, type StepPayload } from '../src/validation/validation.js';
 
@@ -365,6 +366,43 @@ describe('validateStepPayload: a dispense’s MedicationDispense', () => {
 
   it('a wasSubstituted that disagrees with the KFA judgement is PAYLOAD_INVALID: the hub must send what it judged', () => {
     expect(pathsOf(medicationDispense({ substitution: substituted() }))).toEqual(invalid('substitution.wasSubstituted'));
+  });
+});
+
+describe('validateStepPayload: an update visit’s finished Encounter', () => {
+  /** A remote identifier is any id SATUSEHAT assigned; a non-empty string stands in for one here. */
+  const isRemoteId = (id: string): id is RemoteId => id.length > 0;
+  const ENCOUNTER_ID = 'b2d7c3a0-0000-4000-8000-000000000001';
+  const finished = (overrides: Record<string, unknown> = {}) =>
+    encounter({
+      id: ENCOUNTER_ID,
+      status: 'finished',
+      period: { start: '2026-03-02T01:00:00+00:00', end: '2026-03-02T02:00:00+00:00' },
+      ...overrides,
+    });
+  const updateVisit = (body: unknown): StepPayload => {
+    if (!isRemoteId(ENCOUNTER_ID)) throw new Error('the test encounter id must be non-empty');
+    return { step: 'update_visit', organizationId: ORG, missingMappings: [], encounterId: ENCOUNTER_ID, encounter: body };
+  };
+
+  it('a finished Encounter of the stored record, ending after its start, passes', () => {
+    expect(validateStepPayload(updateVisit(finished()))).toEqual([]);
+  });
+
+  it.each<[string, Record<string, unknown>, string]>([
+    ['another record’s id', { id: 'another-id' }, 'Encounter.id'],
+    ['no id', { id: undefined }, 'Encounter.id'],
+    ['a status other than finished', { status: 'arrived' }, 'Encounter.status'],
+    ['no period.end', { period: { start: '2026-03-02T01:00:00+00:00' } }, 'Encounter.period.end'],
+    ['an end at its start', { period: { start: '2026-03-02T01:00:00+00:00', end: '2026-03-02T01:00:00+00:00' } }, 'Encounter.period.end'],
+  ])('%s is PAYLOAD_INVALID', (_, overrides, path) => {
+    expect(validateStepPayload(updateVisit(finished(overrides)))).toEqual([expect.objectContaining({ code: 'PAYLOAD_INVALID', path })]);
+  });
+
+  it('still checks every create visit rule', () => {
+    expect(validateStepPayload(updateVisit(finished({ serviceProvider: undefined })))).toEqual([
+      expect.objectContaining({ path: 'Encounter.serviceProvider' }),
+    ]);
   });
 });
 

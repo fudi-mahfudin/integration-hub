@@ -111,7 +111,7 @@ describe('submission log and report', () => {
     await fhir(mock.baseUrl, token, 'Encounter', encounter('V-twice'));
 
     expect((await mock.client.report()).duplicates).toEqual([
-      { resourceType: 'Encounter', businessIdentifier: `${ENCOUNTER_SYSTEM}|V-twice`, visitKey: 'V-twice', seqs: [2, 4] },
+      { resourceType: 'Encounter', effect: 'created', businessIdentifier: `${ENCOUNTER_SYSTEM}|V-twice`, visitKey: 'V-twice', seqs: [2, 4] },
     ]);
   });
 });

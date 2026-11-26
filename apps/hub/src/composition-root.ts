@@ -28,6 +28,7 @@ import { createAccessTokens } from './satusehat/token.js';
 import { createVisit } from './steps/create-visit.js';
 import { submitDispense } from './steps/submit-dispense.js';
 import { submitPrescription } from './steps/submit-prescription.js';
+import { updateVisit } from './steps/update-visit.js';
 import { createWorkerLoop } from './worker/worker.js';
 import { DATABASE, INGEST, SOURCE_SYSTEMS } from './tokens.js';
 
@@ -165,6 +166,7 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
       create_visit: (step) => createVisit({ db, satusehat }, step),
       submit_prescription: (step) => submitPrescription({ db, satusehat, kfa, clock }, step),
       submit_dispense: (step) => submitDispense({ db, satusehat, kfa, clock }, step),
+      update_visit: (step) => updateVisit({ db, satusehat }, step),
     },
     pollIntervalMs: config.workerPollIntervalMs,
   });

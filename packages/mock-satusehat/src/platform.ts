@@ -1,5 +1,5 @@
 // The mock SATUSEHAT itself: tokens, searches, the KFA v2 product lookup and
-// Encounter, MedicationRequest and MedicationDispense create, answered
+// Encounter, MedicationRequest and MedicationDispense create, Encounter update, answered
 // from the world dataset and the records it holds. Each handler returns the
 // response and what it did; the server logs it. All state is in memory.
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -232,6 +232,50 @@ export class Platform {
     });
     this.encounters.push(stored);
     return { status: 201, body: stored, effect: 'created', ...about };
+  }
+
+  /**
+   * `PUT /Encounter/{id}`. A valid Encounter for a record the mock holds,
+   * whose `id` is the record's and whose visit identifier is unchanged,
+   * replaces it with `meta.versionId` bumped. Every applied PUT counts, even
+   * one that changes no field, so a second update of a visit shows in the
+   * report. An unknown id is 404.
+   */
+  updateEncounter(id: string, body: unknown): PlatformResponse {
+    const index = this.encounters.findIndex((e) => e.id === id);
+    const held = this.encounters[index];
+    const heldIdentifier = held?.identifier?.find((i) => typeof i.system === 'string' && ENCOUNTER_SYSTEM.test(i.system));
+    const about = {
+      resourceType: 'Encounter',
+      visitKey: heldIdentifier?.value ?? null,
+      businessIdentifier: heldIdentifier ? `${heldIdentifier.system}|${heldIdentifier.value}` : null,
+    };
+    if (!held) return { status: 404, body: templates.notFound(`/Encounter/${id}`), effect: 'none', ...about };
+
+    const violations = validateEncounter(body, this.world.organization.id);
+    const sent = findIdentifier(body, ENCOUNTER_SYSTEM);
+    if (isRecord(body) && body.id !== id) {
+      violations.push({ code: 'PAYLOAD_INVALID', path: 'Encounter.id', message: `Encounter.id must be "${id}", the id in the URL, got ${JSON.stringify(body.id)}` });
+    }
+    if (sent && (sent.system !== heldIdentifier?.system || sent.value !== heldIdentifier.value)) {
+      violations.push({
+        code: 'PAYLOAD_INVALID',
+        path: 'Encounter.identifier',
+        message: `Encounter.identifier must stay ${about.businessIdentifier ?? '(none)'}, got ${sent.system}|${sent.value}`,
+      });
+    }
+    if (violations.length > 0) {
+      return { status: 400, body: templates.payloadRejected(violations), effect: 'none', ...about };
+    }
+    const stored = templates.storedEncounter({
+      // validateEncounter accepted it, so it has every field the mock relies on.
+      body: body as fhir4.Encounter,
+      id,
+      versionId: String(Number(held.meta?.versionId ?? '0') + 1),
+      lastUpdated: this.clock(),
+    });
+    this.encounters[index] = stored;
+    return { status: 200, body: stored, effect: 'updated', ...about };
   }
 
   /**

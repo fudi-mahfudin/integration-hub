@@ -28,7 +28,7 @@ const logEntrySchema = z.object({
 const reportSchema = z.object({
   faultSeed: z.number().nullable(),
   duplicates: z.array(
-    z.object({ resourceType: z.string(), businessIdentifier: z.string(), visitKey: z.string().nullable(), seqs: z.array(z.number()) }),
+    z.object({ resourceType: z.string(), effect: z.enum(['created', 'updated']), businessIdentifier: z.string(), visitKey: z.string().nullable(), seqs: z.array(z.number()) }),
   ),
   outOfOrder: z.array(z.object({ visitKey: z.string(), seq: z.number(), effect: z.string(), reason: z.string() })),
   overlap: z.array(z.object({ visitKey: z.string(), seqs: z.tuple([z.number(), z.number()]) })),

@@ -39,8 +39,14 @@ export interface SubmitDispensePins extends KfaProductPins {
   pharmacistIhsNumber: IhsNumber;
 }
 
+/**
+ * What a completed update visit sent (#31): the patient, practitioner and
+ * Location create visit pinned, re-sent on the same Encounter.
+ */
+export type UpdateVisitPins = CreateVisitPins;
+
 /** A step's pins. */
-export type StepPins = CreateVisitPins | SubmitPrescriptionPins | SubmitDispensePins;
+export type StepPins = CreateVisitPins | SubmitPrescriptionPins | SubmitDispensePins | UpdateVisitPins;
 
 const createVisitPinsSchema = z.object({
   patientIhsNumber: z.string().min(1),
@@ -55,13 +61,12 @@ const createVisitPinsSchema = z.object({
 export function readPins(step: StepName, stored: unknown): StepPins {
   switch (step) {
     case 'create_visit':
+    case 'update_visit':
       return readCreateVisitPins(stored);
     case 'submit_prescription':
       return readSubmitPrescriptionPins(stored);
     case 'submit_dispense':
       return readSubmitDispensePins(stored);
-    case 'update_visit':
-      throw new Error(`step ${step} has no pins defined yet, but its row holds ${stored === null ? 'null' : 'a value'}`);
   }
 }
 

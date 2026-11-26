@@ -100,7 +100,7 @@ async function attemptCreateVisit(
   attempt.httpStatus = 200;
   const [adopted] = existing;
   if (existing.length > 1) return deadLettered('REMOTE_RECORD_AMBIGUOUS');
-  if (adopted) return { completed: adopted, pins, attempt };
+  if (adopted) return { completed: adopted.remote, pins, attempt };
 
   const created = await satusehat.createEncounter(encounter);
   attempt.httpStatus = 201;

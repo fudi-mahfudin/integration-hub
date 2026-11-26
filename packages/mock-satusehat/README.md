@@ -29,6 +29,7 @@ The client credentials are the world's organization (`dev-satusehat-client` / `d
 - `GET /fhir-r4/v1/Location?_id={id}`
 - `GET /fhir-r4/v1/Encounter?identifier=http://sys-ids.kemkes.go.id/encounter/{org}|{value}`
 - `POST /fhir-r4/v1/Encounter`: validated, then stored with a new `id` and `meta.versionId`. A second create for the same identifier is stored too, so the duplicate shows in the report.
+- `PUT /fhir-r4/v1/Encounter/{id}`: validated like a create, plus: `id` must be the one in the URL and the `encounter/{org}` identifier must stay the record's. Then replaces the record and answers `200` with `meta.versionId` bumped by one. Every applied PUT counts, even one that changes no field, so a second update of a visit shows in the report as a duplicate submission. An id the mock doesn't hold is `404`.
 - `GET /fhir-r4/v1/MedicationRequest?identifier=http://sys-ids.kemkes.go.id/prescription/{org}|{value}`
 - `POST /fhir-r4/v1/MedicationRequest`: validated by its own rules (mandatory fields, `+00:00` authoredOn and the floor, `prescription/{org}` and `prescription-item/{org}` identifiers, a contained Medication whose KFA code is a 92 or 93 in its catalogue, a quantity in that product's dose form), then stored like an Encounter. One that references an Encounter the mock doesn't hold is `400 REFERENCE_NOT_FOUND`. Logged under the visit key of the Encounter it references.
 - `GET /fhir-r4/v1/MedicationDispense?identifier=http://sys-ids.kemkes.go.id/prescription/{org}|{value}` (a dispense reuses its prescription's identifiers)
@@ -45,7 +46,7 @@ Use it through the typed client, `@integration-hub/mock-satusehat/client`.
 |---|---|
 | `GET /__mock/log?visitKey=&resourceType=&afterSeq=&limit=` | Submission log entries (`limit` 1-10000) |
 | `GET /__mock/log.ndjson` | The whole log, one entry per line |
-| `GET /__mock/report` | Duplicate submissions, out-of-order effects and overlapping in-flight requests per visit, and the fault seed |
+| `GET /__mock/report` | Duplicate submissions (more than one create per business identifier, or more than one applied update of one record), out-of-order effects and overlapping in-flight requests per visit, and the fault seed |
 | `POST /__mock/reset` | Clears records, log, tokens and throttle state; reloads the world |
 | `POST /__mock/seed` | Adds world entries until the next reset |
 | `POST /__mock/tokens/revoke` | Invalidates every issued token |

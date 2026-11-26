@@ -58,13 +58,13 @@ export const locationResource = defineTemplate(
   }),
 );
 
-/** A stored Encounter as the 201 body of its create and as a search hit. */
+/** A stored Encounter as the 201 body of its create, the 200 body of its update, and as a search hit. */
 export const storedEncounter = defineTemplate(
   {
     tag: 'fhir-spec',
-    note: 'FHIR R4 create returns the stored resource with server-assigned id and meta',
+    note: 'FHIR R4 create and update return the stored resource with server-assigned id and meta',
     fields: {
-      'meta.versionId': { tag: 'assumed', note: 'SATUSEHAT versionId format is unverified; the mock counts from "1"' },
+      'meta.versionId': { tag: 'assumed', note: 'SATUSEHAT versionId format is unverified; the mock counts from "1" and adds 1 per applied update' },
     },
   },
   (args: { body: fhir4.Encounter; id: string; versionId: string; lastUpdated: Date }): fhir4.Encounter => ({

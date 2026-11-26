@@ -158,11 +158,17 @@ const drugDispensedData = z.object({
   substitution: z.object({ reasonCode: substitutionReason }).optional(),
 });
 
-/** The event types ingest accepts so far, each with its `data` schema. */
+/** The end of a visit (#6); checked against its start once both are recorded. */
+const visitFinishedData = z.object({
+  finishedAt: sourceTime({ floor: true }),
+});
+
+/** The event types ingest accepts, each with its `data` schema. */
 const DATA_SCHEMAS = {
   'visit.started': visitStartedData,
   'prescription.written': prescriptionWrittenData,
   'drug.dispensed': drugDispensedData,
+  'visit.finished': visitFinishedData,
 } as const;
 
 const ACCEPTED_TYPES = Object.keys(DATA_SCHEMAS) as (keyof typeof DATA_SCHEMAS)[]; // the keys of the object just above
@@ -179,6 +185,7 @@ const envelope = z.object({
 const visitStartedEnvelope = envelope.extend({ type: z.literal('visit.started'), data: visitStartedData });
 const prescriptionWrittenEnvelope = envelope.extend({ type: z.literal('prescription.written'), data: prescriptionWrittenData });
 const drugDispensedEnvelope = envelope.extend({ type: z.literal('drug.dispensed'), data: drugDispensedData });
+const visitFinishedEnvelope = envelope.extend({ type: z.literal('visit.finished'), data: visitFinishedData });
 
 /**
  * Checks a request body against the source event schema and returns the event
@@ -214,10 +221,15 @@ export function parseEvent(body: RequestBody): AcceptedEvent {
     occurredAt: occurredAt.instant,
     envelope: body.value,
   };
-  if (type.data === 'visit.started') return { ...accepted, type: 'visit.started', prescriptionItem: null };
+  if (type.data === 'visit.started') {
+    return { ...accepted, type: 'visit.started', visitTime: sourceInstant(visitStartedData.parse(data).startedAt, 'startedAt'), prescriptionItem: null };
+  }
+  if (type.data === 'visit.finished') {
+    return { ...accepted, type: 'visit.finished', visitTime: sourceInstant(visitFinishedData.parse(data).finishedAt, 'finishedAt'), prescriptionItem: null };
+  }
   if (type.data === 'drug.dispensed') {
     const { prescriptionId, itemId } = drugDispensedData.parse(data);
-    return { ...accepted, type: 'drug.dispensed', prescriptionItem: { prescriptionId, itemId } };
+    return { ...accepted, type: 'drug.dispensed', visitTime: null, prescriptionItem: { prescriptionId, itemId } };
   }
 
   const { prescriptionId, items } = prescriptionWrittenData.parse(data);
@@ -227,7 +239,14 @@ export function parseEvent(body: RequestBody): AcceptedEvent {
       { path: '/data/items', code: 'UNSUPPORTED_MULTI_ITEM', message: `must hold exactly one drug item, got ${items.length}` },
     ]);
   }
-  return { ...accepted, type: 'prescription.written', prescriptionItem: { prescriptionId, itemId: item.itemId } };
+  return { ...accepted, type: 'prescription.written', visitTime: null, prescriptionItem: { prescriptionId, itemId: item.itemId } };
+}
+
+/** The instant of a source time the schema already accepted. */
+function sourceInstant(value: string, field: string): Date {
+  const parsed = parseSourceTime(value);
+  if (!parsed.ok) throw new Error(`${field} passed the schema but does not parse: ${parsed.reason}`);
+  return parsed.instant;
 }
 
 /**
@@ -365,4 +384,21 @@ export function readDrugDispensed(storedEnvelope: unknown): DrugDispensedFacts {
     batch: lot !== undefined && expiry !== undefined ? { lot, expiry } : null,
     substitution: substitution ?? null,
   };
+}
+
+/** The fields of a recorded `visit.finished` that the update visit step sends. */
+export interface VisitFinishedFacts {
+  finishedAt: Date;
+}
+
+/**
+ * Reads a recorded `visit.finished` envelope back from storage. It passed this
+ * schema at ingest, so a failure here means the stored row was changed.
+ */
+export function readVisitFinished(storedEnvelope: unknown): VisitFinishedFacts {
+  const parsed = visitFinishedEnvelope.safeParse(storedEnvelope);
+  if (!parsed.success) {
+    throw new Error(`a stored visit.finished no longer matches its schema: ${parsed.error.issues.map((i) => pointer(i.path)).join(', ')}`);
+  }
+  return { finishedAt: sourceInstant(parsed.data.data.finishedAt, 'a stored finishedAt') };
 }

@@ -73,6 +73,17 @@ export function checkEncounter(body: unknown, organizationId: OrganizationId, fa
   }
 }
 
+/**
+ * What makes an Encounter an update visit (#31): it replaces the stored
+ * record `encounterId`, so its `id` is that record's, and it closes the
+ * visit, so its `status` is `finished` (whose end `checkEncounter` checks).
+ */
+export function checkEncounterUpdate(body: unknown, encounterId: string, fail: Fail): void {
+  if (!isObject(body)) return;
+  if (body.id !== encounterId) fail('Encounter.id', `must be "${encounterId}", the Encounter create visit stored, got ${describe(body.id)}`);
+  if (body.status !== 'finished') fail('Encounter.status', `must be "finished" to close the visit, got ${describe(body.status)}`);
+}
+
 function checkIdentifier(identifier: unknown, organizationId: OrganizationId, fail: Fail): void {
   const path = 'Encounter.identifier';
   const expectedSystem = `${ENCOUNTER_SYSTEM_PREFIX}${organizationId}`;

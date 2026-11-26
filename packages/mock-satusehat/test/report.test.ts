@@ -48,7 +48,7 @@ describe('report', () => {
     const rejected = entry('Encounter', 'none');
     const second = entry('Encounter', 'created');
     expect(computeReport([first, rejected, second], null).duplicates).toEqual([
-      { resourceType: 'Encounter', businessIdentifier: 'Encounter|V-1', visitKey: 'V-1', seqs: [first.seq, second.seq] },
+      { resourceType: 'Encounter', effect: 'created', businessIdentifier: 'Encounter|V-1', visitKey: 'V-1', seqs: [first.seq, second.seq] },
     ]);
   });
 
