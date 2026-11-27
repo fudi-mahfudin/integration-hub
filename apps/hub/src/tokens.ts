@@ -15,3 +15,5 @@ export const RECONCILIATION = Symbol('RECONCILIATION');
 export const LOG = Symbol('LOG');
 /** The process's metrics: `HubMetrics` in the hub service (#41). */
 export const METRICS = Symbol('METRICS');
+/** The process's readiness, behind `GET /readyz` (#43). */
+export const READINESS = Symbol('READINESS');

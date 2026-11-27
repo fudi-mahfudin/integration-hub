@@ -99,7 +99,7 @@ node packages/mock-satusehat/dist/main.js         # mock SATUSEHAT on http://loc
 pnpm --filter @integration-hub/hub start:worker   # claims steps from the Postgres outbox
 ```
 
-Each worker serves its metrics on `http://localhost:3002/metrics` (`WORKER_PORT`; a second worker on the same host needs another, e.g. `WORKER_PORT=3003`), and the hub service on `http://localhost:3000/metrics`. To see them in Grafana:
+Each worker serves its metrics on `http://localhost:3002/metrics` (`WORKER_PORT`; a second worker on the same host needs another, e.g. `WORKER_PORT=3003`), and the hub service on `http://localhost:3000/metrics`. Both also serve `/livez` and `/readyz` (see [docs/api.md](docs/api.md#get-livez-and-get-readyz)). To see the metrics in Grafana:
 
 ```sh
 pnpm obs:up   # start Prometheus (http://localhost:9090) and Grafana (http://localhost:3300), wait until healthy
@@ -125,7 +125,11 @@ To run the mock SATUSEHAT on its own (it needs no Postgres or Redis), see [packa
 
 Defaults match `compose.yaml`, so no `.env` is needed. If ports 5432 or 6379 are taken, start compose with `POSTGRES_PORT`/`REDIS_PORT` (and `PROMETHEUS_PORT`/`GRAFANA_PORT`/`JAEGER_UI_PORT`/`JAEGER_OTLP_PORT` for 9090, 3300, 16686 and 4318) and point the hub and tests at them with `DATABASE_URL`/`REDIS_URL` (see `.env.example`).
 
-The hub never migrates itself: always run `pnpm migrate` before starting it. The test suite runs the same migrations in its global setup.
+The hub never migrates itself: always run `pnpm migrate` before starting it. At start-up the hub service and each worker wait up to 30s for Postgres, then exit 1 if the schema is at another migration than the one they were built for. The test suite runs the same migrations in its global setup.
+
+**Stopping.** `SIGTERM` or `SIGINT` (Ctrl-C) drains a process instead of killing it, and `/readyz` turns `503 draining`. The hub service answers requests on connections still open with `503 SERVICE_DRAINING` and gives requests in flight 10s; `SHUTDOWN_DELAY_MS` (default 0) keeps it serving that long first, for a load balancer. A worker claims nothing more and lets its attempt in progress end, for up to `WORKER_DRAIN_DEADLINE_MS` (default 70s). At that deadline, or at a second signal, it aborts the attempt and logs it as `worker_shutdown`, and another worker takes the step at once. A reconciliation run it was executing is stopped once it holds no step lease, marked `interrupted`, and not resumed. Both exit 0.
+
+**In containers.** `pnpm app:up` builds the hub image (`apps/hub/Dockerfile`) and starts the hub service on port 3000 and two workers on 3002 and 3003 in compose, after the one-shot `migrate` service has completed. The workers deliver to the mock SATUSEHAT on the host's port 3001. Compose gives the hub service 15s and the workers 80s to drain before it kills them (`stop_grace_period`).
 
 ## Repository layout
 
@@ -135,7 +139,7 @@ The hub never migrates itself: always run `pnpm migrate` before starting it. The
 | `apps/hub/seed` | The operator's location and drug mapping seeds, loaded idempotently at boot |
 | `packages/mock-satusehat` | The mock SATUSEHAT: a stateful fake platform with its own validator (ADR 0006) and the `/__mock/*` inspection and control API; never deployed publicly |
 | `docs/api.md` | The hub's API contract |
-| `compose.yaml` | Local infrastructure; only components from the closed list |
+| `compose.yaml` | Local infrastructure, and (profile `app`) the hub service, two workers and the one-shot `migrate`; only components from the closed list |
 | `observability` | Prometheus scrape config and the Grafana data source and dashboards, provisioned from committed JSON (Jaeger needs no config) |
 | `.github/workflows/ci.yml` | CI: typecheck, the import-boundary check (`pnpm boundaries`), and the same `pnpm test` against Postgres and Redis service containers |
 

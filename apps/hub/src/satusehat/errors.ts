@@ -120,3 +120,17 @@ export class CircuitOpen extends Error {
     this.name = 'CircuitOpen';
   }
 }
+
+/**
+ * The worker shut down and aborted the attempt's calls at its drain deadline
+ * (#43): a call in progress was cut, or a call was not sent. Neither a health
+ * failure nor a failure of the step: the worker releases the step as
+ * `worker_shutdown`. A write cut this way may have been applied; the next
+ * attempt finds it through search-then-create (ADR 0005).
+ */
+export class AttemptAborted extends Error {
+  constructor(method: string, url: URL, options?: { cause: unknown }) {
+    super(`SATUSEHAT ${method} ${url.pathname} aborted: the worker is shutting down`, options);
+    this.name = 'AttemptAborted';
+  }
+}

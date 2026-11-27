@@ -5,7 +5,7 @@ import type { Log } from '../observability/log.js';
 import { failSpan, inCaseTrace, inSpan, recordEndedSpan } from '../observability/tracing.js';
 import type { CircuitBreaker } from '../satusehat/circuit-breaker.js';
 import type { ClaimedStep, Outbox } from '../outbox/outbox.js';
-import { SatusehatRequestError } from '../satusehat/errors.js';
+import { AttemptAborted, SatusehatRequestError } from '../satusehat/errors.js';
 import type { AttemptCalls } from '../satusehat/transport.js';
 import { AttemptFailed, type AttemptFacts, type StepOutcome } from '../steps/step-outcome.js';
 import { classifyFailure } from './failure-class.js';
@@ -29,6 +29,12 @@ export interface Worker {
   start(): void;
   /** Stops claiming and resolves once the attempt in progress, if any, has ended. */
   stop(): Promise<void>;
+  /**
+   * Stops claiming and aborts the attempt in progress, if any, at a drain
+   * deadline (#43): its calls are cut, and it releases its step as
+   * `worker_shutdown`. Resolve `stop()` to know when it has.
+   */
+  abort(): void;
 }
 
 /**
@@ -57,6 +63,8 @@ export function createWorkerLoop(deps: {
   let running = false;
   let loop: Promise<void> | undefined;
   let wake: (() => void) | undefined;
+  // Aborted once, at the drain deadline: every attempt after it would be cut at once, but none starts.
+  const shutdown = new AbortController();
 
   const idle = () =>
     new Promise<void>((resolve) => {
@@ -85,7 +93,7 @@ export function createWorkerLoop(deps: {
       log('error', 'no runner for a claimed step; it stays in flight until its lease expires', fields);
       return 'unrecorded';
     }
-    const calls: AttemptCalls = { budgetEndsAt: new Date(step.startedAt.getTime() + attemptBudgetMs), readRetries: [] };
+    const calls: AttemptCalls = { budgetEndsAt: new Date(step.startedAt.getTime() + attemptBudgetMs), readRetries: [], signal: shutdown.signal };
     try {
       const outcome = await runner(step, calls);
       if ('staleRemote' in outcome) {
@@ -118,8 +126,10 @@ export function createWorkerLoop(deps: {
       return 'completed';
     } catch (err) {
       failSpan(span, err);
-      const failure = classifyFailure(err);
       const facts = failedAttemptFacts(err);
+      // Only a call the drain deadline cut: an attempt that failed on its own just as it struck is stored as it failed.
+      if (err instanceof AttemptAborted || (err instanceof AttemptFailed && err.cause instanceof AttemptAborted)) return releaseAtShutdown(step, facts, calls, err);
+      const failure = classifyFailure(err);
       try {
         if ('permanent' in failure) {
           log('error', 'attempt failed permanently; the step is dead-lettered', { ...fields, errorCode: failure.permanent, error: err });
@@ -143,6 +153,23 @@ export function createWorkerLoop(deps: {
         log('error', 'storing the failed attempt failed; the step is retried once its lease expires', { ...fields, error: storeErr, attemptError: err });
         return 'unrecorded';
       }
+    }
+  }
+
+  /** Releases a step whose attempt the drain deadline cut short (#43); if that fails, its lease expires instead. */
+  async function releaseAtShutdown(step: ClaimedStep, facts: AttemptFacts, calls: AttemptCalls, err: unknown): Promise<AttemptSpanOutcome> {
+    const fields = { caseId: step.caseId, step: step.name, attempt: step.attempt };
+    try {
+      if (!(await outbox.release(step, { facts, readRetries: calls.readRetries }))) {
+        log('warn', 'the lease was lost before the shutdown release was stored; nothing is stored', fields);
+        return 'lease_lost';
+      }
+      log('warn', 'attempt cut short by the drain deadline; the step is released to be claimed again at once', { ...fields, error: err });
+      return 'worker_shutdown';
+    } catch (storeErr) {
+      // The step stays in flight; its lease expires and another claim takes it over as `lease_expired`.
+      log('error', 'releasing the step at shutdown failed; it is retried once its lease expires', { ...fields, error: storeErr, attemptError: err });
+      return 'unrecorded';
     }
   }
 
@@ -176,6 +203,11 @@ export function createWorkerLoop(deps: {
       running = false;
       wake?.();
       await loop;
+    },
+    abort() {
+      running = false;
+      wake?.();
+      shutdown.abort();
     },
   };
 }

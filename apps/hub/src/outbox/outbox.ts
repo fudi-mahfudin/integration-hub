@@ -99,6 +99,16 @@ export interface Outbox {
    * lease changes and logs nothing, as for `storeOutcome`.
    */
   storeTransient(step: ClaimedStep, end: TransientEnd): Promise<TransientStored>;
+  /**
+   * Releases a step whose attempt a draining worker cut short at its drain
+   * deadline (#43), fenced by its lease, with its row in the attempt log as
+   * `worker_shutdown`: the step waits in `retry_wait`, claimable at once, so
+   * another worker takes it without waiting for the lease to expire. The
+   * attempt counts toward the cap, but never exhausts it: a restart doesn't
+   * dead-letter a case. Resolves to `false` when the claim had lost its lease,
+   * changing and logging nothing, as for `storeOutcome`.
+   */
+  release(step: ClaimedStep, end: { facts: AttemptFacts; readRetries: readonly ReadRetry[] }): Promise<boolean>;
 }
 
 /** Builds the outbox over the hub database. Only the composition root calls this. */
@@ -338,6 +348,23 @@ export function createOutbox(deps: {
       metrics.stepAttempt(step.name, 'transient', secondsSince(step.startedAt));
       if (stored === 'exhausted') metrics.stepDeadLettered(step.name, 'RETRIES_EXHAUSTED');
       return stored;
+    },
+
+    async release(step, end) {
+      const releasedStep = await db.transaction().execute(async (trx) => {
+        const now = clock();
+        await trx.selectFrom('case').select('id').where('id', '=', step.caseId).forUpdate().executeTakeFirstOrThrow();
+        const before = await readSteps(trx, step.caseId);
+        const updated = await holding(trx, step)
+          .set({ state: 'retry_wait', available_at: now, ...released, updated_at: now })
+          .executeTakeFirst();
+        if (updated.numUpdatedRows === 0n) return false;
+        await writeRest(trx, step.caseId, step.seq, before, withState(before, step.seq, 'retry_wait'), now);
+        await attemptRow(trx, step, now, { outcome: 'worker_shutdown', errorCode: null, facts: end.facts, readRetries: end.readRetries }).execute();
+        return true;
+      });
+      if (releasedStep) metrics.stepAttempt(step.name, 'worker_shutdown', secondsSince(step.startedAt));
+      return releasedStep;
     },
   };
 }

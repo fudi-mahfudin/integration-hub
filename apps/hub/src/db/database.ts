@@ -63,9 +63,11 @@ export interface StepTable {
  * call may take, so it stopped (#13). `discarded`: no longer written; rows
  * logged before #34 for an attempt whose late outcome the lease fence threw away.
  * `failed` and `attempt_budget_exceeded` are transient: the step waits in
- * `retry_wait`, unless it was the last attempt allowed.
+ * `retry_wait`, unless it was the last attempt allowed. `worker_shutdown`: a
+ * draining worker cut it short at its drain deadline (#43); the step is
+ * claimable again at once.
  */
-export type AttemptOutcome = 'completed' | 'dead_lettered' | 'discarded' | 'failed' | 'lease_expired' | 'attempt_budget_exceeded';
+export type AttemptOutcome = 'completed' | 'dead_lettered' | 'discarded' | 'failed' | 'lease_expired' | 'attempt_budget_exceeded' | 'worker_shutdown';
 
 /** One row of a step's append-only attempt log (#8); the database rejects updates and deletes. */
 export interface AttemptTable {
@@ -237,10 +239,18 @@ export interface Database {
 
 /**
  * Builds a Kysely instance over a Postgres pool. The pool connects lazily;
- * callers own it and must `destroy()` it. Only the composition root calls this.
+ * callers own it and must `destroy()` it. A connection Postgres drops (a
+ * restart, a cut network) is passed to `onDropped` and discarded by the pool,
+ * instead of crashing the process; readiness reports Postgres down meanwhile
+ * (#43). Only the composition root calls this.
  */
-export function createDatabase(databaseUrl: string): Kysely<Database> {
-  return new Kysely<Database>({
-    dialect: new PostgresDialect({ pool: new pg.Pool({ connectionString: databaseUrl }) }),
-  });
+export function createDatabase(databaseUrl: string, onDropped: (err: Error) => void): Kysely<Database> {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  // The pool listens on idle connections only; a checked-out one between two queries
+  // (inside a transaction) would emit its error unheard, and an unheard error ends the process.
+  // The query in progress, if any, fails on its own, and the pool discards the broken connection on release.
+  pool.on('connect', (client) => client.on('error', onDropped));
+  // The pool re-emits an idle connection's error, already passed to `onDropped` above: heard, not reported twice.
+  pool.on('error', () => {});
+  return new Kysely<Database>({ dialect: new PostgresDialect({ pool }) });
 }

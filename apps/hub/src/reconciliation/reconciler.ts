@@ -23,7 +23,11 @@ const RECONCILIATION_LOCK = 39_039;
 export interface Reconciler {
   /** Starts looking for runs to execute (and, on a schedule, requesting them). */
   start(): void;
-  /** Stops after the case being checked; a run cut short this way ends `failed`. Resolves once the loop has stopped. */
+  /**
+   * Stops at once (#43): the check in progress has its searches cut, the run
+   * in progress ends `interrupted` and is never resumed, and the advisory lock
+   * is released. Resolves once the loop has stopped.
+   */
   stop(): Promise<void>;
 }
 
@@ -88,6 +92,9 @@ export function createReconciler(deps: {
   let running = false;
   let loop: Promise<void> | undefined;
   let wake: (() => void) | undefined;
+  // Aborted by `stop()`: the check in progress has its searches cut.
+  const interruption = new AbortController();
+  const INTERRUPTED = 'the worker shut down before the run ended';
 
   const idle = () =>
     new Promise<void>((resolve) => {
@@ -102,7 +109,7 @@ export function createReconciler(deps: {
    * Ends a run that is still `running`: one another lock holder already
    * marked `failed` stays so, and `false` says the run is no longer this one's.
    */
-  async function endRun(session: Kysely<Database>, runId: string, status: 'completed' | 'completed_with_errors' | 'failed', error: string | null): Promise<boolean> {
+  async function endRun(session: Kysely<Database>, runId: string, status: RunMetricOutcome, error: string | null): Promise<boolean> {
     const ended = await session
       .updateTable('reconciliation_runs')
       .set({ status, ended_at: clock(), error })
@@ -146,14 +153,20 @@ export function createReconciler(deps: {
     try {
       outcome = await execute(session, run);
     } catch (err) {
-      log('error', 'reconciliation run failed', { runId: run.id, error: err });
-      await endRun(session, run.id, 'failed', messageOf(err));
+      if (interruption.signal.aborted) {
+        log('warn', 'reconciliation run interrupted; it is not resumed', { runId: run.id });
+        await endRun(session, run.id, 'interrupted', INTERRUPTED);
+        outcome = 'interrupted';
+      } else {
+        log('error', 'reconciliation run failed', { runId: run.id, error: err });
+        await endRun(session, run.id, 'failed', messageOf(err));
+      }
     } finally {
       metrics.reconciliationRun(run.trigger, outcome, elapsed());
     }
   }
 
-  /** Executes a run over its scope; resolves to how it ended: `failed` when it was cut short, or another worker had marked it so. */
+  /** Executes a run over its scope; resolves to how it ended: `interrupted` when the worker stopped it, `failed` when another worker had marked it so. */
   async function execute(session: Kysely<Database>, run: { id: string; case_ids: string[] | null; since: Date | null }): Promise<RunMetricOutcome> {
     let scope = session
       .selectFrom('case')
@@ -168,8 +181,9 @@ export function createReconciler(deps: {
     let unchecked = 0;
     for (const { id } of cases) {
       if (!running) {
-        await endRun(session, run.id, 'failed', 'the worker stopped before the run ended');
-        return 'failed';
+        log('warn', 'reconciliation run interrupted; it is not resumed', { runId: run.id });
+        await endRun(session, run.id, 'interrupted', INTERRUPTED);
+        return 'interrupted';
       }
       // Postgres generated these uuids as case ids.
       if ((await checkCase(session, run.id, id as CaseId)) === 'unchecked') unchecked++;
@@ -200,7 +214,7 @@ export function createReconciler(deps: {
     // A case that is moving again since the run listed it is not at rest.
     if (atRest.status === 'active') return record('skipped', [{ kind: 'skipped', snapshot: {} }]);
 
-    const calls: AttemptCalls = { budgetEndsAt: new Date(clock().getTime() + checkBudgetMs), readRetries: [] };
+    const calls: AttemptCalls = { budgetEndsAt: new Date(clock().getTime() + checkBudgetMs), readRetries: [], signal: interruption.signal };
     const satusehat = satusehatFor(calls);
     const visit = { organizationId: atRest.organizationId, visitId: atRest.visitId };
     let found: FoundRecords;
@@ -212,6 +226,8 @@ export function createReconciler(deps: {
         medicationDispenses: prescription ? await satusehat.readMedicationDispenses(prescription) : [],
       };
     } catch (err) {
+      // Cut by `stop()`: the run is interrupted, and this case was never checked.
+      if (interruption.signal.aborted) throw err;
       // Reported, not retried: the run ends `completed_with_errors`, and the next run checks the case again.
       log('warn', 'a reconciliation check failed; the case is unchecked', { runId, caseId, error: err });
       return record('unchecked', [{ kind: 'unchecked', snapshot: { error: messageOf(err), readRetries: calls.readRetries } }]);
@@ -293,6 +309,7 @@ export function createReconciler(deps: {
     async stop() {
       running = false;
       wake?.();
+      interruption.abort();
       await loop;
     },
   };

@@ -30,6 +30,7 @@ const PROBLEMS = {
   RECONCILIATION_RUNNING: { status: 409, title: 'A reconciliation run is already queued or running' },
   NOT_FOUND: { status: 404, title: 'Not found' },
   INTERNAL_ERROR: { status: 500, title: 'Internal error' },
+  SERVICE_DRAINING: { status: 503, title: 'The hub service is shutting down; send the request again' },
 } as const satisfies Record<string, { status: number; title: string }>;
 
 /** Every stable problem `code` the API answers with; each has a heading in docs/api.md. */
@@ -73,10 +74,13 @@ export class Problem extends Error {
   }
 }
 
-function sendProblem(reply: FastifyReply, problem: Problem): void {
+/** Renders `problem` as `application/problem+json`, with the headers its code calls for. */
+export function sendProblem(reply: FastifyReply, problem: Problem): FastifyReply {
   void reply.status(problem.status).header('content-type', 'application/problem+json');
   if (problem.code === 'UNAUTHENTICATED') void reply.header('www-authenticate', 'Bearer');
-  void reply.send(problem.toBody());
+  // A draining hub service (#43): ask again in 5s, on a new connection, which reaches another instance or the restarted one.
+  if (problem.code === 'SERVICE_DRAINING') void reply.header('retry-after', '5').header('connection', 'close');
+  return reply.send(problem.toBody());
 }
 
 /**
@@ -98,7 +102,8 @@ export class ProblemFilter implements ExceptionFilter {
           : undefined;
     if (problem) {
       this.log('info', 'request rejected', { errorCode: problem.code, status: problem.status });
-      return sendProblem(reply, problem);
+      sendProblem(reply, problem);
+      return;
     }
     this.log('error', 'unhandled error in a request', { errorCode: 'INTERNAL_ERROR', error: exception });
     sendProblem(reply, new Problem('INTERNAL_ERROR', []));

@@ -118,6 +118,19 @@ export interface HubConfig {
    */
   attemptBudgetMs: number;
   /**
+   * How long a worker told to stop (SIGTERM/SIGINT) lets its attempt in
+   * progress run before it aborts it and releases the step as
+   * `worker_shutdown` (`WORKER_DRAIN_DEADLINE_MS`, default 70s: the 60s
+   * attempt budget and a margin, so a normal attempt always ends on its own, #43).
+   */
+  workerDrainDeadlineMs: number;
+  /**
+   * How long the hub service keeps serving requests after its readiness turns
+   * `draining`, before it refuses them (`SHUTDOWN_DELAY_MS`, default 0): time
+   * for a load balancer to stop sending it any (#43).
+   */
+  shutdownDelayMs: number;
+  /**
    * Retries of steps whose attempt failed transiently (#13): a cap of 15
    * attempts, the smallest that keeps the big run's expected number of
    * exhausted steps under 0.01 at 30% faults; derivation:
@@ -220,6 +233,8 @@ export function loadConfig(env: Env): HubConfig {
     workerProcesses: parsePositiveInt('WORKER_PROCESSES', env.WORKER_PROCESSES ?? '2'),
     workerPollIntervalMs: parsePositiveInt('WORKER_POLL_INTERVAL_MS', env.WORKER_POLL_INTERVAL_MS ?? '1000'),
     attemptBudgetMs: parsePositiveInt('ATTEMPT_BUDGET_MS', env.ATTEMPT_BUDGET_MS ?? '60000'),
+    workerDrainDeadlineMs: parsePositiveInt('WORKER_DRAIN_DEADLINE_MS', env.WORKER_DRAIN_DEADLINE_MS ?? '70000'),
+    shutdownDelayMs: parseNonNegativeInt('SHUTDOWN_DELAY_MS', env.SHUTDOWN_DELAY_MS ?? '0'),
     retry: {
       maxAttempts: parsePositiveInt('RETRY_MAX_ATTEMPTS', env.RETRY_MAX_ATTEMPTS ?? '15'),
       backoffBaseMs: parsePositiveInt('RETRY_BACKOFF_BASE_MS', env.RETRY_BACKOFF_BASE_MS ?? '1000'),
