@@ -55,6 +55,8 @@ export function worldEnv(mockBaseUrl: URL, databaseUrl: string): Record<string, 
     SATUSEHAT_CLIENT_SECRET: world.organization.clientSecret,
     WORKER_POLL_INTERVAL_MS: '20',
     HUB_ADMIN_API_KEY: ADMIN_API_KEY,
+    // No scheduled reconciliation: its searches would show in the mock's log; a test requests the runs it needs.
+    RECONCILIATION_INTERVAL_MS: '0',
   };
 }
 

@@ -120,6 +120,19 @@ export interface HubConfig {
    * Full-jitter backoff base 1s, cap 60s; `Retry-After` clamped to 300s.
    */
   retry: RetryPolicy;
+  /** Reconciliation (#39), executed by the worker processes. */
+  reconciliation: ReconciliationConfig;
+}
+
+/** When reconciliation runs and which cases it checks by default (#39). */
+export interface ReconciliationConfig {
+  /**
+   * A scheduled run is requested once the last run started longer ago than
+   * this (`RECONCILIATION_INTERVAL_MS`, default 15 min); `0` turns the schedule off.
+   */
+  intervalMs: number;
+  /** A run checks the cases whose last change is within this long before it starts (`RECONCILIATION_LOOKBACK_MS`, default 7 days). */
+  lookbackMs: number;
 }
 
 type Env = Record<string, string | undefined>;
@@ -192,6 +205,10 @@ export function loadConfig(env: Env): HubConfig {
       backoffBaseMs: parsePositiveInt('RETRY_BACKOFF_BASE_MS', env.RETRY_BACKOFF_BASE_MS ?? '1000'),
       backoffCapMs: parsePositiveInt('RETRY_BACKOFF_CAP_MS', env.RETRY_BACKOFF_CAP_MS ?? '60000'),
       retryAfterCapMs: 300_000,
+    },
+    reconciliation: {
+      intervalMs: parseNonNegativeInt('RECONCILIATION_INTERVAL_MS', env.RECONCILIATION_INTERVAL_MS ?? '900000'),
+      lookbackMs: parsePositiveInt('RECONCILIATION_LOOKBACK_MS', env.RECONCILIATION_LOOKBACK_MS ?? '604800000'),
     },
   };
 }

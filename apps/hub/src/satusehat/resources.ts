@@ -21,7 +21,7 @@ const prescriptionItemSystem = (org: OrganizationId) => `http://sys-ids.kemkes.g
 const medicationSystem = (org: OrganizationId) => `http://sys-ids.kemkes.go.id/medication/${org}`;
 
 /** The coding system of KFA codes. */
-const KFA_SYSTEM = 'http://sys-ids.kemkes.go.id/kfa';
+export const KFA_SYSTEM = 'http://sys-ids.kemkes.go.id/kfa';
 
 /** The coding system of KFA dose forms. */
 const MEDICATION_FORM_SYSTEM = 'http://terminology.kemkes.go.id/CodeSystem/medication-form';

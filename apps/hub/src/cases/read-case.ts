@@ -1,5 +1,6 @@
 import type { Kysely } from 'kysely';
 import type { AttemptOutcome, Database } from '../db/database.js';
+import { readCaseDivergences, type DivergenceView } from '../reconciliation/runs.js';
 import { selectCaseSummaries, toCaseSummary, type CaseScope, type CaseSummary, type StallRule } from './case-summary.js';
 import type { RemoteRecordLeft } from './operator-actions.js';
 import { readPins, type StepPins } from './pins.js';
@@ -93,8 +94,8 @@ export interface CaseView extends CaseSummary {
   rejections: RejectionView[];
   /** The case's accepted source events, in the order the hub accepted them (#38). */
   events: EventView[];
-  /** What reconciliation found different at SATUSEHAT; always empty until reconciliation exists (#17). */
-  divergences: never[];
+  /** What the latest completed reconciliation run that covered the case found different at SATUSEHAT (#39); empty when none did. */
+  divergences: DivergenceView[];
   steps: CaseStepView[];
 }
 
@@ -147,6 +148,7 @@ export async function readCase(
         .orderBy('id')
         .execute();
       const rejections = await readRejections(trx, summary.source, summary.visitId);
+      const divergences = await readCaseDivergences(trx, caseId);
       const nameOf = (seq: number) => {
         const step = steps.find((s) => s.seq === seq);
         if (!step) throw new Error(`case ${caseId} has no step ${seq}`);
@@ -169,7 +171,7 @@ export async function readCase(
           : null,
         rejections,
         events: events.map((e) => ({ type: e.type, receivedAt: e.received_at.toISOString(), traceId: null, duplicates: e.duplicates })),
-        divergences: [],
+        divergences,
         steps: steps.map((s) => ({
           step: s.name,
           eventType: s.event_type,

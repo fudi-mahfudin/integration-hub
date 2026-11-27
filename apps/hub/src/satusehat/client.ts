@@ -2,9 +2,10 @@ import { z } from 'zod';
 import type { OrganizationId } from '../auth/source-systems.js';
 import type { Brand } from '../brand.js';
 import type { PrescriptionId, RemoteId, RemoteIdentifier, VisitId } from '../cases/case-model.js';
+import type { RecordAtSatusehat } from '../reconciliation/model.js';
 import type { SatusehatConfig } from '../config.js';
 import { SatusehatRequestError, SatusehatResponseError } from './errors.js';
-import { encounterSystem, prescriptionSystem, type FhirResource } from './resources.js';
+import { encounterSystem, KFA_SYSTEM, prescriptionSystem, type FhirResource } from './resources.js';
 import type { AttemptCalls, SatusehatTransport } from './transport.js';
 
 /** A SATUSEHAT patient's or practitioner's IHS number. */
@@ -84,6 +85,24 @@ export interface SatusehatClient {
   findMedicationDispenses(identifier: PrescriptionIdentifier): Promise<RemoteIdentifier[]>;
   /** Sends a built MedicationDispense (see `dispenseMedicationDispenseResource`); resolves to the record SATUSEHAT stored. */
   createMedicationDispense(medicationDispense: FhirResource): Promise<RemoteIdentifier>;
+  /**
+   * Every Encounter under the visit's business identifier, with the fields
+   * reconciliation compares (#39): `status`, `subject`,
+   * `participant.individual` and `location`.
+   */
+  readEncounters(identifier: VisitIdentifier): Promise<RecordAtSatusehat[]>;
+  /**
+   * Every MedicationRequest under the prescription's business identifier, with
+   * the fields reconciliation compares (#39): `status`, `subject`, `requester`,
+   * `encounter` and `medication` (the contained Medication's KFA code).
+   */
+  readMedicationRequests(identifier: PrescriptionIdentifier): Promise<RecordAtSatusehat[]>;
+  /**
+   * Every MedicationDispense under the prescription's business identifier, with
+   * the fields reconciliation compares (#39): `status`, `subject`,
+   * `performer.actor`, `context`, `authorizingPrescription` and `medication`.
+   */
+  readMedicationDispenses(identifier: PrescriptionIdentifier): Promise<RecordAtSatusehat[]>;
 }
 
 const NIK_SYSTEM = 'https://fhir.kemkes.go.id/id/nik';
@@ -96,6 +115,31 @@ const searchBundleSchema = z.object({
   entry: z.array(z.object({ resource: z.unknown() })).optional(),
 });
 const motherNikMatchSchema = storedRecordSchema.extend({ birthDate: z.string().optional() });
+/** A field reconciliation compares: a value of the wrong shape reads as absent, so it shows as a mismatch rather than failing the check. */
+const lenient = <T extends z.ZodType>(schema: T) => schema.optional().catch(undefined);
+const reference = lenient(z.object({ reference: lenient(z.string()) }));
+const comparedRecordSchema = storedRecordSchema.extend({
+  status: lenient(z.string()),
+  subject: reference,
+  participant: lenient(z.array(z.object({ individual: reference }))),
+  location: lenient(z.array(z.object({ location: reference }))),
+  requester: reference,
+  encounter: reference,
+  context: reference,
+  performer: lenient(z.array(z.object({ actor: reference }))),
+  authorizingPrescription: lenient(z.array(z.object({ reference: lenient(z.string()) }))),
+  contained: lenient(
+    z.array(z.object({ id: lenient(z.string()), code: lenient(z.object({ coding: lenient(z.array(z.object({ system: lenient(z.string()), code: lenient(z.string()) }))) })) })),
+  ),
+});
+type ComparedRecord = z.infer<typeof comparedRecordSchema>;
+
+/** The KFA code of a record's contained Medication `#medication`, as the hub sends it. */
+function medicationKfaCode(r: ComparedRecord): string | null {
+  const medication = r.contained?.find((c) => c.id === 'medication');
+  return medication?.code?.coding?.find((c) => c.system === KFA_SYSTEM)?.code ?? null;
+}
+
 const foundEncounterSchema = storedRecordSchema.extend({
   status: z.string().min(1),
   period: z.object({ end: z.string().optional() }).optional(),
@@ -164,6 +208,14 @@ export function createSatusehatClient(deps: {
       id: r.id as RemoteId,
       version: r.meta?.versionId ?? null,
     });
+  /** A search's hits with the fields reconciliation compares, each picked by `fieldsOf`. */
+  const readRecords =
+    (type: RemoteIdentifier['type'], fieldsOf: (r: ComparedRecord) => Record<string, string | null>) =>
+    async (identifier: string): Promise<RecordAtSatusehat[]> =>
+      (await search(type, identifier)).map((hit) => {
+        const found = parse(comparedRecordSchema, 'GET', hit);
+        return { remote: remoteIdentifierOf(type)(found), fields: fieldsOf(found) };
+      });
   const encounterRecord = remoteIdentifierOf('Encounter');
   const medicationRequestRecord = remoteIdentifierOf('MedicationRequest');
   const medicationDispenseRecord = remoteIdentifierOf('MedicationDispense');
@@ -204,6 +256,30 @@ export function createSatusehatClient(deps: {
       const stored = parse(storedRecordSchema, 'POST', await call('POST', 'MedicationDispense', 201, medicationDispense));
       return medicationDispenseRecord(stored);
     },
+    readEncounters: ({ organizationId, visitId }) =>
+      readRecords('Encounter', (r) => ({
+        status: r.status ?? null,
+        subject: r.subject?.reference ?? null,
+        'participant.individual': r.participant?.[0]?.individual?.reference ?? null,
+        location: r.location?.[0]?.location?.reference ?? null,
+      }))(`${encounterSystem(organizationId)}|${visitId}`),
+    readMedicationRequests: ({ organizationId, prescriptionId }) =>
+      readRecords('MedicationRequest', (r) => ({
+        status: r.status ?? null,
+        subject: r.subject?.reference ?? null,
+        requester: r.requester?.reference ?? null,
+        encounter: r.encounter?.reference ?? null,
+        medication: medicationKfaCode(r),
+      }))(`${prescriptionSystem(organizationId)}|${prescriptionId}`),
+    readMedicationDispenses: ({ organizationId, prescriptionId }) =>
+      readRecords('MedicationDispense', (r) => ({
+        status: r.status ?? null,
+        subject: r.subject?.reference ?? null,
+        'performer.actor': r.performer?.[0]?.actor?.reference ?? null,
+        context: r.context?.reference ?? null,
+        authorizingPrescription: r.authorizingPrescription?.[0]?.reference ?? null,
+        medication: medicationKfaCode(r),
+      }))(`${prescriptionSystem(organizationId)}|${prescriptionId}`),
   };
 }
 
