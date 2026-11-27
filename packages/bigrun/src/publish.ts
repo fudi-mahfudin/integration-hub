@@ -1,28 +1,37 @@
 // Publishing official runs: the results index and the README's big run
 // section. Only official runs are ever listed or published, pass or fail.
-import type { RunKind } from './settings.js';
+import { z } from 'zod';
 
-/** What the index and the README show of one run, taken from its report. */
-export interface IndexedRun {
+/** The repository, for links in the report and the README. */
+export const REPO = 'https://github.com/fudi-mahfudin/integration-hub';
+
+/**
+ * What the index and the README show of one run: the `summary` of its
+ * `report.json`, parsed with this schema when publishing reads it back.
+ */
+export const indexedRunSchema = z.object({
   /** Its directory under `results/bigrun/`, `<YYYY-MM-DD>-<shortsha>`. */
-  dir: string;
-  kind: RunKind;
-  verdict: 'PASS' | 'FAIL';
-  gitSha: string;
-  startedAt: string;
-  headline: {
-    events: number;
-    completedCases: number;
-    totalSeconds: number;
-    acceptedEventsPerSecond: number;
-    ingestP95Ms: number | null;
-    endToEndP95Seconds: number | null;
-    realizedReadFaultRate: number;
-    realizedWriteFaultRate: number;
-  };
+  dir: z.string(),
+  kind: z.enum(['official', 'ci', 'unofficial']),
+  verdict: z.enum(['PASS', 'FAIL']),
+  gitSha: z.string(),
+  startedAt: z.string(),
+  headline: z.object({
+    events: z.number(),
+    completedCases: z.number(),
+    totalSeconds: z.number(),
+    acceptedEventsPerSecond: z.number(),
+    ingestP95Ms: z.number().nullable(),
+    endToEndP95Seconds: z.number().nullable(),
+    realizedReadFaultRate: z.number(),
+    realizedWriteFaultRate: z.number(),
+  }),
   /** One line: CPU, cores, RAM, OS, Docker, Node. */
-  environment: string;
-}
+  environment: z.string(),
+});
+
+/** What the index and the README show of one run. */
+export type IndexedRun = z.infer<typeof indexedRunSchema>;
 
 /** Thrown when a run can't be published. */
 export class PublishError extends Error {
@@ -34,7 +43,8 @@ export class PublishError extends Error {
 
 const START = '<!-- bigrun:start -->';
 const END = '<!-- bigrun:end -->';
-const REPO = 'https://github.com/fudi-mahfudin/integration-hub';
+/** A run's start as the index and README show it: `2026-11-27 01:00`, UTC. */
+const startedAtMinute = (run: IndexedRun) => run.startedAt.slice(0, 16).replace('T', ' ');
 const INDEX_HEADER = [
   '# Big run results',
   '',
@@ -62,7 +72,7 @@ export function publishSection(readme: string, run: IndexedRun): string {
   const h = run.headline;
   const percent = (rate: number) => `${(rate * 100).toFixed(1)}%`;
   const section = [
-    `Latest official run: **${run.verdict}**, [\`${run.dir}\`](results/bigrun/${run.dir}/report.md), started ${run.startedAt.slice(0, 16).replace('T', ' ')} UTC at \`${run.gitSha.slice(0, 7)}\`.`,
+    `Latest official run: **${run.verdict}**, [\`${run.dir}\`](results/bigrun/${run.dir}/report.md), started ${startedAtMinute(run)} UTC at \`${run.gitSha.slice(0, 7)}\`.`,
     '',
     '| | |',
     '|---|---|',
@@ -85,7 +95,7 @@ export function publishSection(readme: string, run: IndexedRun): string {
 export function updateIndex(index: string | null, run: IndexedRun): string {
   requireOfficial(run);
   const rows = (index ?? '').split('\n').filter((line) => line.startsWith('| ') && !line.startsWith('| Run ') && !line.startsWith(`| ${run.dir} |`));
-  const row = `| ${run.dir} | [${run.verdict}](${run.dir}/report.md) | ${run.startedAt.slice(0, 16).replace('T', ' ')} | \`${run.gitSha.slice(0, 7)}\` | ${run.headline.events.toLocaleString('en-US')} | ${(run.headline.totalSeconds / 60).toFixed(1)} min |`;
+  const row = `| ${run.dir} | [${run.verdict}](${run.dir}/report.md) | ${startedAtMinute(run)} | \`${run.gitSha.slice(0, 7)}\` | ${run.headline.events.toLocaleString('en-US')} | ${(run.headline.totalSeconds / 60).toFixed(1)} min |`;
   const sorted = [row, ...rows].toSorted((a, b) => (b.split('|')[1] ?? '').localeCompare(a.split('|')[1] ?? ''));
   return `${[...INDEX_HEADER, ...sorted].join('\n')}\n`;
 }

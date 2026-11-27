@@ -300,8 +300,9 @@ const PAGE_SIZE = 500;
 
 /**
  * Reads the case list, newest first, until it has shown every wanted case or
- * ends: the batch's cases are the newest, so a few pages cover them however
- * many cases the hub holds. A failed read shows what it got so far; the
+ * ends. While no other batch opens cases at the same time, the batch's cases
+ * are the newest, so a few pages cover them however many older cases the hub
+ * holds; otherwise it pages further. A failed read shows what it got so far; the
  * cases it missed are read again on the next poll.
  */
 async function readCases(hub: HubTarget, wanted: ReadonlySet<CaseId>): Promise<Map<CaseId, CaseRow>> {

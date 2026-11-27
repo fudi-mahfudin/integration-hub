@@ -3,7 +3,7 @@
 // shows beside it (information only, never a pass criterion).
 import type { LogEntry, MockReport } from '@integration-hub/mock-satusehat/client';
 import type { BatchResult } from '@integration-hub/simulator';
-import { faultOfRule, type FaultGroup } from './fault-rules.js';
+import { faultOfRule, WRITES, type FaultGroup } from './fault-rules.js';
 import type { CaseView } from './hub-cases.js';
 import type { ManifestVisit } from './manifest.js';
 import type { BigRunCommitments } from './settings.js';
@@ -30,8 +30,8 @@ export interface InvariantCheck {
   pass: boolean;
 }
 
-/** A case of the run that did not complete. */
-export interface StuckCase {
+/** A case of the run that did not complete: waiting, active, dead-lettered, abandoned, or never opened. */
+export interface UnfinishedCase {
   visitId: string;
   caseId: string | null;
   status: string;
@@ -68,8 +68,8 @@ export interface RealizedFaults {
   byKind: Record<string, number>;
 }
 
-/** Which platform API a call went to. */
-export type Upstream = 'token' | 'fhir' | 'kfa';
+/** Which platform API a call went to, by its path at the mock. */
+export type PlatformApi = 'token' | 'fhir' | 'kfa';
 /** An answer's HTTP status class, or `cut` for a connection dropped without one. */
 export type StatusClass = '2xx' | '3xx' | '4xx' | '5xx' | 'cut';
 
@@ -82,7 +82,7 @@ export interface Measurements {
   endToEndSeconds: Percentiles;
   attemptsPerStep: Record<string, AttemptStats>;
   faults: Record<FaultGroup, RealizedFaults>;
-  upstreamCalls: Partial<Record<Upstream, Partial<Record<StatusClass, number>>>>;
+  platformApiCalls: Partial<Record<PlatformApi, Partial<Record<StatusClass, number>>>>;
   /** Sending, then waiting after the last send, and both. */
   durationsSeconds: { send: number; drain: number; total: number };
 }
@@ -91,14 +91,16 @@ export interface Measurements {
 export interface Judgement {
   verdict: 'PASS' | 'FAIL';
   invariants: InvariantCheck[];
-  stuckCases: StuckCase[];
+  unfinishedCases: UnfinishedCase[];
   /** Manifest visits whose effects at the mock were not the four in order, with what they were. */
   mockSideMismatches: { visitId: string; effects: string[] }[];
   measurements: Measurements;
 }
 
 /** FHIR resources the hub writes; a POST or PUT of one is a write. */
-const WRITTEN_TYPES = new Set(['Encounter', 'MedicationRequest', 'MedicationDispense']);
+const WRITTEN_TYPES = new Set<string>(WRITES.map((w) => w.resourceType));
+/** Step states in which a worker has the step, or may claim it. */
+const OPEN_STATES = new Set(['ready', 'in_flight', 'retry_wait']);
 
 /**
  * Judges a run. PASS only if every committed invariant holds: every answer
@@ -112,6 +114,7 @@ export function judge(input: JudgeInput): Judgement {
   const casesOf = (status: string) => cases.filter((c) => c.status === status).length;
   const completedSteps = cases.reduce((n, c) => n + c.steps.filter((s) => s.state === 'completed').length, 0);
 
+  const openSteps = cases.reduce((n, c) => n + c.steps.filter((s) => OPEN_STATES.has(s.state)).length, 0);
   const answeredAsExpected = batch.answers.filter((a) => a.status === 202 && a.replayed === (a.role === 'duplicate')).length;
   const mockSideMismatches = visits.flatMap((visit) => {
     const effects = mockLog
@@ -128,7 +131,10 @@ export function judge(input: JudgeInput): Judgement {
       ...check('every send answered as expected', bigRun.events.total, answeredAsExpected),
       pass: answeredAsExpected === bigRun.events.total && batch.answers.length === bigRun.events.total,
     },
+    // The simulator's own checks: a concurrent pair answered one fresh and one replay, a replay with the original's body, every send answered.
+    check('every simulator check held', 0, batch.problems.length),
     check('the batch drained', 'completed', batch.ending),
+    check('steps claimable, in flight or in retry_wait', 0, openSteps),
     check('completed cases', hubSide.completedCases, casesOf('completed')),
     check('waiting cases', hubSide.waitingCases, casesOf('waiting')),
     check('dead-lettered cases', hubSide.deadLetteredCases, casesOf('dead_lettered')),
@@ -140,8 +146,8 @@ export function judge(input: JudgeInput): Judgement {
     check('mock report: overlapping requests', 0, mockReport.overlap.length),
   ];
 
-  const byVisit = new Map(cases.map((c) => [c.visitId, c]));
-  const stuckCases: StuckCase[] = visits.flatMap(({ visitId }) => {
+  const byVisit = new Map<string, CaseView>(cases.map((c) => [c.visitId, c]));
+  const unfinishedCases: UnfinishedCase[] = visits.flatMap(({ visitId }) => {
     const view = byVisit.get(visitId);
     if (view?.status === 'completed') return [];
     const current = view?.steps.find((s) => s.step === view.currentStep);
@@ -161,7 +167,7 @@ export function judge(input: JudgeInput): Judgement {
   return {
     verdict: invariants.every((c) => c.pass) ? 'PASS' : 'FAIL',
     invariants,
-    stuckCases,
+    unfinishedCases,
     mockSideMismatches,
     measurements: measure(batch, cases, mockLog, completedSteps),
   };
@@ -169,7 +175,8 @@ export function judge(input: JudgeInput): Judgement {
 
 function measure(batch: BatchResult, cases: readonly CaseView[], mockLog: readonly LogEntry[], completedSteps: number): Measurements {
   const seconds = (ms: number) => ms / 1000;
-  const accepted = batch.answers.filter((a) => a.status === 202).length;
+  // Late duplicates go after the sending window, once their cases completed, so they don't count towards its rate.
+  const accepted = batch.answers.filter((a) => a.status === 202 && !(a.role === 'duplicate' && a.timing === 'late')).length;
 
   const endToEnd = cases.flatMap((c) => {
     if (c.status !== 'completed') return [];
@@ -194,7 +201,7 @@ function measure(batch: BatchResult, cases: readonly CaseView[], mockLog: readon
   }
 
   const faults: Record<FaultGroup, RealizedFaults> = { reads: emptyFaults(), writes: emptyFaults() };
-  const upstreamCalls: Measurements['upstreamCalls'] = {};
+  const platformApiCalls: Measurements['platformApiCalls'] = {};
   for (const e of mockLog) {
     const group = groupOf(e);
     if (group !== null) {
@@ -206,10 +213,10 @@ function measure(batch: BatchResult, cases: readonly CaseView[], mockLog: readon
         tally.byKind[kind] = (tally.byKind[kind] ?? 0) + 1;
       }
     }
-    const upstream = upstreamOf(e.path);
-    if (upstream !== null) {
-      const statusClass: StatusClass = e.response.status === null ? 'cut' : (`${Math.floor(e.response.status / 100)}xx` as StatusClass);
-      const classes = (upstreamCalls[upstream] ??= {});
+    const api = platformApiOf(e.path);
+    if (api !== null) {
+      const statusClass = statusClassOf(e.response.status);
+      const classes = (platformApiCalls[api] ??= {});
       classes[statusClass] = (classes[statusClass] ?? 0) + 1;
     }
   }
@@ -224,7 +231,7 @@ function measure(batch: BatchResult, cases: readonly CaseView[], mockLog: readon
     endToEndSeconds: percentiles(endToEnd),
     attemptsPerStep,
     faults,
-    upstreamCalls,
+    platformApiCalls,
     durationsSeconds: {
       send: seconds(batch.sendsEndedAfterMs),
       drain: seconds(batch.endedAfterMs - batch.sendsEndedAfterMs),
@@ -242,7 +249,15 @@ function groupOf(e: LogEntry): FaultGroup | null {
   return null;
 }
 
-function upstreamOf(path: string): Upstream | null {
+function statusClassOf(status: number | null): StatusClass {
+  if (status === null) return 'cut';
+  if (status < 300) return '2xx';
+  if (status < 400) return '3xx';
+  if (status < 500) return '4xx';
+  return '5xx';
+}
+
+function platformApiOf(path: string): PlatformApi | null {
   if (path.startsWith('/oauth2/')) return 'token';
   if (path.startsWith('/fhir-r4/')) return 'fhir';
   if (path.startsWith('/kfa-v2/')) return 'kfa';

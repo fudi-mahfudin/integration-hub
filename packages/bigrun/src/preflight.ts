@@ -70,7 +70,7 @@ export function checkTopology(bigRun: BigRunCommitments, containers: readonly Co
   }
 
   const hubs = containers.filter((c) => c.service === 'hub');
-  const workers = containers.filter((c) => /^worker-\d+$/.test(c.service));
+  const workers = containers.filter(isWorker);
   if (hubs.length !== topology.hubServices) problems.push(`${hubs.length} hub services run, committed ${topology.hubServices}`);
   if (workers.length !== topology.workerProcesses) problems.push(`${workers.length} worker processes run, committed ${topology.workerProcesses}`);
 
@@ -110,6 +110,11 @@ export function checkTopology(bigRun: BigRunCommitments, containers: readonly Co
     }
   }
   return problems;
+}
+
+/** Whether a container is one of the worker processes (`worker-1`, `worker-2`, …). */
+export function isWorker(container: ContainerFacts): boolean {
+  return /^worker-\d+$/.test(container.service);
 }
 
 /** A compose memory limit (`512m`, `1g`) in bytes. */

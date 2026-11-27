@@ -2,7 +2,7 @@
 import type { BatchEnding } from '@integration-hub/simulator';
 import type { Judgement } from './judge.js';
 import type { PrometheusMeasurements } from './prometheus.js';
-import type { IndexedRun } from './publish.js';
+import { REPO, type IndexedRun } from './publish.js';
 import type { ReconciliationOutcome } from './reconciliation.js';
 import type { Override, RunKind } from './settings.js';
 import type { Environment } from './system.js';
@@ -29,7 +29,11 @@ export interface Report {
   faultSeed: number;
   events: { visits: number; total: number };
   invariants: Judgement['invariants'];
-  stuckCases: Judgement['stuckCases'];
+  unfinishedCases: Judgement['unfinishedCases'];
+  /** Cases the case API could not show after waiting ended, with why; each counts as not completed. */
+  unreadableCases: { caseId: string; error: string }[];
+  /** Why the mock's log or report could not be read, or null; without them every mock-side check fails. */
+  mockReadError: string | null;
   mockSideMismatches: Judgement['mockSideMismatches'];
   /** The simulator's failed checks (first 100), each naming its visit. */
   simulatorProblems: string[];
@@ -41,8 +45,7 @@ export interface Report {
   mockLog: { file: string; releaseTag: string | null };
 }
 
-const REPO = 'https://github.com/fudi-mahfudin/integration-hub';
-const fixed = (value: number | null, digits: number, unit = '') => (value === null ? 'n/a' : `${value.toFixed(digits)}${unit}`);
+const fixed = (value: number | null, digits: number) => (value === null ? 'n/a' : value.toFixed(digits));
 
 /** The report as Markdown, for `report.md`. */
 export function renderReport(report: Report): string {
@@ -79,12 +82,16 @@ export function renderReport(report: Report): string {
     ...report.invariants.map((c) => `| ${c.name} | ${c.expected} | ${c.actual} | ${c.pass ? 'PASS' : '**FAIL**'} |`),
     '',
   );
-  if (report.stuckCases.length > 0) {
-    lines.push(`## Stuck cases (${report.stuckCases.length})`, '', '| Visit | Case | Status | Step | Waiting for | Dead-letter reason | Attempts |', '|---|---|---|---|---|---|---|');
-    for (const s of report.stuckCases.slice(0, 200)) {
+  if (report.mockReadError !== null) lines.push(`**The mock could not be read:** ${report.mockReadError}. Every mock-side check fails.`, '');
+  if (report.unreadableCases.length > 0) {
+    lines.push(`## Cases the case API could not show (${report.unreadableCases.length})`, '', ...report.unreadableCases.slice(0, 50).map((c) => `- ${c.caseId}: ${c.error}`), '');
+  }
+  if (report.unfinishedCases.length > 0) {
+    lines.push(`## Unfinished cases (${report.unfinishedCases.length})`, '', '| Visit | Case | Status | Step | Waiting for | Dead-letter reason | Attempts |', '|---|---|---|---|---|---|---|');
+    for (const s of report.unfinishedCases.slice(0, 200)) {
       lines.push(`| ${s.visitId} | ${s.caseId ?? '-'} | ${s.status} | ${s.currentStep ?? '-'} | ${s.waitingFor ?? '-'} | ${s.deadLetterReason ?? '-'} | ${s.attempts} |`);
     }
-    if (report.stuckCases.length > 200) lines.push('', `…and ${report.stuckCases.length - 200} more in report.json.`);
+    if (report.unfinishedCases.length > 200) lines.push('', `…and ${report.unfinishedCases.length - 200} more in report.json.`);
     lines.push('');
   }
   if (report.mockSideMismatches.length > 0) {
@@ -130,11 +137,11 @@ export function renderReport(report: Report): string {
       ([step, a]) => `| ${step} | ${a.mean.toFixed(2)} | ${a.p99} | ${a.max} | ${Object.entries(a.histogram).map(([n, count]) => `${n}: ${count}`).join(', ')} |`,
     ),
     '',
-    '### Upstream calls by status class (mock log)',
+    '### Platform API calls by status class (mock log)',
     '',
-    '| Upstream | 2xx | 4xx | 5xx | Cut |',
+    '| Platform API | 2xx | 4xx | 5xx | Cut |',
     '|---|---|---|---|---|',
-    ...Object.entries(m.upstreamCalls).map(([upstream, c]) => `| ${upstream} | ${c['2xx'] ?? 0} | ${c['4xx'] ?? 0} | ${c['5xx'] ?? 0} | ${c.cut ?? 0} |`),
+    ...Object.entries(m.platformApiCalls).map(([api, c]) => `| ${api} | ${c['2xx'] ?? 0} | ${c['4xx'] ?? 0} | ${c['5xx'] ?? 0} | ${c.cut ?? 0} |`),
     '',
     '### Reconciliation after the drain',
     '',
@@ -180,7 +187,7 @@ export function indexedRun(report: Report): IndexedRun {
     startedAt: report.startedAt,
     headline: {
       events: report.events.total,
-      completedCases: Number(report.invariants.find((c) => c.name === 'completed cases')?.actual ?? 0),
+      completedCases: report.events.visits - report.unfinishedCases.length,
       totalSeconds: m.durationsSeconds.total,
       acceptedEventsPerSecond: m.throughput.acceptedEventsPerSecond,
       ingestP95Ms: m.ingestLatencyMs.p95,

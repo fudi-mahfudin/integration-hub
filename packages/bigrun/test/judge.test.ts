@@ -1,5 +1,5 @@
 import type { LogEntry, MockReport } from '@integration-hub/mock-satusehat/client';
-import type { BatchResult, SendAnswer } from '@integration-hub/simulator';
+import type { BatchResult, CaseId, SendAnswer, VisitId } from '@integration-hub/simulator';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { CaseView } from '../src/hub-cases.js';
@@ -69,8 +69,9 @@ const batch = (overrides: Partial<BatchResult> = {}): BatchResult =>
 function completedCase(visitId: string, e2eSeconds: number, attempts: [number, number, number, number]): CaseView {
   const at = (s: number) => new Date(Date.parse('2026-11-27T01:00:00Z') + s * 1000).toISOString();
   return {
-    caseId: `C-${visitId}`,
-    visitId,
+    // Branded ids built from plain test strings.
+    caseId: `C-${visitId}` as CaseId,
+    visitId: visitId as VisitId,
     status: 'completed',
     currentStep: null,
     waitingFor: null,
@@ -143,7 +144,9 @@ describe('judge', () => {
     expect(judgement.invariants.filter((check) => !check.pass)).toEqual([]);
     expect(judgement.invariants.map((check) => check.name)).toEqual([
       'every send answered as expected',
+      'every simulator check held',
       'the batch drained',
+      'steps claimable, in flight or in retry_wait',
       'completed cases',
       'waiting cases',
       'dead-lettered cases',
@@ -154,7 +157,23 @@ describe('judge', () => {
       'mock report: out-of-order effects',
       'mock report: overlapping requests',
     ]);
-    expect(judgement.stuckCases).toEqual([]);
+    expect(judgement.unfinishedCases).toEqual([]);
+  });
+
+  it('fails on any failed simulator check, such as a concurrent pair answered fresh twice or a replay with another body', () => {
+    const problem = 'V-A visit.started: a concurrent pair was answered 202 and 202, not one 202 and its replay';
+    const judgement = judge(input({ batch: batch({ problems: [problem] }) }));
+    expect(judgement.verdict).toBe('FAIL');
+    expect(judgement.invariants.filter((check) => !check.pass).map((check) => [check.name, check.expected, check.actual])).toEqual([
+      ['every simulator check held', 0, 1],
+    ]);
+  });
+
+  it('fails the drain while a step of the run is still claimable, in flight or in retry_wait', () => {
+    const open = completedCase('V-B', 8, [1, 1, 1, 1]);
+    open.steps = open.steps.map((step) => (step.step === 'update_visit' ? { ...step, state: 'retry_wait' } : step));
+    const judgement = judge(input({ cases: [completedCase('V-A', 4, [1, 1, 1, 1]), open] }));
+    expect(judgement.invariants.find((check) => check.name === 'steps claimable, in flight or in retry_wait')).toMatchObject({ expected: 0, actual: 1, pass: false });
   });
 
   it('fails when a visit is missing an effect at the mock, or the mock reports a duplicate', () => {
@@ -196,7 +215,7 @@ describe('judge', () => {
       ['dead-lettered cases', 0, 1],
       ['completed steps', 8, 6],
     ]);
-    expect(judgement.stuckCases).toEqual([
+    expect(judgement.unfinishedCases).toEqual([
       { visitId: 'V-B', caseId: 'C-V-B', status: 'dead_lettered', currentStep: 'submit_dispense', waitingFor: null, deadLetterReason: 'RETRIES_EXHAUSTED', attempts: 15 },
     ]);
   });
@@ -209,6 +228,12 @@ describe('judge', () => {
     expect(measurements.attemptsPerStep.create_visit).toEqual({ max: 3, p99: 3, mean: 2, histogram: { 1: 1, 3: 1 } });
     expect(measurements.attemptsPerStep.submit_prescription).toEqual({ max: 2, p99: 2, mean: 1.5, histogram: { 1: 1, 2: 1 } });
     expect(measurements.throughput).toEqual({ acceptedEventsPerSecond: 5, completedStepsPerSecond: 0.8 });
+  });
+
+  it('counts late duplicates out of the accepted rate, as they go after the sending window', () => {
+    const late = { ...answer('V-A', 'drug.dispensed', 'duplicate', 10), timing: 'late' as const, sentAfterMs: 5_000 };
+    const { measurements } = judge(input({ batch: batch({ answers: [...answers(), late] }) }));
+    expect(measurements.throughput.acceptedEventsPerSecond).toBe(5);
     expect(measurements.durationsSeconds).toEqual({ send: 2, drain: 8, total: 10 });
   });
 
@@ -216,7 +241,7 @@ describe('judge', () => {
     const { measurements } = judge(input());
     expect(measurements.faults.reads).toEqual({ calls: 5, faulted: 2, rate: 0.4, byKind: { http_503: 2 } });
     expect(measurements.faults.writes).toEqual({ calls: 8, faulted: 2, rate: 0.25, byKind: { timeout_after_apply: 2 } });
-    expect(measurements.upstreamCalls).toEqual({
+    expect(measurements.platformApiCalls).toEqual({
       token: { '2xx': 1 },
       kfa: { '2xx': 1 },
       fhir: { '2xx': 8, '5xx': 2, cut: 2 },

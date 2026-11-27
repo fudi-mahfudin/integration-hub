@@ -10,7 +10,7 @@ type Kind = Rule['kind'];
 export type FaultGroup = 'reads' | 'writes';
 
 /** The FHIR writes the hub sends, as the mock files them: every create, and the Encounter update. Token requests are POSTs too, so writes are named exactly. */
-const WRITES = [
+export const WRITES = [
   { method: 'POST', resourceType: 'Encounter' },
   { method: 'POST', resourceType: 'MedicationRequest' },
   { method: 'POST', resourceType: 'MedicationDispense' },
@@ -32,8 +32,8 @@ interface Slice {
  *
  * The mock tries rules in order and the first that hits wins, each hitting
  * on its own draw, so a slice's rate is its weight given that no earlier
- * slice of the group hit: `weight / (100 - weights before it)`. Each kind is
- * then hit on exactly its committed share of the group's calls.
+ * slice of the group hit: `weight / (100 - weights before it)`. Each kind's
+ * expected share of the group's calls is then its committed weight.
  *
  * Rule ids are `<group>:<kind>[:<variant>]`, so a log entry's `fault` names its group and kind.
  */
@@ -43,7 +43,7 @@ export function faultRulesFor(bigRun: BigRunCommitments): FaultRulesInput {
   const retryAfterSeconds = params.retryAfterSeconds;
 
   const readSlices: Slice[] = [];
-  for (const [kind, percent] of Object.entries(reads.weights) as [keyof typeof reads.weights, number][]) {
+  for (const [kind, percent] of entries(reads.weights)) {
     if (kind === 'http_503') {
       const withRetryAfter = reads.variants.http_503.withRetryAfter;
       readSlices.push({ name: 'http_503:retry-after', kind, params: { retryAfter: { form: 'seconds', seconds: retryAfterSeconds } }, percent: percent * withRetryAfter });
@@ -58,7 +58,7 @@ export function faultRulesFor(bigRun: BigRunCommitments): FaultRulesInput {
       readSlices.push({ name: kind, kind, params: kind === 'timeout' ? { ms: holdMs } : {}, percent });
     }
   }
-  const writeSlices: Slice[] = (Object.entries(writes.weights) as [keyof typeof writes.weights, number][]).map(([kind, percent]) => ({
+  const writeSlices: Slice[] = entries(writes.weights).map(([kind, percent]) => ({
     name: kind,
     kind,
     params: kind === 'timeout' || kind === 'timeout_after_apply' ? { ms: holdMs } : {},
@@ -83,6 +83,12 @@ export function faultOfRule(ruleId: string): { group: FaultGroup; kind: string }
   const [group, kind] = ruleId.split(':');
   if ((group !== 'reads' && group !== 'writes') || kind === undefined) return null;
   return { group, kind };
+}
+
+/** A weights object's entries, keyed by its own kinds. */
+function entries<K extends string>(weights: Record<K, number>): [K, number][] {
+  // Object.entries widens keys to string; the weights schemas are strict, so every key is one of K.
+  return Object.entries(weights) as [K, number][];
 }
 
 /** Each slice with its conditional rate, in order. */

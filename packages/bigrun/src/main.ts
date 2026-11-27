@@ -2,7 +2,7 @@
 // and its composition root. Brings the stack up as committed, writes the
 // manifest, sets the faults, drives the simulator, judges both sides, and
 // writes the report. Exits 0 on PASS, 1 on FAIL, 2 when it refuses to run.
-import { MockSatusehatClient } from '@integration-hub/mock-satusehat/client';
+import { MockSatusehatClient, type LogEntry, type MockReport } from '@integration-hub/mock-satusehat/client';
 import { DEFAULT_WORLD_PATH, loadWorld } from '@integration-hub/mock-satusehat/world';
 import { planBatch, runBatch, type BatchOptions, type Plan } from '@integration-hub/simulator';
 import { existsSync } from 'node:fs';
@@ -97,10 +97,19 @@ const batch = await runBatch(
 const endedAt = new Date();
 log('waiting ended', { ending: batch.ending, problems: batch.problems.length });
 
-const cases = await readCaseViews(hubUrl, env.BIGRUN_ADMIN_API_KEY, batch.cases.map((c) => c.caseId));
-const mockLog = await mock.logNdjson();
-const mockReport = await mock.report();
-const judgement = judge({ bigRun, visits: manifest.visits, batch, cases, mockLog, mockReport });
+const caseReads = await readCaseViews({ baseUrl: hubUrl, adminApiKey: env.BIGRUN_ADMIN_API_KEY }, batch.cases.map((c) => c.caseId));
+// A mock that can't be read leaves the log empty, so every visit's mock-side check fails: the FAIL report is still written.
+let mockLog: LogEntry[] = [];
+let mockReport: MockReport = { faultSeed: null, duplicates: [], outOfOrder: [], overlap: [] };
+let mockReadError: string | null = null;
+try {
+  mockLog = await mock.logNdjson();
+  mockReport = await mock.report();
+} catch (err) {
+  mockReadError = err instanceof Error ? err.message : String(err);
+  log('reading the mock failed; every mock-side check fails', { error: mockReadError });
+}
+const judgement = judge({ bigRun, visits: manifest.visits, batch, cases: caseReads.views, mockLog, mockReport });
 log('judged', { verdict: judgement.verdict });
 
 log('reconciling after the drain (information only)');
@@ -120,7 +129,9 @@ const report: Report = {
   faultSeed: faults.seed,
   events: { visits: bigRun.events.visits, total: bigRun.events.total },
   invariants: judgement.invariants,
-  stuckCases: judgement.stuckCases,
+  unfinishedCases: judgement.unfinishedCases,
+  unreadableCases: caseReads.unreadable,
+  mockReadError,
   mockSideMismatches: judgement.mockSideMismatches,
   simulatorProblems: batch.problems.slice(0, 100),
   measurements: judgement.measurements,
@@ -129,7 +140,8 @@ const report: Report = {
   environment,
   mockLog: { file: 'mock-log.ndjson.gz', releaseTag: kind === 'official' ? `bigrun-${dir.name}` : null },
 };
-await writeJson(`${dir.path}/report.json`, report);
+// `summary` is what `pnpm bigrun:publish` reads back, through its schema.
+await writeJson(`${dir.path}/report.json`, { ...report, summary: indexedRun(report) });
 await writeFile(`${dir.path}/report.md`, renderReport(report));
 await writeJson(`${dir.path}/mock-report.json`, mockReport);
 await writeFile(`${dir.path}/${report.mockLog.file}`, gzipSync(mockLog.map((entry) => JSON.stringify(entry)).join('\n')));

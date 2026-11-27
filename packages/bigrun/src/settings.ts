@@ -94,7 +94,7 @@ export type BigRunCommitments = z.infer<typeof bigRunSchema>;
 /**
  * What kind of run this is. `official`: the committed run, unmodified, from a
  * clean tree; only these are published. `ci`: the committed run scaled down to
- * {@link CI_VISITS} visits. `unofficial`: anything else, such as a run with
+ * the committed CI visits (`ciRun.visits`). `unofficial`: anything else, such as a run with
  * `--set` overrides.
  */
 export type RunKind = 'official' | 'ci' | 'unofficial';
@@ -123,8 +123,6 @@ export class SettingsError extends Error {
   }
 }
 
-/** How many visits the CI run has: about a tenth of the big run, with the same ratios. */
-export const CI_VISITS = 200;
 
 /**
  * Reads the `bigRun` section of the parsed commitments file and applies the
@@ -138,10 +136,10 @@ export function loadSettings(commitments: unknown, argv: readonly string[]): Set
   if (args.official && (args.ci || args.sets.length > 0)) {
     throw new SettingsError(`--official runs the committed big run unchanged, so it can't be combined with ${args.ci ? '--ci' : '--set'}`);
   }
-  const root = z.object({ bigRun: z.record(z.string(), z.unknown()) }).safeParse(commitments);
-  if (!root.success) throw new SettingsError('the commitments file must hold a "bigRun" object');
+  const root = z.object({ bigRun: z.record(z.string(), z.unknown()), ciRun: z.object({ visits: z.number().int().min(1) }) }).safeParse(commitments);
+  if (!root.success) throw new SettingsError('the commitments file must hold a "bigRun" object and "ciRun.visits"');
   let raw: unknown = structuredClone(root.data.bigRun);
-  if (args.ci) raw = scaledForCi(parse(raw));
+  if (args.ci) raw = scaledForCi(parse(raw), root.data.ciRun.visits);
   const overrides = args.sets.map((set) => {
     const override = parseOverride(set);
     raw = withValueAt(raw, override);
@@ -153,7 +151,7 @@ export function loadSettings(commitments: unknown, argv: readonly string[]): Set
 }
 
 function parseArgs(argv: readonly string[]): { official: boolean; ci: boolean; sets: string[] } {
-  const parsed = { official: false, ci: false, sets: [] as string[] };
+  const parsed: { official: boolean; ci: boolean; sets: string[] } = { official: false, ci: false, sets: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--official') parsed.official = true;
@@ -206,15 +204,15 @@ function withValueAt(raw: unknown, override: Override): unknown {
   return copy;
 }
 
-/** The big run at {@link CI_VISITS} visits: every count scaled, every ratio, weight and deadline kept. */
-function scaledForCi(bigRun: BigRunCommitments): BigRunCommitments {
+/** The big run at the committed CI visits (`ciRun.visits`): every count scaled, every ratio, weight and deadline kept. */
+function scaledForCi(bigRun: BigRunCommitments, visits: number): BigRunCommitments {
   const { events } = bigRun;
-  const uniqueEvents = CI_VISITS * events.eventsPerVisit;
+  const uniqueEvents = visits * events.eventsPerVisit;
   const duplicates = Math.round((uniqueEvents * events.duplicates) / events.uniqueEvents);
   return {
     ...bigRun,
-    events: { ...events, visits: CI_VISITS, uniqueEvents, duplicates, total: uniqueEvents + duplicates },
-    invariants: { ...bigRun.invariants, hubSide: { ...bigRun.invariants.hubSide, completedCases: CI_VISITS, completedSteps: uniqueEvents } },
+    events: { ...events, visits, uniqueEvents, duplicates, total: uniqueEvents + duplicates },
+    invariants: { ...bigRun.invariants, hubSide: { ...bigRun.invariants.hubSide, completedCases: visits, completedSteps: uniqueEvents } },
   };
 }
 

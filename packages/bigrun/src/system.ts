@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import { promisify } from 'node:util';
 import { z } from 'zod';
-import type { ContainerFacts, GitFacts } from './preflight.js';
+import { isWorker, type ContainerFacts, type GitFacts } from './preflight.js';
 
 const exec = promisify(execFile);
 
@@ -124,7 +124,7 @@ export async function captureEnvironment(repoRoot: string, containers: readonly 
     compose: composeVersion,
     dockerCpus: dockerCpus ?? 0,
     dockerRamGiB: gib(dockerMem ?? 0),
-    workerProcesses: containers.filter((c) => /^worker-\d+$/.test(c.service)).length,
+    workerProcesses: containers.filter(isWorker).length,
     containerLimits: containers.map(({ service, cpus, memoryBytes }) => ({ service, cpus, memoryBytes })).toSorted((a, b) => a.service.localeCompare(b.service)),
   };
 }
