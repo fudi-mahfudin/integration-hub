@@ -1,7 +1,7 @@
 // Publishing official load tests: `results/k6/INDEX.md` and the README's load
 // test section. Only official runs are ever listed or published, pass or fail.
 import { z } from 'zod';
-import { PublishError, REPO } from '../publish.js';
+import { indexWithRow, REPO, replaceSection, requireOfficial, startedAtMinute } from '../publish.js';
 
 /** What the index and the README show of one load test: the `summary` of its `report.json`. */
 export const indexedLoadTestSchema = z.object({
@@ -28,7 +28,6 @@ export type IndexedLoadTest = z.infer<typeof indexedLoadTestSchema>;
 
 const START = '<!-- loadtest:start -->';
 const END = '<!-- loadtest:end -->';
-const startedAtMinute = (run: IndexedLoadTest) => run.startedAt.slice(0, 16).replace('T', ' ');
 const msOrNa = (value: number | null) => (value === null ? 'n/a' : `${Math.round(value)} ms`);
 const percentOrNa = (rate: number | null) => (rate === null ? 'n/a' : `${(rate * 100).toFixed(3)}%`);
 const INDEX_HEADER = [
@@ -40,39 +39,30 @@ const INDEX_HEADER = [
   '|---|---|---|---|---|---|---|---|',
 ];
 
-function requireOfficial(run: IndexedLoadTest): void {
-  if (run.kind !== 'official') throw new PublishError(`only official load tests are published, and ${run.dir} is an ${run.kind} run`);
-}
-
 /** The README with the text between `<!-- loadtest:start -->` and `<!-- loadtest:end -->` replaced by the run's summary; nothing else changes. */
 export function publishLoadTestSection(readme: string, run: IndexedLoadTest): string {
   requireOfficial(run);
-  const start = readme.indexOf(START);
-  const end = readme.indexOf(END);
-  if (start === -1 || end === -1 || end < start) throw new PublishError(`the README needs a ${START} … ${END} section to publish into`);
-  const h = run.headline;
+  const headline = run.headline;
   const section = [
-    `Latest official load test: **${run.verdict}**, [\`${run.dir}\`](results/k6/${run.dir}/report.md), started ${startedAtMinute(run)} UTC at \`${run.gitSha.slice(0, 7)}\`.`,
+    `Latest official load test: **${run.verdict}**, [\`${run.dir}\`](results/k6/${run.dir}/report.md), started ${startedAtMinute(run.startedAt)} UTC at \`${run.gitSha.slice(0, 7)}\`.`,
     '',
     '| Measured phase | |',
     '|---|---|',
-    `| Arrival rate, committed / sent | ${h.eventsPerSecond} / ${h.requestsPerSecond ?? 'n/a'} events/s |`,
-    `| Ingest p95 / p99 (client) | ${msOrNa(h.ingestP95Ms)} / ${msOrNa(h.ingestP99Ms)} |`,
-    `| Non-2xx rate | ${percentOrNa(h.non2xxRate)} |`,
+    `| Arrival rate, committed / sent | ${headline.eventsPerSecond} / ${headline.requestsPerSecond ?? 'n/a'} events/s |`,
+    `| Ingest p95 / p99 (client) | ${msOrNa(headline.ingestP95Ms)} / ${msOrNa(headline.ingestP99Ms)} |`,
+    `| Non-2xx rate | ${percentOrNa(headline.non2xxRate)} |`,
     '',
     `Environment: ${run.environment}.`,
     '',
     'Every official load test: [results/k6/INDEX.md](results/k6/INDEX.md).',
   ].join('\n');
-  return `${readme.slice(0, start + START.length)}\n${section}\n${readme.slice(end)}`;
+  return replaceSection(readme, { start: START, end: END }, section);
 }
 
 /** The index (`results/k6/INDEX.md`, or null when there is none yet) with the run listed, newest first; a rerun of a directory replaces its row. */
 export function updateLoadTestIndex(index: string | null, run: IndexedLoadTest): string {
   requireOfficial(run);
-  const rows = (index ?? '').split('\n').filter((line) => line.startsWith('| ') && !line.startsWith('| Run ') && !line.startsWith(`| ${run.dir} |`));
-  const h = run.headline;
-  const row = `| ${run.dir} | [${run.verdict}](${run.dir}/report.md) | ${startedAtMinute(run)} | [\`${run.gitSha.slice(0, 7)}\`](${REPO}/commit/${run.gitSha}) | ${h.requestsPerSecond ?? 'n/a'} | ${msOrNa(h.ingestP95Ms)} | ${msOrNa(h.ingestP99Ms)} | ${percentOrNa(h.non2xxRate)} |`;
-  const sorted = [row, ...rows].toSorted((a, b) => (b.split('|')[1] ?? '').localeCompare(a.split('|')[1] ?? ''));
-  return `${[...INDEX_HEADER, ...sorted].join('\n')}\n`;
+  const headline = run.headline;
+  const row = `| ${run.dir} | [${run.verdict}](${run.dir}/report.md) | ${startedAtMinute(run.startedAt)} | [\`${run.gitSha.slice(0, 7)}\`](${REPO}/commit/${run.gitSha}) | ${headline.requestsPerSecond ?? 'n/a'} | ${msOrNa(headline.ingestP95Ms)} | ${msOrNa(headline.ingestP99Ms)} | ${percentOrNa(headline.non2xxRate)} |`;
+  return indexWithRow(index, INDEX_HEADER, run.dir, row);
 }

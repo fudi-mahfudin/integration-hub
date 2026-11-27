@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { z } from 'zod';
+import { harnessEnv } from './harness-env.js';
 import { judgeLoadTest } from './loadtest/judge.js';
 import { k6Options } from './loadtest/k6.js';
 import { publishLoadTestSection, updateLoadTestIndex } from './loadtest/publish.js';
@@ -25,14 +25,7 @@ import { captureEnvironment, COMMITMENTS_FILE, composeUp, inspectContainers, k6V
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const log = (msg: string, fields: Record<string, unknown> = {}) => console.log(JSON.stringify({ time: new Date().toISOString(), msg, ...fields }));
 
-/** Where the harness reaches the stack, read from the environment once: the same variables and defaults as the big run's. */
-const env = z
-  .object({
-    BIGRUN_HUB_URL: z.url().default('http://localhost:3000/'),
-    BIGRUN_MOCK_URL: z.url().default('http://localhost:3001/'),
-    BIGRUN_SOURCE_API_KEY: z.string().min(1).default('dev-source-key'),
-  })
-  .parse(process.env);
+const env = harnessEnv;
 /** Where k6 sends: it runs in compose, beside the hub service. */
 const K6_HUB_URL = 'http://hub:3000/';
 /** Where compose mounts the repository's `results/` in the `k6` container. */
@@ -77,24 +70,28 @@ const version = await k6Version(repoRoot);
 const startedAt = new Date();
 const runId = startedAt.getTime().toString(36).toUpperCase();
 const batch = loadTestBatch(bigRun, loadTest, runId);
-const lines = eventFile(planBatch(await loadWorld(DEFAULT_WORLD_PATH), batch));
+const eventFileLines = eventFile(planBatch(await loadWorld(DEFAULT_WORLD_PATH), batch));
 const requests = loadTestRequests(loadTest);
-if (lines.length < requests.warmUp + requests.load) refuse([`the event file has ${lines.length} requests, and the run can send ${requests.warmUp + requests.load}`]);
+if (eventFileLines.length < requests.warmUp + requests.load) refuse([`the event file has ${eventFileLines.length} requests, and the run can send ${requests.warmUp + requests.load}`]);
 const base = runDirectoryBase(startedAt, git.headSha);
 const parent = kind === 'official' ? 'results/k6' : 'results/k6-unofficial';
 const dir = await newRunDirectory(repoRoot, parent, kind === 'official' ? base : `${base}-${kind}`);
-const ndjson = `${lines.map((line) => JSON.stringify({ idempotencyKey: line.idempotencyKey, body: line.body })).join('\n')}\n`;
+const ndjson = `${eventFileLines.map((line) => JSON.stringify({ idempotencyKey: line.idempotencyKey, body: line.body })).join('\n')}\n`;
 await writeFile(`${dir.path}/events.ndjson`, ndjson);
 const options = k6Options(loadTest);
 await writeJson(`${dir.path}/k6-config.json`, { hubUrl: K6_HUB_URL, warmUpRequests: requests.warmUp, options });
-log('event file written', { dir: dir.path, requests: lines.length, duplicates: lines.filter((l) => l.duplicate).length });
+const duplicates = eventFileLines.filter((line) => line.duplicate).length;
+// The planned share in the requests the measured phase sends, if it sends one per arrival.
+const measuredLines = eventFileLines.slice(requests.warmUp, requests.warmUp + requests.load);
+const measuredDuplicateShare = measuredLines.filter((line) => line.duplicate).length / measuredLines.length;
+log('event file written', { dir: dir.path, requests: eventFileLines.length, duplicates, measuredDuplicateShare });
 
 log('running k6', { version });
 const exitCode = await runK6(repoRoot, `${K6_RESULTS}/${parent.slice('results/'.length)}/${dir.name}`, env.BIGRUN_SOURCE_API_KEY);
 const endedAt = new Date();
 const summaryPath = `${dir.path}/k6-summary.json`;
 const summary: unknown = existsSync(summaryPath) ? JSON.parse(await readFile(summaryPath, 'utf8')) : null;
-const judgement = judgeLoadTest(loadTest, summary);
+const judgement = judgeLoadTest(loadTest, exitCode, summary);
 
 const report: LoadTestReport = {
   dir: dir.name,
@@ -110,8 +107,9 @@ const report: LoadTestReport = {
     file: 'events.ndjson',
     seed: batch.seed,
     visits: batch.visits,
-    requests: lines.length,
-    duplicates: lines.filter((l) => l.duplicate).length,
+    requests: eventFileLines.length,
+    duplicates,
+    measuredDuplicateShare,
     sha256: createHash('sha256').update(ndjson).digest('hex'),
   },
   k6: { version, exitCode, preAllocatedVUs: options.scenarios.load.preAllocatedVUs, maxVUs: options.scenarios.load.maxVUs },

@@ -7,11 +7,16 @@ export interface ArrivalScenario {
   executor: 'constant-arrival-rate';
   /** The function of k6/ingest.js each iteration runs. */
   exec: 'ingest';
+  /** Arrivals per `timeUnit`: the committed events per second. */
   rate: number;
   timeUnit: '1s';
+  /** How long the phase lasts, e.g. `300s`. */
   duration: string;
+  /** When the phase starts after the test does, e.g. `30s`. */
   startTime: string;
+  /** VUs k6 sets up before the phase starts. */
   preAllocatedVUs: number;
+  /** The most VUs k6 may add when answers slow down; past them it drops arrivals. */
   maxVUs: number;
 }
 
@@ -19,7 +24,9 @@ export interface ArrivalScenario {
 export interface K6Options {
   /** `warmup` (absent for a zero-second warm-up) then `load`, the measured phase every threshold is on. */
   scenarios: { warmup?: ArrivalScenario; load: ArrivalScenario };
+  /** The committed thresholds as k6 expressions, by metric and scenario, e.g. `http_req_duration{scenario:load}`. */
   thresholds: Record<string, string[]>;
+  /** The trend statistics k6's summary holds, which the judge reads. */
   summaryTrendStats: string[];
 }
 

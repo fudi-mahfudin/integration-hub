@@ -7,6 +7,30 @@ import type { ReconciliationOutcome } from './reconciliation.js';
 import type { Override, RunKind } from './settings.js';
 import type { Environment } from './system.js';
 
+/** What fixes the commitments a run was judged by: the tree it ran from and the commitments file as read. */
+export interface Provenance {
+  gitSha: string;
+  /** `git status --porcelain` lines at the start; always empty for an official run. */
+  uncommitted: string[];
+  commitmentsSha256: string;
+  /** The last commit that changed the commitments file, or null if it never was committed. */
+  commitmentsCommit: { sha: string; date: string } | null;
+}
+
+/** A report's `## Provenance` section, as Markdown lines. */
+export function provenanceLines(provenance: Provenance): string[] {
+  return [
+    '## Provenance',
+    '',
+    `- Git SHA: [\`${provenance.gitSha}\`](${REPO}/commit/${provenance.gitSha})${provenance.uncommitted.length > 0 ? ` with ${provenance.uncommitted.length} uncommitted changes` : ''}`,
+    `- \`bigrun.commitments.json\` SHA-256: \`${provenance.commitmentsSha256}\``,
+    provenance.commitmentsCommit === null
+      ? '- The commitments file was never committed.'
+      : `- Its last commit: [\`${provenance.commitmentsCommit.sha.slice(0, 7)}\`](${REPO}/commit/${provenance.commitmentsCommit.sha}), ${provenance.commitmentsCommit.date}`,
+    '',
+  ];
+}
+
 /** Everything a run found: `report.json`. */
 export interface Report {
   dir: string;
@@ -16,14 +40,7 @@ export interface Report {
   startedAt: string;
   endedAt: string;
   ending: BatchEnding;
-  /** What fixes the commitments the run was judged by. */
-  provenance: {
-    gitSha: string;
-    /** `git status --porcelain` lines at the start; always empty for an official run. */
-    uncommitted: string[];
-    commitmentsSha256: string;
-    commitmentsCommit: { sha: string; date: string } | null;
-  };
+  provenance: Provenance;
   /** Committed values this run replaced (`--set`); a run with any is not official. */
   overrides: Override[];
   faultSeed: number;
@@ -67,14 +84,7 @@ export function renderReport(report: Report): string {
   lines.push(
     `Run \`${report.runId}\`, ${report.events.visits.toLocaleString('en-US')} visits and ${report.events.total.toLocaleString('en-US')} events, fault seed ${report.faultSeed}. Started ${report.startedAt}, ended ${report.endedAt}: ${report.ending}.`,
     '',
-    '## Provenance',
-    '',
-    `- Git SHA: [\`${report.provenance.gitSha}\`](${REPO}/commit/${report.provenance.gitSha})${report.provenance.uncommitted.length > 0 ? ` with ${report.provenance.uncommitted.length} uncommitted changes` : ''}`,
-    `- \`bigrun.commitments.json\` SHA-256: \`${report.provenance.commitmentsSha256}\``,
-    report.provenance.commitmentsCommit === null
-      ? '- The commitments file was never committed.'
-      : `- Its last commit: [\`${report.provenance.commitmentsCommit.sha.slice(0, 7)}\`](${REPO}/commit/${report.provenance.commitmentsCommit.sha}), ${report.provenance.commitmentsCommit.date}`,
-    '',
+    ...provenanceLines(report.provenance),
     '## Invariants',
     '',
     '| Check | Expected | Actual | |',

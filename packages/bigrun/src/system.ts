@@ -1,5 +1,5 @@
-// What the harness learns from the machine it runs on: git, compose and
-// docker. Each command's output is parsed here, at the boundary.
+// What the harnesses do on the machine they run on: read git, bring compose
+// up and inspect it, and run k6. Each command's output is parsed here, at the boundary.
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -129,12 +129,12 @@ export async function captureEnvironment(repoRoot: string, containers: readonly 
   };
 }
 
-/** The compose service the load test's k6 runs in (profile `loadtest`). */
-const K6 = ['compose', '--profile', 'loadtest', 'run', '--rm', '--no-deps'];
+/** `docker compose` arguments that run the load test's k6 once, as the compose service `k6` (profile `loadtest`) beside the running stack. */
+const K6_COMPOSE_RUN = ['compose', '--profile', 'loadtest', 'run', '--rm', '--no-deps'];
 
 /** The k6 version the compose service `k6` runs, as `k6 version` prints it. */
 export async function k6Version(repoRoot: string): Promise<string> {
-  return run(repoRoot, 'docker', [...K6, 'k6', 'version']);
+  return run(repoRoot, 'docker', [...K6_COMPOSE_RUN, 'k6', 'version']);
 }
 
 /**
@@ -149,7 +149,7 @@ export async function k6Version(repoRoot: string): Promise<string> {
 export function runK6(repoRoot: string, containerDir: string, apiKey: string): Promise<number> {
   const user = process.getuid && process.getgid ? ['--user', `${process.getuid()}:${process.getgid()}`] : [];
   return new Promise((resolve, reject) => {
-    const child = spawn('docker', [...K6, ...user, '-e', `LOADTEST_DIR=${containerDir}`, '-e', 'LOADTEST_API_KEY', 'k6'], {
+    const child = spawn('docker', [...K6_COMPOSE_RUN, ...user, '-e', `LOADTEST_DIR=${containerDir}`, '-e', 'LOADTEST_API_KEY', 'k6'], {
       cwd: repoRoot,
       env: { ...process.env, LOADTEST_API_KEY: apiKey },
       stdio: 'inherit',

@@ -1,6 +1,5 @@
 // A load test's report: `report.json` holds everything, `report.md` is its reading copy.
-import { REPO } from '../publish.js';
-import { environmentLine } from '../report.js';
+import { environmentLine, provenanceLines, type Provenance } from '../report.js';
 import type { Override } from '../settings.js';
 import type { Environment } from '../system.js';
 import type { LoadTestJudgement } from './judge.js';
@@ -9,38 +8,43 @@ import type { LoadTestCommitments, LoadTestKind } from './settings.js';
 
 /** Everything a load test found: `report.json`. */
 export interface LoadTestReport {
+  /** Its directory's name, under `results/k6/` or `results/k6-unofficial/`. */
   dir: string;
   kind: LoadTestKind;
   verdict: LoadTestJudgement['verdict'];
   /** Prefixes the event file's visit ids and idempotency keys. */
   runId: string;
+  /** When the event file was planned, ISO 8601. */
   startedAt: string;
+  /** When k6 ended, ISO 8601. */
   endedAt: string;
-  provenance: {
-    gitSha: string;
-    /** `git status --porcelain` lines at the start; always empty for an official run. */
-    uncommitted: string[];
-    commitmentsSha256: string;
-    commitmentsCommit: { sha: string; date: string } | null;
-  };
+  provenance: Provenance;
   /** Committed values this run replaced (`--set`); a run with any is not official. */
   overrides: Override[];
   /** The `loadTest` commitments the run ran with, after any overrides. */
   loadTest: LoadTestCommitments;
   /** The event file the simulator planned; it is not committed, and the seed and run id plan it again. */
-  eventFile: { file: string; seed: number; visits: number; requests: number; duplicates: number; sha256: string };
+  eventFile: {
+    file: string;
+    seed: number;
+    visits: number;
+    requests: number;
+    duplicates: number;
+    /** The duplicates' share of the requests the measured phase sends, if it sends one per arrival. */
+    measuredDuplicateShare: number;
+    sha256: string;
+  };
   /** The k6 that ran (`k6 version`), and how its run ended: 0, or 99 when a threshold was crossed; anything else is k6 failing. */
   k6: { version: string; exitCode: number; preAllocatedVUs: number; maxVUs: number };
   checks: LoadTestJudgement['checks'];
   measurements: LoadTestJudgement['measurements'];
+  /** The machine and the container limits the run ran with. */
   environment: Environment;
 }
 
-const fixed = (value: number, digits: number) => value.toFixed(digits);
-
 /** The report as Markdown, for `report.md`. */
 export function renderLoadTestReport(report: LoadTestReport): string {
-  const t = report.loadTest;
+  const committed = report.loadTest;
   const lines: string[] = [
     `# Load test ${report.dir}: ${report.verdict}`,
     '',
@@ -55,16 +59,9 @@ export function renderLoadTestReport(report: LoadTestReport): string {
     lines.push('');
   }
   lines.push(
-    `${report.k6.version}: \`${t.executor}\` at ${t.eventsPerSecond} events/s: a ${t.warmUpSeconds}s warm-up, then the measured phase of ${t.durationSeconds}s, against the hub service with the mock SATUSEHAT and no faults. Run \`${report.runId}\`, started ${report.startedAt}, ended ${report.endedAt}.`,
+    `${report.k6.version}: \`${committed.executor}\` at ${committed.eventsPerSecond} events/s: a ${committed.warmUpSeconds}s warm-up, then the measured phase of ${committed.durationSeconds}s, against the hub service with the mock SATUSEHAT and no faults. Run \`${report.runId}\`, started ${report.startedAt}, ended ${report.endedAt}.`,
     '',
-    '## Provenance',
-    '',
-    `- Git SHA: [\`${report.provenance.gitSha}\`](${REPO}/commit/${report.provenance.gitSha})${report.provenance.uncommitted.length > 0 ? ` with ${report.provenance.uncommitted.length} uncommitted changes` : ''}`,
-    `- \`bigrun.commitments.json\` SHA-256: \`${report.provenance.commitmentsSha256}\``,
-    report.provenance.commitmentsCommit === null
-      ? '- The commitments file was never committed.'
-      : `- Its last commit: [\`${report.provenance.commitmentsCommit.sha.slice(0, 7)}\`](${REPO}/commit/${report.provenance.commitmentsCommit.sha}), ${report.provenance.commitmentsCommit.date}`,
-    '',
+    ...provenanceLines(report.provenance),
     '## Checks',
     '',
     '| Check | Expected | Actual | |',
@@ -73,9 +70,9 @@ export function renderLoadTestReport(report: LoadTestReport): string {
     '',
   );
   if (report.k6.exitCode !== 0 && report.k6.exitCode !== 99) lines.push(`**k6 failed** with exit code ${report.k6.exitCode}; its output is in the harness log.`, '');
-  const m = report.measurements;
-  if (m !== null) {
-    const l = m.latencyMs;
+  const measured = report.measurements;
+  if (measured !== null) {
+    const latency = measured.latencyMs;
     lines.push(
       '## Measurements',
       '',
@@ -83,22 +80,22 @@ export function renderLoadTestReport(report: LoadTestReport): string {
       '',
       '| Measurement | Value |',
       '|---|---|',
-      `| Requests, measured phase | ${m.requests.toLocaleString('en-US')} (${fixed(m.requestsPerSecond, 1)}/s) |`,
-      `| Ingest latency min / median / avg / p90 / p95 / p99 / max, client | ${[l.min, l.med, l.avg, l.p90, l.p95, l.p99, l.max].map((v) => fixed(v, 1)).join(' / ')} ms |`,
-      `| Non-2xx, measured phase | ${m.non2xx.count.toLocaleString('en-US')} (${fixed(m.non2xx.rate * 100, 3)}%) |`,
-      `| Replayed answers (\`Idempotent-Replayed: true\`), both phases | ${m.replayed.toLocaleString('en-US')} |`,
-      `| Dropped arrivals, both phases | ${m.droppedIterations} |`,
-      `| VUs allocated at most, both phases / pre-allocated / allowed, each phase | ${m.vusMax} / ${report.k6.preAllocatedVUs} / ${report.k6.maxVUs} |`,
-      `| k6 run time | ${fixed(m.testRunSeconds, 1)} s |`,
+      `| Requests, measured phase | ${measured.requests.toLocaleString('en-US')} (${measured.requestsPerSecond.toFixed(1)}/s) |`,
+      `| Ingest latency min / median / avg / p90 / p95 / p99 / max, client | ${[latency.min, latency.med, latency.avg, latency.p90, latency.p95, latency.p99, latency.max].map((ms) => ms.toFixed(1)).join(' / ')} ms |`,
+      `| Non-2xx, measured phase | ${measured.non2xx.count.toLocaleString('en-US')} (${(measured.non2xx.rate * 100).toFixed(3)}%) |`,
+      `| Replayed answers (\`Idempotent-Replayed: true\`), both phases | ${measured.replayed.toLocaleString('en-US')} |`,
+      `| Dropped arrivals, both phases | ${measured.droppedIterations} |`,
+      `| VUs allocated at most, both phases / pre-allocated / allowed, each phase | ${measured.vusMax} / ${report.k6.preAllocatedVUs} / ${report.k6.maxVUs} |`,
+      `| k6 run time | ${measured.testRunSeconds.toFixed(1)} s |`,
       '',
     );
   }
-  const f = report.eventFile;
+  const file = report.eventFile;
   const env = report.environment;
   lines.push(
     '## Event file',
     '',
-    `Planned by the source simulator from the world dataset with seed ${f.seed} and the big run's event mix: ${f.visits.toLocaleString('en-US')} visits, ${f.requests.toLocaleString('en-US')} requests, ${f.duplicates.toLocaleString('en-US')} of them duplicates (${fixed((f.duplicates / f.requests) * 100, 1)}%). SHA-256 \`${f.sha256}\`. \`${f.file}\` stays beside this report and is not committed.`,
+    `Planned by the source simulator from the world dataset with seed ${file.seed} and the big run's event mix: ${file.visits.toLocaleString('en-US')} visits, ${file.requests.toLocaleString('en-US')} requests, ${file.duplicates.toLocaleString('en-US')} of them duplicates (${((file.duplicates / file.requests) * 100).toFixed(1)}%; ${(file.measuredDuplicateShare * 100).toFixed(1)}% of the measured phase's share of the file). SHA-256 \`${file.sha256}\`. \`${file.file}\` stays beside this report and is not committed.`,
     '',
     '## Environment',
     '',
@@ -117,7 +114,7 @@ export function renderLoadTestReport(report: LoadTestReport): string {
 
 /** What the index and the README take from a report. */
 export function indexedLoadTest(report: LoadTestReport): IndexedLoadTest {
-  const m = report.measurements;
+  const measured = report.measurements;
   return {
     dir: report.dir,
     kind: report.kind,
@@ -126,10 +123,10 @@ export function indexedLoadTest(report: LoadTestReport): IndexedLoadTest {
     startedAt: report.startedAt,
     headline: {
       eventsPerSecond: report.loadTest.eventsPerSecond,
-      requestsPerSecond: m?.requestsPerSecond ?? null,
-      ingestP95Ms: m?.latencyMs.p95 ?? null,
-      ingestP99Ms: m?.latencyMs.p99 ?? null,
-      non2xxRate: m?.non2xx.rate ?? null,
+      requestsPerSecond: measured?.requestsPerSecond ?? null,
+      ingestP95Ms: measured?.latencyMs.p95 ?? null,
+      ingestP99Ms: measured?.latencyMs.p99 ?? null,
+      non2xxRate: measured?.non2xx.rate ?? null,
     },
     environment: environmentLine(report.environment),
   };

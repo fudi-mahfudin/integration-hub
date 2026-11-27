@@ -37,36 +37,48 @@ const failed = (j: ReturnType<typeof judgeLoadTest>) => j.checks.filter((c) => !
 
 describe('judgeLoadTest', () => {
   it('passes when the measured phase is under every committed threshold and held the rate, and reports what it measured', () => {
-    const judgement = judgeLoadTest(loadTest, summary({ count: 60_001, p95: 120, p99: 310, non2xx: 30 }));
+    const judgement = judgeLoadTest(loadTest, 0, summary({ count: 60_001, p95: 120, p99: 310, non2xx: 30 }));
     expect(judgement.verdict).toBe('PASS');
     expect(judgement.checks.map((c) => [c.name, c.expected, c.actual, c.pass])).toEqual([
       ['Ingest p95, measured phase', '< 200 ms', '120 ms', true],
       ['Ingest p99, measured phase', '< 500 ms', '310 ms', true],
       ['Non-2xx rate, measured phase', '< 0.1%', '0.050% (30 of 60,001)', true],
-      ['Arrival rate held (dropped iterations)', '0', '0', true],
+      ['Requests sent, measured phase', '≥ 60,000 (200/s for 300s)', '60,001', true],
+      ['k6 ended normally', 'exit code 0, or 99 for a crossed threshold', '0', true],
     ]);
     expect(judgement.measurements).toMatchObject({ requests: 60_001, requestsPerSecond: 200, droppedIterations: 0, replayed: 13_000, vusMax: 200 });
   });
 
   it('fails on a threshold reached exactly, since each is strictly less than', () => {
-    expect(failed(judgeLoadTest(loadTest, summary({ count: 60_000, p95: 200, p99: 499, non2xx: 60 })))).toEqual([
+    expect(failed(judgeLoadTest(loadTest, 0, summary({ count: 60_000, p95: 200, p99: 499, non2xx: 60 })))).toEqual([
       'Ingest p95, measured phase',
       'Non-2xx rate, measured phase',
     ]);
   });
 
-  it('fails a run that dropped arrivals, since it did not hold the committed rate', () => {
-    const judgement = judgeLoadTest(loadTest, summary({ count: 59_000, p95: 100, p99: 200, non2xx: 0 }, { dropped_iterations: { type: 'counter', contains: 'default', values: { count: 1001, rate: 3 } } }));
+  it('fails a measured phase that sent fewer requests than its arrivals, dropped or failed, since it did not hold the committed rate', () => {
+    const judgement = judgeLoadTest(loadTest, 0, summary({ count: 59_000, p95: 100, p99: 200, non2xx: 0 }, { dropped_iterations: { type: 'counter', contains: 'default', values: { count: 1001, rate: 3 } } }));
     expect(judgement.verdict).toBe('FAIL');
-    expect(failed(judgement)).toEqual(['Arrival rate held (dropped iterations)']);
+    expect(failed(judgement)).toEqual(['Requests sent, measured phase']);
+    expect(judgement.measurements?.droppedIterations).toBe(1001);
+  });
+
+  it('passes a run whose only dropped arrivals were in the warm-up', () => {
+    const judgement = judgeLoadTest(loadTest, 0, summary({ count: 60_000, p95: 100, p99: 200, non2xx: 0 }, { dropped_iterations: { type: 'counter', contains: 'default', values: { count: 40, rate: 1 } } }));
+    expect(judgement.verdict).toBe('PASS');
+  });
+
+  it('fails a run whose k6 ended abnormally, even with a summary under every threshold; a crossed threshold (99) is an ordinary end', () => {
+    expect(failed(judgeLoadTest(loadTest, 107, summary({ count: 60_001, p95: 100, p99: 200, non2xx: 0 })))).toEqual(['k6 ended normally']);
+    expect(failed(judgeLoadTest(loadTest, 99, summary({ count: 60_001, p95: 300, p99: 200, non2xx: 0 })))).toEqual(['Ingest p95, measured phase']);
   });
 
   it('fails, naming why, when there is no summary or it lacks the measured phase', () => {
     for (const bad of [null, { metrics: {} }]) {
-      const judgement = judgeLoadTest(loadTest, bad);
+      const judgement = judgeLoadTest(loadTest, 0, bad);
       expect(judgement.verdict).toBe('FAIL');
       expect(judgement.measurements).toBeNull();
-      expect(judgement.checks).toEqual([expect.objectContaining({ name: 'k6 summary readable', pass: false })]);
+      expect(judgement.checks).toEqual([expect.objectContaining({ name: 'k6 summary readable', pass: false }), expect.objectContaining({ name: 'k6 ended normally', pass: true })]);
     }
   });
 });

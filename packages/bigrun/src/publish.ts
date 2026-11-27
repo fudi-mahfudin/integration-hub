@@ -43,8 +43,32 @@ export class PublishError extends Error {
 
 const START = '<!-- bigrun:start -->';
 const END = '<!-- bigrun:end -->';
-/** A run's start as the index and README show it: `2026-11-27 01:00`, UTC. */
-const startedAtMinute = (run: IndexedRun) => run.startedAt.slice(0, 16).replace('T', ' ');
+
+/** A run's start (ISO 8601) as an index and the README show it: `2026-11-27 01:00`, UTC. */
+export const startedAtMinute = (startedAt: string) => startedAt.slice(0, 16).replace('T', ' ');
+
+/** Throws {@link PublishError} unless the run is official: only official runs are ever listed or published. */
+export function requireOfficial(run: { dir: string; kind: string }): void {
+  if (run.kind !== 'official') throw new PublishError(`only official runs are published, and ${run.dir} is a ${run.kind} run`);
+}
+
+/** The README with the text between the `start` and `end` markers replaced by `section`; nothing outside them changes. */
+export function replaceSection(readme: string, markers: { start: string; end: string }, section: string): string {
+  const start = readme.indexOf(markers.start);
+  const end = readme.indexOf(markers.end);
+  if (start === -1 || end === -1 || end < start) throw new PublishError(`the README needs a ${markers.start} … ${markers.end} section to publish into`);
+  return `${readme.slice(0, start + markers.start.length)}\n${section}\n${readme.slice(end)}`;
+}
+
+/**
+ * An index (`header`, then one row per run) with `row` added for the run in
+ * `dir`, newest first by directory name; a rerun of a directory replaces its row.
+ */
+export function indexWithRow(index: string | null, header: readonly string[], dir: string, row: string): string {
+  const rows = (index ?? '').split('\n').filter((line) => line.startsWith('| ') && !line.startsWith('| Run ') && !line.startsWith(`| ${dir} |`));
+  const sorted = [row, ...rows].toSorted((a, b) => (b.split('|')[1] ?? '').localeCompare(a.split('|')[1] ?? ''));
+  return `${[...header, ...sorted].join('\n')}\n`;
+}
 const INDEX_HEADER = [
   '# Big run results',
   '',
@@ -54,10 +78,6 @@ const INDEX_HEADER = [
   '|---|---|---|---|---|---|',
 ];
 
-function requireOfficial(run: IndexedRun): void {
-  if (run.kind !== 'official') throw new PublishError(`only official runs are published, and ${run.dir} is a ${run.kind} run`);
-}
-
 /**
  * The README with the text between `<!-- bigrun:start -->` and
  * `<!-- bigrun:end -->` replaced by the run's summary: verdict, headline
@@ -66,13 +86,10 @@ function requireOfficial(run: IndexedRun): void {
  */
 export function publishSection(readme: string, run: IndexedRun): string {
   requireOfficial(run);
-  const start = readme.indexOf(START);
-  const end = readme.indexOf(END);
-  if (start === -1 || end === -1 || end < start) throw new PublishError(`the README needs a ${START} … ${END} section to publish into`);
   const h = run.headline;
   const percent = (rate: number) => `${(rate * 100).toFixed(1)}%`;
   const section = [
-    `Latest official run: **${run.verdict}**, [\`${run.dir}\`](results/bigrun/${run.dir}/report.md), started ${startedAtMinute(run)} UTC at \`${run.gitSha.slice(0, 7)}\`.`,
+    `Latest official run: **${run.verdict}**, [\`${run.dir}\`](results/bigrun/${run.dir}/report.md), started ${startedAtMinute(run.startedAt)} UTC at \`${run.gitSha.slice(0, 7)}\`.`,
     '',
     '| | |',
     '|---|---|',
@@ -88,14 +105,12 @@ export function publishSection(readme: string, run: IndexedRun): string {
     '',
     `Every official run: [results/bigrun/INDEX.md](results/bigrun/INDEX.md). The commitments and their history: [history of \`bigrun.commitments.json\`](${REPO}/commits/main/bigrun.commitments.json).`,
   ].join('\n');
-  return `${readme.slice(0, start + START.length)}\n${section}\n${readme.slice(end)}`;
+  return replaceSection(readme, { start: START, end: END }, section);
 }
 
 /** The index (`results/bigrun/INDEX.md`, or null when there is none yet) with the run listed, newest first; a rerun of a directory replaces its row. */
 export function updateIndex(index: string | null, run: IndexedRun): string {
   requireOfficial(run);
-  const rows = (index ?? '').split('\n').filter((line) => line.startsWith('| ') && !line.startsWith('| Run ') && !line.startsWith(`| ${run.dir} |`));
-  const row = `| ${run.dir} | [${run.verdict}](${run.dir}/report.md) | ${startedAtMinute(run)} | \`${run.gitSha.slice(0, 7)}\` | ${run.headline.events.toLocaleString('en-US')} | ${(run.headline.totalSeconds / 60).toFixed(1)} min |`;
-  const sorted = [row, ...rows].toSorted((a, b) => (b.split('|')[1] ?? '').localeCompare(a.split('|')[1] ?? ''));
-  return `${[...INDEX_HEADER, ...sorted].join('\n')}\n`;
+  const row = `| ${run.dir} | [${run.verdict}](${run.dir}/report.md) | ${startedAtMinute(run.startedAt)} | \`${run.gitSha.slice(0, 7)}\` | ${run.headline.events.toLocaleString('en-US')} | ${(run.headline.totalSeconds / 60).toFixed(1)} min |`;
+  return indexWithRow(index, INDEX_HEADER, run.dir, row);
 }

@@ -9,8 +9,8 @@ import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
-import { z } from 'zod';
 import { faultRulesFor } from './fault-rules.js';
+import { harnessEnv } from './harness-env.js';
 import { readCaseViews } from './hub-cases.js';
 import { judge } from './judge.js';
 import { manifestFor } from './manifest.js';
@@ -26,16 +26,7 @@ import { captureEnvironment, COMMITMENTS_FILE, composeUp, inspectContainers, rea
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const log = (msg: string, fields: Record<string, unknown> = {}) => console.log(JSON.stringify({ time: new Date().toISOString(), msg, ...fields }));
 
-/** Where the harness sends, read from the environment once; the defaults are compose's published ports and public development keys. */
-const env = z
-  .object({
-    BIGRUN_HUB_URL: z.url().default('http://localhost:3000/'),
-    BIGRUN_MOCK_URL: z.url().default('http://localhost:3001/'),
-    BIGRUN_PROMETHEUS_URL: z.url().default('http://localhost:9090/'),
-    BIGRUN_SOURCE_API_KEY: z.string().min(1).default('dev-source-key'),
-    BIGRUN_ADMIN_API_KEY: z.string().min(1).default('dev-admin-key'),
-  })
-  .parse(process.env);
+const env = harnessEnv;
 const hubUrl = new URL(env.BIGRUN_HUB_URL);
 const mockUrl = new URL(env.BIGRUN_MOCK_URL);
 
