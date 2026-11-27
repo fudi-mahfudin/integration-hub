@@ -21,6 +21,8 @@ export interface CaseTable {
   dead_lettered_since: Timestamp | null;
   opened_at: Timestamp;
   updated_at: Timestamp;
+  /** Given once at insert, never changed: the case list's order and cursor (#38). Read as a string (`bigint`). */
+  list_seq: ColumnType<string, never, never>;
 }
 
 /** One of a case's four ordered steps. */
@@ -95,6 +97,8 @@ export interface SourceEventTable {
   /** For a `visit.started` its `startedAt`, for a `visit.finished` its `finishedAt`; null for other types. */
   visit_time: Timestamp | null;
   received_at: Timestamp;
+  /** How many duplicate ingests got the event's original `202` (#38). */
+  duplicates: Generated<number>;
 }
 
 /** One ingest rejection of a visit's event (#8): code, event type and time, never the body. */

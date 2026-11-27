@@ -42,8 +42,11 @@ export type StepState =
   | 'completed'
   | 'dead_lettered';
 
-/** A case's status: derived from its current step, except the operator-only `abandoned` (ADR 0007). */
-export type CaseStatus = 'waiting' | 'active' | 'dead_lettered' | 'completed' | 'abandoned';
+/** Every case status: derived from its current step, except the operator-only `abandoned` (ADR 0007). */
+export const CASE_STATUSES = ['waiting', 'active', 'dead_lettered', 'completed', 'abandoned'] as const;
+
+/** A case's status. */
+export type CaseStatus = (typeof CASE_STATUSES)[number];
 
 /** The identifier SATUSEHAT assigned to a record the hub created; learned at runtime, never hardcoded. */
 export type RemoteId = Brand<string, 'RemoteId'>;

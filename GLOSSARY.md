@@ -46,6 +46,10 @@ _Avoid_: Cancelled case, closed case, expired case
 One ordered submission to SATUSEHAT within a case: create visit, submit prescription, submit dispense, update visit.
 _Avoid_: Task, job, stage
 
+**Current step**:
+A case's earliest step that is not completed: the one its status is derived from. A completed case has none.
+_Avoid_: Active step, next step
+
 **Attempt**:
 One try at carrying out a step. A step may take several attempts; a worker crashing mid-attempt still counts as one.
 _Avoid_: Try, run, execution

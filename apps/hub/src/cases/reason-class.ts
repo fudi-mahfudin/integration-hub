@@ -36,3 +36,8 @@ const REASON_CLASSES: Record<DeadLetterReason, ReasonClass> = {
 export function reasonClassOf(reason: DeadLetterReason): ReasonClass {
   return REASON_CLASSES[reason];
 }
+
+/** Whether `code` is a dead-letter reason. */
+export function isDeadLetterReason(code: string): code is DeadLetterReason {
+  return Object.hasOwn(REASON_CLASSES, code);
+}

@@ -6,7 +6,7 @@ The HTTP API the hub service offers to source systems. Domain terms are in [GLOS
 
 Every request carries `Authorization: Bearer <api key>`. Each source system has one static API key. The source system's identity, and the SATUSEHAT organization it belongs to, come from the key, never from the request body. A missing, malformed or unknown key is [`401 UNAUTHENTICATED`](#unauthenticated).
 
-The operator has one more static key, the **admin API key** (`HUB_ADMIN_API_KEY`; there is no user model, ADR 0001). Only it may call the operator endpoints ([replay](#post-v1casesidreplay), [abandon](#post-v1casesidabandon), [mapping administration](#put-v1adminmappingsdrugslocationslocalcode)); a source system's key there is [`403 FORBIDDEN`](#forbidden). It may also read any source system's case.
+The operator has one more static key, the **admin API key** (`HUB_ADMIN_API_KEY`; there is no user model, ADR 0001). Only it may call the operator endpoints ([replay](#post-v1casesidreplay), [abandon](#post-v1casesidabandon), [mapping administration](#put-v1adminmappingsdrugslocationslocalcode)); a source system's key there is [`403 FORBIDDEN`](#forbidden). On the read endpoints ([case list](#get-v1cases), [case](#get-v1casesid), [dead-letter summary](#get-v1dead-letterssummary)) it sees every source system's cases, and a source system's key only that source system's own.
 
 ## `POST /v1/events`
 
@@ -129,27 +129,79 @@ A visit's two events may arrive in either order. Whichever arrives second is che
 - **Concurrent identical requests** open exactly one case and all get the same answer.
 - **Retention.** An accepted key is kept for **at least 24 hours**, then deleted by a periodic purge (hourly by default). Until it is purged, a resend still gets the original answer. After that, an identical resend gets [`409 EVENT_ALREADY_RECORDED`](#event_already_recorded) instead. The event is still recorded once; only the answer differs.
 
+## `GET /v1/cases`
+
+The cases, newest first, one summary row each, a page at a time. A source system sees only its own cases; the admin API key sees every case.
+
+| Parameter | Meaning |
+|---|---|
+| `status` | Only cases in this status: `waiting`, `active`, `dead_lettered`, `completed` or `abandoned`. |
+| `stalled` | `true`: only [stalled](#get-v1casesid) cases, as of the read. `false`: every other case. |
+| `step` | Only cases whose current step (the earliest step not `completed`) is this one: `create_visit`, `submit_prescription`, `submit_dispense` or `update_visit`. A completed case has none. |
+| `source` | Only this source system's cases. An unregistered id matches none. |
+| `visitId` | Only the case of this visit. |
+| `reason` | Only `dead_lettered` cases with this [dead-letter reason](#dead-letter-reasons). |
+| `limit` | Rows per page, 1-500; default 50. |
+| `cursor` | The `nextCursor` of the page before; leave it out for the first page. |
+
+A case must match every parameter given. A bad value is [`422 VALIDATION_FAILED`](#validation_failed), with `path` `/<parameter>`.
+
+```json
+{
+  "cases": [
+    {
+      "caseId": "0b6f6c1e-8a0e-4d55-9b4b-3f1f1d7f2a10",
+      "source": "simulator",
+      "visitId": "V-2026-000123",
+      "status": "dead_lettered",
+      "currentStep": "submit_prescription",
+      "waitingFor": null,
+      "waitingSince": null,
+      "stalled": false,
+      "deadLetterReason": "MAPPING_MISSING",
+      "reasonClass": "replayable",
+      "deadLetteredSince": "2026-03-02T01:10:04.551Z",
+      "attempts": 2,
+      "updatedAt": "2026-03-02T01:10:04.551Z"
+    }
+  ],
+  "nextCursor": "YzE6MTI"
+}
+```
+
+`nextCursor` is `null` on the last page. `currentStep` is `null` for a completed case; `attempts` is how many times workers have claimed the case's steps, all four together; `updatedAt` is when the case last changed: an accepted event, an attempt's outcome, a replay or an abandonment (a worker claiming a step alone doesn't change it, though it raises `attempts`). The other fields mean what they mean in [`GET /v1/cases/{id}`](#get-v1casesid).
+
+**Paging while cases change.** The order is fixed when a case opens and never changes, and a cursor names a place in it. So paging through to the end shows every case that exists when the first page is read and matches the parameters throughout exactly once, however cases change meanwhile. A case opened, or one that stops or starts matching a filter, while you page may or may not be shown; new cases are listed first, so ask for the first page again to see them.
+
 ## `GET /v1/cases/{id}`
 
-A case's status, what a waiting case waits for, what an operator did to it, and its four steps in order. A source system sees only its own cases; any other id is [`404 NOT_FOUND`](#not_found). The admin API key sees every case.
+A case's [summary row](#get-v1cases), what an operator did to it, its source events, and its four steps in order. A source system sees only its own cases; any other id is [`404 NOT_FOUND`](#not_found). The admin API key sees every case.
 
 ```json
 {
   "caseId": "0b6f6c1e-8a0e-4d55-9b4b-3f1f1d7f2a10",
+  "source": "simulator",
   "visitId": "V-2026-000123",
   "status": "waiting",
+  "currentStep": "submit_prescription",
   "waitingFor": "prescription.written",
   "waitingSince": "2026-03-02T01:00:03.120Z",
   "stalled": false,
   "deadLetterReason": null,
   "reasonClass": null,
   "deadLetteredSince": null,
+  "attempts": 1,
+  "updatedAt": "2026-03-02T01:00:03.410Z",
   "replayCount": 0,
   "replays": [],
   "abandonment": null,
   "rejections": [
     { "code": "UNSUPPORTED_MULTI_ITEM", "eventType": "prescription.written", "rejectedAt": "2026-03-02T01:05:41.002Z" }
   ],
+  "events": [
+    { "type": "visit.started", "receivedAt": "2026-03-02T01:00:03.120Z", "traceId": null, "duplicates": 1 }
+  ],
+  "divergences": [],
   "steps": [
     {
       "step": "create_visit", "eventType": "visit.started", "state": "completed", "attempts": 1, "deadLetterReason": null, "availableAt": null,
@@ -177,6 +229,7 @@ Case status: `waiting`, `active`, `dead_lettered`, `completed`, `abandoned`. Ste
 
 | Field | Meaning |
 |---|---|
+| `source`, `currentStep`, `attempts`, `updatedAt` | As in the [case list](#get-v1cases). |
 | `waitingFor` | For a `waiting` case, the source event its next step needs; otherwise `null`. |
 | `waitingSince` | Since when a `waiting` case has waited for `waitingFor` (UTC); otherwise `null`. |
 | `stalled` | `true` for a `waiting` case that has waited (since `waitingSince`) longer than the stalled threshold, `STALLED_AFTER_MS` (default 24h), as of the read. It only flags the case for an operator; time never changes a case (ADR 0007). Always `false` for any other status. |
@@ -187,6 +240,8 @@ Case status: `waiting`, `active`, `dead_lettered`, `completed`, `abandoned`. Ste
 | `replays` | Every operator replay of the case, oldest first: the `step` replayed, the dead-letter `reason` it cleared, the operator's `note` (or `null`) and `replayedAt`. |
 | `abandonment` | For an `abandoned` case: the operator's `note`, `abandonedAt`, the `previousStatus` (`waiting` or `dead_lettered`), the `waitingFor` or `deadLetterReason` it had then (the other is `null`), and `remoteRecordsLeft`, the records its completed steps left at SATUSEHAT (`[{ step, type, id, version }]`). Otherwise `null`. |
 | `rejections` | The rejection log of the visit: every `VALIDATION_FAILED`, `UNSUPPORTED_MULTI_ITEM`, `PRESCRIPTION_MISMATCH`, `FINISHED_BEFORE_STARTED`, `EVENT_ALREADY_RECORDED` and `CASE_ABANDONED` answer to an event naming this `visitId` and an event type, oldest first, including those sent before the case opened. Only the code, the event type and the time are kept, never the body. It explains a waiting case and never changes it. |
+| `events` | The case's accepted source events, in the order the hub accepted them: the event `type`, when it was accepted (`receivedAt`, UTC), its `traceId` (always `null`: the hub records no traces yet), and how many [duplicate ingests](#idempotency) were answered with its original `202` (`duplicates`). A request with the same key and another body, or a resend after its key was purged (`409 EVENT_ALREADY_RECORDED`), is not a duplicate here. |
+| `divergences` | What [reconciliation](../GLOSSARY.md) found different at SATUSEHAT. Always empty: the hub does not reconcile yet. |
 | `steps[].attempts` | How many times a worker has claimed the step. A replay doesn't reset it: attempt numbers go on from it. |
 | `steps[].remote` | The record the step stored at SATUSEHAT, by its remote identifier and `meta.versionId`; `null` until the step completes. |
 | `steps[].deadLetterReason` | Why the step was dead-lettered; `null` unless it was. A step abandoned while dead-lettered keeps it. |
@@ -243,6 +298,19 @@ Each reason has a class, shown as the case's `reasonClass`:
 
 An attempt that fails transiently (a timeout, a network error or reset, any `5xx`, `408`, `429`, or a `401` that one token refresh didn't cure) sends its step to `retry_wait`. A worker claims it again at `availableAt`: after a random wait of up to `min(60s, 1s·2ⁿ⁻¹)` after attempt n, or the answer's `Retry-After` if that is later (capped at 300s; a past or unreadable value is ignored). Each attempt starts over with search-then-create, so a write SATUSEHAT applied but didn't answer is found and adopted, never sent twice. A read (search or KFA lookup) that fails transiently is retried within the attempt, after 100ms and then 400ms, and shows in `readRetries`; a write is never sent twice by one attempt. If update visit's stored Encounter id is stale (its search finds one other Encounter, or its `PUT` answers `404` or `410` and a search finds one), create visit's `remote` is refreshed to the one found and the step retried.
 
+## `GET /v1/dead-letters/summary`
+
+The `dead_lettered` cases grouped by [dead-letter reason](#dead-letter-reasons): `replayable` groups first, then `source_data`, each alphabetically by reason. A reason with no dead-lettered case has no group. A source system counts only its own cases; the admin API key counts every case.
+
+```json
+[
+  { "reason": "MAPPING_MISSING", "class": "replayable", "count": 2, "oldestSince": "2026-03-02T01:10:04.551Z" },
+  { "reason": "SUBSTITUTION_MISMATCH", "class": "source_data", "count": 1, "oldestSince": "2026-03-02T02:41:19.006Z" }
+]
+```
+
+`count` is how many cases are dead-lettered for the reason now; `oldestSince` is the earliest of their `deadLetteredSince` (UTC). List them with [`GET /v1/cases?reason=`](#get-v1cases).
+
 ## `POST /v1/cases/{id}/replay`
 
 Admin API key only. Resumes a `dead_lettered` case from its failed step. The body is optional: `{ "note": "drug mapping added" }` (a non-blank `note` of up to 2000 characters, or `null`).
@@ -296,7 +364,7 @@ Every error is an RFC 9457 problem, `Content-Type: application/problem+json`:
 }
 ```
 
-`code` is stable; match on it, not on `title` or `message`. `errors[]` is always present and may be empty. Its `path` is a JSON Pointer into the request body.
+`code` is stable; match on it, not on `title` or `message`. `errors[]` is always present and may be empty. Its `path` is a JSON Pointer into the request body, or, for a query parameter, `/<parameter>`.
 
 ### UNAUTHENTICATED
 

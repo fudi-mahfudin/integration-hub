@@ -127,8 +127,12 @@ const remoteSchema = z.object({ type: z.string(), id: z.string(), version: z.str
 /** `GET /v1/cases/{id}` as tests read it. */
 export const caseViewSchema = z.object({
   caseId: z.string(),
+  source: z.string(),
   visitId: z.string(),
   status: z.string(),
+  currentStep: z.string().nullable(),
+  attempts: z.number().int(),
+  updatedAt: z.string(),
   waitingFor: z.string().nullable(),
   waitingSince: z.string().nullable(),
   stalled: z.boolean(),
@@ -148,6 +152,8 @@ export const caseViewSchema = z.object({
     })
     .nullable(),
   rejections: z.array(z.object({ code: z.string(), eventType: z.string(), rejectedAt: z.string() })),
+  events: z.array(z.object({ type: z.string(), receivedAt: z.string(), traceId: z.string().nullable(), duplicates: z.number().int() })),
+  divergences: z.array(z.unknown()),
   steps: z.array(
     z.object({
       step: z.string(),

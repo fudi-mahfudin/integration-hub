@@ -1,12 +1,12 @@
 import type { Kysely } from 'kysely';
 import type { SourceSystem } from '../auth/source-systems.js';
 import type { Clock } from '../clock.js';
-import { recordEvent, type AcceptedEvent, type RecordedEvent } from '../cases/record-event.js';
+import { countDuplicate, recordEvent, type AcceptedEvent, type RecordedEvent } from '../cases/record-event.js';
 import { isLoggedRejection, logRejection, type RejectionCode } from '../cases/rejection-log.js';
 import type { Database } from '../db/database.js';
 import { Problem } from '../http/problem.js';
 import { log } from '../observability/log.js';
-import { parseEvent, rejectedEventOf } from './event-schema.js';
+import { parseEvent, visitEventOf } from './event-schema.js';
 import { fingerprint, type Fingerprint, type RequestBody } from './fingerprint.js';
 import type { IdempotencyKey, IdempotencyStore, IngestResponse, StoredKey } from './idempotency-store.js';
 
@@ -29,18 +29,32 @@ export function createIngest(deps: { store: IdempotencyStore; db: Kysely<Databas
     const bodyFingerprint = fingerprint(body);
 
     const known = await store.lookup(source.id, key);
-    if (known) return answerDuplicate(known, bodyFingerprint);
+    if (known) return countedDuplicate(source, body, answerDuplicate(known, bodyFingerprint));
 
     const event = await parseEventAfterKeyLookup(store, source, key, body, bodyFingerprint);
     const result = await store.record(source.id, key, bodyFingerprint, (trx) =>
       recordEvent(trx, source, event, clock()).then((recorded) => accepted(event, recorded)),
     );
-    return 'accepted' in result ? result.accepted : answerDuplicate(result.raced, bodyFingerprint);
+    return 'accepted' in result ? result.accepted : countedDuplicate(source, body, answerDuplicate(result.raced, bodyFingerprint));
+  }
+
+  /** Counts a duplicate ingest against the event it duplicates, then answers it. */
+  async function countedDuplicate(source: SourceSystem, body: RequestBody, answer: IngestResponse): Promise<IngestResponse> {
+    // The body has the fingerprint of an accepted event, so it names that event's visit and type.
+    const named = visitEventOf(body);
+    if (!named) throw new Error('a duplicate of an accepted event does not name a visit and event type');
+    try {
+      await countDuplicate(db, { sourceSystemId: source.id, ...named });
+    } catch (err) {
+      // The count only informs the case view; the source still gets its original answer, and no case changed.
+      log('error', 'counting a duplicate ingest failed', { eventType: named.eventType, error: err });
+    }
+    return answer;
   }
 
   /** Logs a rejection of a visit's event, when the body names the visit and the event type. */
   async function noteRejection(source: SourceSystem, body: RequestBody, code: RejectionCode): Promise<void> {
-    const rejected = rejectedEventOf(body);
+    const rejected = visitEventOf(body);
     if (!rejected) return;
     try {
       await logRejection(db, { sourceSystemId: source.id, ...rejected }, code, clock());

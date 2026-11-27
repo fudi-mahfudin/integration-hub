@@ -10,6 +10,7 @@ import { AdminKey } from './auth/admin-key.js';
 import { SourceSystems } from './auth/source-systems.js';
 import { CasesController } from './cases/cases.controller.js';
 import { createCases } from './cases/cases.js';
+import { DeadLettersController } from './cases/dead-letters.controller.js';
 import type { Clock } from './clock.js';
 import type { HubConfig } from './config.js';
 import { createDatabase, type Database } from './db/database.js';
@@ -45,7 +46,7 @@ class HubServiceModule {
   static register(providers: Provider[]): DynamicModule {
     return {
       module: HubServiceModule,
-      controllers: [HealthController, EventsController, CasesController, MappingsController],
+      controllers: [HealthController, EventsController, CasesController, DeadLettersController, MappingsController],
       providers: [...providers, { provide: APP_FILTER, useClass: ProblemFilter }],
     };
   }

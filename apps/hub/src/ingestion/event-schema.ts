@@ -250,10 +250,11 @@ function sourceInstant(value: string, field: string): Date {
 }
 
 /**
- * The visit and event type a rejected body names, when both are readable as
- * the envelope defines them; the rejection log is keyed by them (#8).
+ * The visit and event type a body names, when both are readable as the
+ * envelope defines them: the rejection log (#8) and an event's duplicate
+ * count (#38) are keyed by them.
  */
-export function rejectedEventOf(body: RequestBody): { visitId: VisitId; eventType: EventType } | undefined {
+export function visitEventOf(body: RequestBody): { visitId: VisitId; eventType: EventType } | undefined {
   if (!body.json) return undefined;
   const visitId = text(64).safeParse(valueAt(body.value, ['visitId']));
   const type = z.enum(EVENT_TYPES).safeParse(valueAt(body.value, ['type']));

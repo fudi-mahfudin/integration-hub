@@ -36,8 +36,12 @@ describe('ingest: accepting visit.started', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       caseId: location?.split('/').at(-1),
+      source: 'test-source',
       visitId: event.visitId,
       status: 'active',
+      currentStep: 'create_visit',
+      attempts: 0,
+      updatedAt: expect.stringMatching(/Z$/),
       waitingFor: null,
       waitingSince: null,
       stalled: false,
@@ -48,6 +52,8 @@ describe('ingest: accepting visit.started', () => {
       replays: [],
       abandonment: null,
       rejections: [],
+      events: [{ type: 'visit.started', receivedAt: expect.stringMatching(/Z$/), traceId: null, duplicates: 0 }],
+      divergences: [],
       steps: [
         { step: 'create_visit', eventType: 'visit.started', state: 'ready', ...unworked },
         { step: 'submit_prescription', eventType: 'prescription.written', state: 'awaiting_event', ...unworked },
