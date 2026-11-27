@@ -2,6 +2,7 @@ import type { Redis } from 'ioredis';
 import type { Clock } from '../clock.js';
 import type { Log } from '../observability/log.js';
 import type { LimiterMode, WorkerMetrics } from '../observability/metrics.js';
+import { inSpan } from '../observability/tracing.js';
 import type { PlatformApi } from './circuit-breaker.js';
 
 /** The platform APIs the hub rate-limits itself on (#13); the token endpoint has its own backoff instead. */
@@ -124,7 +125,10 @@ export function createRateLimiter(deps: {
     async acquire(api) {
       const { waitMs, mode } = await reserve(api);
       metrics.limiterWaited(api, mode, waitMs / 1000);
-      if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+      if (waitMs > 0) {
+        // Only a call that waits makes a span (#15).
+        await inSpan('rate_limiter.wait', { api, mode, 'wait.ms': waitMs }, () => new Promise((resolve) => setTimeout(resolve, waitMs)));
+      }
     },
     async holdOff(api, until) {
       if (until === null) return;

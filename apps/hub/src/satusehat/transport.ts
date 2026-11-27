@@ -1,6 +1,8 @@
 import { fetch, type Dispatcher } from 'undici';
 import type { Clock } from '../clock.js';
+import { SpanStatusCode } from '@opentelemetry/api';
 import { stopwatch, type PlatformOperation, type PlatformStatusClass, type WorkerMetrics } from '../observability/metrics.js';
+import { inSpan } from '../observability/tracing.js';
 import type { CircuitBreaker } from './circuit-breaker.js';
 import type { RateLimitedApi, RateLimiter } from './rate-limiter.js';
 import { AttemptBudgetExceeded, SatusehatNetworkError, SatusehatTimeoutError } from './errors.js';
@@ -69,7 +71,8 @@ export interface SatusehatTransport {
    * none is sent while its platform API's breaker is open: `CircuitOpen`. Each
    * send waits its turn under the platform API's rate limit, and a 429 holds its calls off.
    * Throws `SatusehatTimeoutError` or `SatusehatNetworkError` for the last
-   * failed try, or resolves to the last answer, whatever its status.
+   * failed try, or resolves to the last answer, whatever its status. Each try
+   * is its own span (#42): `satusehat.search|create|update` or `kfa.lookup`.
    */
   send(calls: AttemptCalls, request: SatusehatRequest): Promise<SatusehatAnswer>;
 }
@@ -122,6 +125,11 @@ export function isConnectTimeout(err: unknown): boolean {
 function operationOf(request: SatusehatRequest): PlatformOperation {
   if (request.api === 'kfa') return 'lookup';
   return request.method === 'GET' ? 'search' : request.method === 'POST' ? 'create' : 'update';
+}
+
+/** The span of one try of `request` (#15): FHIR calls by operation, every KFA v2 call a lookup. */
+function spanNameOf(request: SatusehatRequest): string {
+  return request.api === 'kfa' ? 'kfa.lookup' : `satusehat.${operationOf(request)}`;
 }
 
 /** Builds the transport over one process's tokens and connection pool. Only the composition root calls this. */
@@ -214,7 +222,12 @@ export function createSatusehatTransport(deps: {
       for (let n = 1; ; n++) {
         let retry: ReadRetry;
         try {
-          const answer = await tryOnce(calls, request);
+          const answer = await inSpan(spanNameOf(request), { 'http.request.method': request.method, 'url.path': request.url.pathname, try: n }, async (span) => {
+            const answered = await tryOnce(calls, request);
+            span.setAttribute('http.response.status_code', answered.status);
+            if (answered.status >= 400) span.setStatus({ code: SpanStatusCode.ERROR, message: `answered ${answered.status}` });
+            return answered;
+          });
           if (n === tries || !isTransientStatus(answer.status)) return answer;
           retry = { call, try: n, failure: 'status', httpStatus: answer.status };
         } catch (err) {

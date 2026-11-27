@@ -33,6 +33,7 @@ import { createLog, runInRequestContext, type Log, type LogDestination } from '.
 import { createHubMetrics, createWorkerMetrics } from './observability/metrics.js';
 import { createMetricsServer } from './observability/metrics-server.js';
 import { nestLogger } from './observability/nest-logger.js';
+import { nameServerSpan } from './observability/tracing.js';
 import { createOutbox } from './outbox/outbox.js';
 import { createCircuitBreaker, type PlatformApi } from './satusehat/circuit-breaker.js';
 import { createSatusehatClient } from './satusehat/client.js';
@@ -124,7 +125,11 @@ export async function createHub(config: HubConfig, runtime: HubRuntime): Promise
   );
   // Every line logged while handling a request carries its `requestId` (#40).
   const fastify = app.getHttpAdapter().getInstance();
-  fastify.addHook('onRequest', (req, _reply, done) => runInRequestContext(req.id, done));
+  fastify.addHook('onRequest', (req, _reply, done) => {
+    // A traced request's server span is named by its route template, never its raw path (#42).
+    if (req.routeOptions.url !== undefined) nameServerSpan(req.method, req.routeOptions.url);
+    runInRequestContext(req.id, done);
+  });
   // Every body reaches controllers as raw text, whatever its content type:
   // ingest authenticates and checks the Idempotency-Key before it judges the
   // body, and fingerprints the body itself (#7 check order).

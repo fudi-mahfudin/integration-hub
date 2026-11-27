@@ -127,6 +127,20 @@ export interface HubConfig {
   retry: RetryPolicy;
   /** Reconciliation (#39), executed by the worker processes. */
   reconciliation: ReconciliationConfig;
+  /** Traces (#42), exported to Jaeger. */
+  tracing: TracingConfig;
+}
+
+/** How much is traced, and where spans are exported (#15, #42). */
+export interface TracingConfig {
+  /**
+   * The share of traces sampled where they start (`TRACE_SAMPLE_RATIO`, 0-1,
+   * default 1): parent-based, so an attempt follows its event's decision. The
+   * big run uses 0.05.
+   */
+  sampleRatio: number;
+  /** Jaeger's OTLP/HTTP traces endpoint (`TRACE_EXPORT_URL`, default `http://localhost:4318/v1/traces`, as in compose). */
+  exportUrl: URL;
 }
 
 /** When reconciliation runs and which cases it checks by default (#39). */
@@ -215,6 +229,10 @@ export function loadConfig(env: Env): HubConfig {
     reconciliation: {
       intervalMs: parseNonNegativeInt('RECONCILIATION_INTERVAL_MS', env.RECONCILIATION_INTERVAL_MS ?? '900000'),
       lookbackMs: parsePositiveInt('RECONCILIATION_LOOKBACK_MS', env.RECONCILIATION_LOOKBACK_MS ?? '604800000'),
+    },
+    tracing: {
+      sampleRatio: parseRatio('TRACE_SAMPLE_RATIO', env.TRACE_SAMPLE_RATIO ?? '1'),
+      exportUrl: new URL(parseUrl('TRACE_EXPORT_URL', env.TRACE_EXPORT_URL ?? 'http://localhost:4318/v1/traces', ['http:', 'https:'])),
     },
   };
 }
@@ -314,6 +332,14 @@ function parsePositiveInt(name: string, raw: string): number {
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 1) {
     throw new Error(`${name} must be a positive integer, got "${raw}"`);
+  }
+  return n;
+}
+
+function parseRatio(name: string, raw: string): number {
+  const n = Number(raw);
+  if (raw.trim() === '' || !Number.isFinite(n) || n < 0 || n > 1) {
+    throw new Error(`${name} must be a number from 0 to 1, got "${raw}"`);
   }
   return n;
 }

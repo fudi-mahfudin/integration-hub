@@ -1,3 +1,4 @@
+import { isSpanContextValid, trace } from '@opentelemetry/api';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { pino } from 'pino';
 import type { CaseId, StepName } from '../cases/case-model.js';
@@ -45,10 +46,18 @@ interface RequestContext {
 
 const requestContext = new AsyncLocalStorage<RequestContext>();
 
+/** The `traceId` and `spanId` of the active span, when one is traced (#40, #42). */
+function traceFields(): { traceId?: string; spanId?: string } {
+  const spanContext = trace.getActiveSpan()?.spanContext();
+  if (spanContext === undefined || !isSpanContextValid(spanContext)) return {};
+  return { traceId: spanContext.traceId, spanId: spanContext.spanId };
+}
+
 /**
  * Builds the log of one process: pino JSON lines with `time`, `level`,
  * `msg` and `service`, plus the request context of the request being
- * handled, if any. Only composition roots and entry points call this.
+ * handled, if any, and the active span's trace and span ids. Only
+ * composition roots and entry points call this.
  */
 export function createLog(service: Service, destination: LogDestination): Log {
   const logger = pino(
@@ -60,7 +69,8 @@ export function createLog(service: Service, destination: LogDestination): Log {
       mixin: () => {
         const context = requestContext.getStore();
         // Redacted like every other field, though its values come from config and closed sets.
-        return context === undefined ? {} : (redact({ ...context }) as Record<string, unknown>);
+        const fields = context === undefined ? {} : (redact({ ...context }) as Record<string, unknown>);
+        return { ...fields, ...traceFields() };
       },
     },
     destination,

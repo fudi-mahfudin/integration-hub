@@ -8,6 +8,7 @@ import type { Database } from '../db/database.js';
 import { Problem } from '../http/problem.js';
 import { addToRequestContext, type Log } from '../observability/log.js';
 import type { HubMetrics } from '../observability/metrics.js';
+import { activeTraceparent, annotateActiveSpan, inSpan } from '../observability/tracing.js';
 import { parseEvent, visitEventOf } from './event-schema.js';
 import { fingerprint, type Fingerprint, type RequestBody } from './fingerprint.js';
 import type { IdempotencyKey, IdempotencyStore, IngestResponse, StoredKey } from './idempotency-store.js';
@@ -41,13 +42,21 @@ export function createIngest(deps: {
 
     const event = await parseEventAfterKeyLookup(store, source, key, body, bodyFingerprint);
     let caseId: CaseId | undefined;
-    const result = await store.record(source.id, key, bodyFingerprint, (trx) =>
-      recordEvent(trx, source, event, clock()).then((recorded) => {
-        caseId = recorded.caseId;
-        return accepted(event, recorded);
-      }),
-    );
+    // The ingest span (#15): the accepting transaction. The event keeps its traceparent, so its step's attempts join this trace.
+    const result = await inSpan('ingest.accept', { 'event.type': event.type }, async (span) => {
+      const traceparent = activeTraceparent();
+      const recorded = await store.record(source.id, key, bodyFingerprint, (trx) =>
+        recordEvent(trx, source, event, clock(), traceparent).then((r) => {
+          caseId = r.caseId;
+          return accepted(event, r);
+        }),
+      );
+      if (caseId !== undefined && 'accepted' in recorded) span.setAttribute('case.id', caseId);
+      return recorded;
+    });
     if (!('accepted' in result)) return countedDuplicate(source, body, answerDuplicate(result.raced, bodyFingerprint));
+    // The request's server span too.
+    if (caseId !== undefined) annotateActiveSpan({ 'case.id': caseId });
     log('info', 'source event accepted', { caseId });
     return result.accepted;
   }

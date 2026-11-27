@@ -100,6 +100,8 @@ export interface SourceEventTable {
   received_at: Timestamp;
   /** How many duplicate ingests got the event's original `202` (#38). */
   duplicates: Generated<number>;
+  /** The W3C `traceparent` of the ingest span that accepted the event (#42); null when it was not traced. */
+  traceparent: string | null;
 }
 
 /** One ingest rejection of a visit's event (#8): code, event type and time, never the body. */

@@ -7,6 +7,8 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
     globalSetup: ['test/support/global-setup.ts'],
+    // The production preload (#42): pg, ioredis and the HTTP server are patched as they first load.
+    execArgv: ['--import', './src/instrumentation.ts'],
     testTimeout: 15_000,
     hookTimeout: 30_000,
   },

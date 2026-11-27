@@ -72,3 +72,18 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  # Trace backend (#42): OTLP/HTTP on 4318 from the hub service and workers on the host, UI on 16686.
+  # In-memory storage: traces are lost on restart; the big run samples 5% so it stays bounded.
+  jaeger:
+    image: jaegertracing/jaeger:2.20.0
+    cpus: 1
+    mem_limit: 1g
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
+      - "${JAEGER_OTLP_PORT:-4318}:4318"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:13133/status"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

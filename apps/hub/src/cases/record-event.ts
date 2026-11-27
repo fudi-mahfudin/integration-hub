@@ -2,6 +2,7 @@ import type { Kysely, Transaction } from 'kysely';
 import type { SourceSystem } from '../auth/source-systems.js';
 import type { Database } from '../db/database.js';
 import { Problem, type FieldError } from '../http/problem.js';
+import type { Traceparent } from '../observability/tracing.js';
 import {
   applyEventArrival,
   deriveStatus,
@@ -50,7 +51,8 @@ export interface RecordedEvent {
  * case keyed by (source system, visitId) with all four step rows if needed,
  * stores the event, releases or blocks its step, and stores the re-derived
  * case status (#8). The released step is the outbox entry (ADR 0002): it
- * becomes claimable when this transaction commits.
+ * becomes claimable when this transaction commits. The event keeps
+ * `traceparent`, its ingest span's, for its step's attempts to join (#42).
  * @throws Problem `CASE_ABANDONED` (409) when an operator abandoned the case (ADR 0007).
  * @throws Problem `EVENT_ALREADY_RECORDED` (409) when the case already has an event of this type.
  * @throws Problem `UNSUPPORTED_MULTI_ITEM` (422) when the case already has a prescription with another item (ADR 0004).
@@ -64,6 +66,7 @@ export async function recordEvent(
   source: SourceSystem,
   event: AcceptedEvent,
   now: Date,
+  traceparent: Traceparent | null,
 ): Promise<RecordedEvent> {
   // Insert-or-nothing on the (source, visit) constraint: a concurrent opener
   // waits on the unique index until the first commits, then finds its case.
@@ -122,6 +125,7 @@ export async function recordEvent(
       item_id: event.prescriptionItem?.itemId ?? null,
       visit_time: event.visitTime,
       received_at: now,
+      traceparent,
     })
     .onConflict((oc) => oc.constraint('source_event_case_type_key').doNothing())
     .returning('id')
