@@ -73,14 +73,14 @@ Each request is counted per identifier: its method, resource type and business i
 | `http_503`, `http_429` | `retryAfter?: { form: "seconds" \| "http-date", seconds }` | `503` / `429` OperationOutcome, with `Retry-After` as delta seconds or the HTTP date that many seconds from the mock's clock, or none; not applied |
 | `http_400` | | `400` OperationOutcome with `PAYLOAD_INVALID`: a forced permanent rejection; not applied |
 | `http_401` | | `401` as for a bad token; not applied |
-| `timeout` | `ms` | Kept waiting `ms` (set it past the client's timeout), then the connection is dropped; not applied |
+| `timeout` | `ms` | Kept waiting `ms` (set it past the client's timeout), then the connection is dropped; not applied. If the client gives up first, the request ends then |
 | `connection_reset` | | The connection is reset at once; not applied |
-| `timeout_after_apply` | `ms` | Applied, then kept waiting `ms` and dropped: the effect counts though the client saw no answer |
+| `timeout_after_apply` | `ms` | Applied, then kept waiting `ms` and dropped: the effect counts though the client saw no answer. If the client gives up first, the request ends then |
 | `http_500_after_apply` | | Applied, then answered `500`: the effect counts |
 | `latency` | `ms`, or `minMs` and `maxMs` | Delayed by `ms`, or by a value drawn from the hash in `[minMs, maxMs]`, then applied and answered |
 | `hold` | | Parked until released through `/__mock/holds`, then applied and answered |
 
-A delayed or parked request whose client has gone is still applied when its wait ends, as a request that reached the platform would be, and a parked one stays listed until released.
+A delayed or parked request whose client has gone is still applied when its wait ends, as a request that reached the platform would be, and a parked one stays listed until released. A timeout fault instead ends when its client gives up: nothing more can happen to it, so it is logged as cut at that moment, and the client's retry doesn't overlap it in the report.
 
 A faulted request is logged with the rule's id in `fault`. One faulted before it was applied has `effect: "none"` and never counts in the report. One cut without an answer is logged with `response.status: null` when the connection goes. The report's `faultSeed` is the current rules' seed.
 

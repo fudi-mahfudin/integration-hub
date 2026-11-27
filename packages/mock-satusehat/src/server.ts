@@ -116,12 +116,12 @@ export function buildServer({ platform, log, faults, parking, clock }: ServerDep
       case 'connection_reset':
         return { kind: 'cut', how: 'reset', ...notApplied };
       case 'timeout': {
-        if (!(await parking.wait(fault.ms))) return { kind: 'dropped' };
+        if (!(await waitUnlessClientGone(fault.ms, req))) return { kind: 'dropped' };
         return { kind: 'cut', how: 'drop', ...notApplied };
       }
       case 'timeout_after_apply': {
         const applied = pending.apply();
-        if (!(await parking.wait(fault.ms))) return { kind: 'dropped' };
+        if (!(await waitUnlessClientGone(fault.ms, req))) return { kind: 'dropped' };
         return { kind: 'cut', how: 'drop', ...aboutOnly(applied), effect: applied.effect };
       }
       case 'latency': {
@@ -138,6 +138,27 @@ export function buildServer({ platform, log, faults, parking, clock }: ServerDep
         const applied = pending.apply();
         return { kind: 'answer', ...applied, status: 500, body: templates.injectedFailure(500, fault.ruleId), headers: {} };
       }
+    }
+  }
+
+  /**
+   * A timeout's hold: `ms`, or less if the client gives up first. Nothing
+   * more can happen to a request whose client has gone, so it ends then: it
+   * is logged as cut at that moment, and a retry the client sends next never
+   * overlaps it. Resolves `false` if everything waiting is dropped first.
+   */
+  async function waitUnlessClientGone(ms: number, req: FastifyRequest): Promise<boolean> {
+    const { socket } = req.raw;
+    if (socket.destroyed) return true;
+    let onClose = () => {};
+    const gone = new Promise<true>((resolve) => {
+      onClose = () => resolve(true);
+      socket.once('close', onClose);
+    });
+    try {
+      return await Promise.race([parking.wait(ms), gone]);
+    } finally {
+      socket.off('close', onClose);
     }
   }
 
