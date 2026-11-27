@@ -1,8 +1,9 @@
 import { migrateDatabase } from '../composition-root.js';
 import { loadConfig } from '../config.js';
-import { log } from '../observability/log.js';
+import { createLog } from '../observability/log.js';
 
-// Entry point of the one-shot `migrate` command.
+// Entry point of the one-shot `migrate` command, a hub service command: its lines say `service: hub`.
+const log = createLog('hub', process.stdout);
 try {
   const results = await migrateDatabase(loadConfig(process.env));
   for (const result of results) {

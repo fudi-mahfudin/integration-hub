@@ -20,6 +20,10 @@ _Avoid_: Message, request, payload
 A value the source system attaches to a source event so that resending the event is recognised as the same event.
 _Avoid_: Request ID, dedup key
 
+**Request ID**:
+The identifier the hub gives each HTTP request it receives, logged as `requestId` on every line written while handling it, so the lines of a request that has no case yet can be found together.
+_Avoid_: Idempotency key (that is the source system's, and names an event across resends), correlation ID (that is the case ID)
+
 **Duplicate ingest**:
 A source event arriving again with an idempotency key the hub has already accepted from the same source system, while that key is still retained.
 _Avoid_: Retry (that is the sender's act, not the hub's observation)

@@ -93,3 +93,23 @@ export const injectedFailure = defineTemplate(
     ],
   }),
 );
+
+/**
+ * 400 that a fault rule with `echoRequest` injects: the OperationOutcome
+ * quotes the request's URL and body, as a platform error may echo a NIK. It
+ * is what the hub's canary test proves never reaches a log line (#40).
+ */
+export const echoingRejection = defineTemplate(
+  { tag: 'assumed', note: 'FHIR R4 OperationOutcome; whether the real platform echoes requests in diagnostics is unverified' },
+  (ruleId: string, url: string, body: string): fhir4.OperationOutcome => ({
+    resourceType: 'OperationOutcome',
+    issue: [
+      {
+        severity: 'error',
+        code: 'invalid',
+        details: { coding: [{ system: MOCK_RULE_SYSTEM, code: 'PAYLOAD_INVALID' }], text: `rejected by mock fault rule "${ruleId}": ${url}` },
+        diagnostics: body,
+      },
+    ],
+  }),
+);

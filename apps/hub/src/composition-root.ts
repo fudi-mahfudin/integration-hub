@@ -4,6 +4,7 @@ import { APP_FILTER, NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Redis } from 'ioredis';
 import { sql, type Kysely } from 'kysely';
+import { randomUUID } from 'node:crypto';
 import { Agent } from 'undici';
 import type { MigrationResult } from 'kysely/migration';
 import { AdminKey } from './auth/admin-key.js';
@@ -26,7 +27,8 @@ import { createKfaClient } from './kfa/kfa-client.js';
 import { loadDrugMappingSeed } from './mapping/drug-mappings.js';
 import { loadLocationMappingSeed } from './mapping/location-mappings.js';
 import { MappingsController } from './mapping/mappings.controller.js';
-import { log } from './observability/log.js';
+import { createLog, runInRequestContext, type Log, type LogDestination } from './observability/log.js';
+import { nestLogger } from './observability/nest-logger.js';
 import { createOutbox } from './outbox/outbox.js';
 import { createCircuitBreaker, type PlatformApi } from './satusehat/circuit-breaker.js';
 import { createSatusehatClient } from './satusehat/client.js';
@@ -42,7 +44,7 @@ import { submitDispense } from './steps/submit-dispense.js';
 import { submitPrescription } from './steps/submit-prescription.js';
 import { updateVisit } from './steps/update-visit.js';
 import { createWorkerLoop } from './worker/worker.js';
-import { ADMIN_KEY, CASES, CLOCK, DATABASE, INGEST, RECONCILIATION, SOURCE_SYSTEMS } from './tokens.js';
+import { ADMIN_KEY, CASES, CLOCK, DATABASE, INGEST, LOG, RECONCILIATION, SOURCE_SYSTEMS } from './tokens.js';
 
 @Module({})
 class HubServiceModule {
@@ -59,6 +61,8 @@ class HubServiceModule {
 export interface HubRuntime {
   /** "Now" for the hub: the wall clock in production; tests move it to cross the key retention window. */
   clock: Clock;
+  /** Where the process's log lines go: stdout in production; the canary test captures them (#40). */
+  logs: LogDestination;
 }
 
 /** A booted hub service that has connected to Postgres and Redis. */
@@ -79,10 +83,11 @@ export interface Hub {
 export async function createHub(config: HubConfig, runtime: HubRuntime): Promise<Hub> {
   const db = createDatabase(config.databaseUrl);
   const { clock } = runtime;
+  const log = createLog('hub', runtime.logs);
   let redis: Redis;
   try {
     await checkPostgres(db, config.databaseUrl);
-    redis = await connectRedis(config.redisUrl);
+    redis = await connectRedis(config.redisUrl, log);
   } catch (err) {
     await db.destroy();
     throw err;
@@ -92,7 +97,7 @@ export async function createHub(config: HubConfig, runtime: HubRuntime): Promise
     config.idempotencyStore === 'naive-redis'
       ? createNaiveRedisIdempotencyStore({ db, redis, retentionHours: config.idempotencyRetentionHours })
       : createPostgresIdempotencyStore({ db, clock, retentionHours: config.idempotencyRetentionHours });
-  const ingest = createIngest({ store, db, clock });
+  const ingest = createIngest({ store, db, clock, log });
   const sources = new SourceSystems(config.sources);
 
   const app = await NestFactory.create<NestFastifyApplication>(
@@ -101,17 +106,21 @@ export async function createHub(config: HubConfig, runtime: HubRuntime): Promise
       { provide: SOURCE_SYSTEMS, useValue: sources },
       { provide: ADMIN_KEY, useValue: new AdminKey(config.adminApiKey, sources) },
       { provide: CLOCK, useValue: clock },
+      { provide: LOG, useValue: log },
       { provide: CASES, useValue: createCases({ db, clock, stalledAfterMs: config.stalledAfterMs }) },
       { provide: INGEST, useValue: ingest },
       { provide: RECONCILIATION, useValue: createReconciliationRuns({ db, clock }) },
     ]),
-    new FastifyAdapter(),
-    { logger: ['error', 'warn'], bodyParser: false },
+    // A UUID per request, so a `requestId` is unique across hub service processes.
+    new FastifyAdapter({ genReqId: () => randomUUID() }),
+    { logger: nestLogger(log), bodyParser: false },
   );
+  // Every line logged while handling a request carries its `requestId` (#40).
+  const fastify = app.getHttpAdapter().getInstance();
+  fastify.addHook('onRequest', (req, _reply, done) => runInRequestContext(req.id, done));
   // Every body reaches controllers as raw text, whatever its content type:
   // ingest authenticates and checks the Idempotency-Key before it judges the
   // body, and fingerprints the body itself (#7 check order).
-  const fastify = app.getHttpAdapter().getInstance();
   fastify.removeAllContentTypeParsers();
   fastify.addContentTypeParser('*', { parseAs: 'string' }, (_req, body, done) => done(null, body));
 
@@ -136,7 +145,9 @@ export async function createHub(config: HubConfig, runtime: HubRuntime): Promise
         throw new Error(`expected the server to listen on a TCP port, got address ${JSON.stringify(address)}`);
       }
       const host = config.host === '0.0.0.0' ? '127.0.0.1' : config.host;
-      return new URL(`http://${host}:${address.port}/`);
+      const baseUrl = new URL(`http://${host}:${address.port}/`);
+      log('info', 'hub service listening', { url: baseUrl.href });
+      return baseUrl;
     },
     purgeIdempotencyKeys,
     async close() {
@@ -164,6 +175,7 @@ export interface HubWorker {
 export async function createWorker(config: HubConfig, runtime: HubRuntime): Promise<HubWorker> {
   const db = createDatabase(config.databaseUrl);
   const { clock } = runtime;
+  const log = createLog('worker', runtime.logs);
   try {
     await checkPostgres(db, config.databaseUrl);
     await loadLocationMappingSeed(db, clock());
@@ -177,10 +189,10 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
   const dispatcher = new Agent({ connect: { timeout: config.satusehat.connectTimeoutMs } });
   // KFA v2 takes the same access token as FHIR (#14), so both share the process's tokens.
   // Redis only shares the token backoff and the rate limit; the worker runs without it (#13).
-  const redis = connectOptionalRedis(config.redisUrl);
-  const shared = createRedisTokenBackoff({ redis, authUrl: config.satusehat.authUrl, clock });
+  const redis = connectOptionalRedis(config.redisUrl, log);
+  const shared = createRedisTokenBackoff({ redis, authUrl: config.satusehat.authUrl, clock, log });
   // One breaker per platform API, in this process's memory (#13).
-  const breakerOf = (api: PlatformApi) => createCircuitBreaker({ api, clock, openMs: config.satusehat.breakerOpenMs });
+  const breakerOf = (api: PlatformApi) => createCircuitBreaker({ api, clock, openMs: config.satusehat.breakerOpenMs, log });
   const breakers = { fhir: breakerOf('fhir'), kfa: breakerOf('kfa'), auth: breakerOf('auth') };
   const tokens = createAccessTokens({ config: config.satusehat, dispatcher, clock, shared, breaker: breakers.auth });
   const transport = createSatusehatTransport({
@@ -192,6 +204,7 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
       urls: { fhir: config.satusehat.fhirUrl, kfa: config.satusehat.kfaUrl },
       rps: config.satusehat.rateLimitRps,
       workerProcesses: config.workerProcesses,
+      log,
     }),
     dispatcher,
     callTimeoutMs: config.satusehat.callTimeoutMs,
@@ -214,6 +227,7 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
     breakers: Object.values(breakers),
     pollIntervalMs: config.workerPollIntervalMs,
     attemptBudgetMs: config.attemptBudgetMs,
+    log,
   });
   // Reconciliation shares the transport, so its searches keep to the same rate limit and breakers (#39).
   const reconciler = createReconciler({
@@ -224,12 +238,14 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
     lookbackMs: config.reconciliation.lookbackMs,
     pollIntervalMs: config.workerPollIntervalMs,
     checkBudgetMs: config.attemptBudgetMs,
+    log,
   });
 
   return {
     start() {
       worker.start();
       reconciler.start();
+      log('info', 'worker claiming steps');
     },
     async close() {
       await Promise.all([worker.stop(), reconciler.stop()]);
@@ -261,7 +277,7 @@ async function checkPostgres(db: Kysely<Database>, databaseUrl: string): Promise
   }
 }
 
-async function connectRedis(redisUrl: string): Promise<Redis> {
+async function connectRedis(redisUrl: string, log: Log): Promise<Redis> {
   const redis = new Redis(redisUrl, { lazyConnect: true, maxRetriesPerRequest: 1 });
   // ioredis emits every socket error; log them as structured lines instead of its raw console output.
   redis.on('error', (err: Error) => log('warn', 'redis connection error', { error: err }));
@@ -279,7 +295,7 @@ async function connectRedis(redisUrl: string): Promise<Redis> {
  * background and keeps reconnecting, and commands fail at once while it is
  * down instead of queueing, so their callers fall back.
  */
-function connectOptionalRedis(redisUrl: string): Redis {
+function connectOptionalRedis(redisUrl: string, log: Log): Redis {
   const redis = new Redis(redisUrl, { lazyConnect: true, enableOfflineQueue: false, maxRetriesPerRequest: 1 });
   redis.on('error', (err: Error) => log('warn', 'redis connection error', { error: err }));
   redis.connect().catch((err: unknown) => {

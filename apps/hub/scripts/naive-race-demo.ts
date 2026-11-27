@@ -23,7 +23,7 @@ async function race(store: IdempotencyStoreKind): Promise<Map<string, number>> {
     IDEMPOTENCY_STORE: store,
     IDEMPOTENCY_PURGE_INTERVAL_MS: '0',
   });
-  const hub = await createHub(config, { clock: systemClock });
+  const hub = await createHub(config, { clock: systemClock, logs: process.stdout });
   const baseUrl = await hub.listen();
   try {
     const idempotencyKey = randomUUID();

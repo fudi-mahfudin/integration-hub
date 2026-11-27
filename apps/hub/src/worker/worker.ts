@@ -1,5 +1,5 @@
 import type { StepName } from '../cases/case-model.js';
-import { log } from '../observability/log.js';
+import type { Log } from '../observability/log.js';
 import type { CircuitBreaker } from '../satusehat/circuit-breaker.js';
 import type { ClaimedStep, Outbox } from '../outbox/outbox.js';
 import { SatusehatRequestError } from '../satusehat/errors.js';
@@ -37,8 +37,9 @@ export function createWorkerLoop(deps: {
   pollIntervalMs: number;
   /** How long one attempt may go on making calls (#13). */
   attemptBudgetMs: number;
+  log: Log;
 }): Worker {
-  const { outbox, runners, breakers, pollIntervalMs, attemptBudgetMs } = deps;
+  const { outbox, runners, breakers, pollIntervalMs, attemptBudgetMs, log } = deps;
   let running = false;
   let loop: Promise<void> | undefined;
   let wake: (() => void) | undefined;
@@ -83,14 +84,14 @@ export function createWorkerLoop(deps: {
       if (!(await outbox.storeOutcome(step, outcome, calls.readRetries))) {
         log('warn', OUTCOME_DISCARDED, fields);
       } else if ('deadLettered' in outcome) {
-        log('warn', 'step dead-lettered', { ...fields, reason: outcome.deadLettered });
+        log('error', 'step dead-lettered', { ...fields, errorCode: outcome.deadLettered });
       }
     } catch (err) {
       const failure = classifyFailure(err);
       const facts = failedAttemptFacts(err);
       try {
         if ('permanent' in failure) {
-          log('warn', 'attempt failed permanently; the step is dead-lettered', { ...fields, reason: failure.permanent, error: err });
+          log('error', 'attempt failed permanently; the step is dead-lettered', { ...fields, errorCode: failure.permanent, error: err });
           if (!(await outbox.storeOutcome(step, { deadLettered: failure.permanent, attempt: facts }, calls.readRetries))) {
             log('warn', OUTCOME_DISCARDED, fields);
           }
@@ -102,7 +103,8 @@ export function createWorkerLoop(deps: {
           exhausted: 'attempt failed transiently and was the last allowed; the step is dead-lettered',
           lease_lost: 'attempt failed transiently after its lease was lost; nothing is stored',
         }[stored];
-        log(stored === 'exhausted' ? 'error' : 'warn', message, { ...fields, outcome: failure.transient, error: err });
+        const errorCode = stored === 'exhausted' ? 'RETRIES_EXHAUSTED' : failure.transient;
+        log(stored === 'exhausted' ? 'error' : 'warn', message, { ...fields, errorCode, error: err });
       } catch (storeErr) {
         // The step stays in flight; its lease expires and another claim takes it over as `lease_expired`.
         log('error', 'storing the failed attempt failed; the step is retried once its lease expires', { ...fields, error: storeErr, attemptError: err });

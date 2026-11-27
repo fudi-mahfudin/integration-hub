@@ -50,7 +50,7 @@ describe('the circuit breaker stops a worker claiming while its platform API is 
     worker = await spawnWorker(env);
     const accepted = await postEvent(hub.baseUrl, { apiKey: WORLD_SOURCE_API_KEY, body: worldVisitStarted() });
 
-    const opened = await loggedLine(worker, (l) => String(l.message).startsWith('circuit breaker opened') && l.api === 'fhir', 10_000);
+    const opened = await loggedLine(worker, (l) => String(l.msg).startsWith('circuit breaker opened') && l.api === 'fhir', 10_000);
     await mock.client.setFaults({ seed: 36, rules: [] });
     const view = await waitForCase(hub.baseUrl, accepted.headers.get('location'), (v) => v.steps[0]?.state === 'completed', {
       apiKey: WORLD_SOURCE_API_KEY,
@@ -66,6 +66,6 @@ describe('the circuit breaker stops a worker claiming while its platform API is 
     // Nothing was claimed while it was open: the next attempt is the probe's, once it went half-open.
     expect(afterOpening).toEqual([expect.objectContaining({ outcome: 'completed' })]);
     expect(Date.parse(afterOpening[0]?.startedAt ?? '') - openedAt).toBeGreaterThanOrEqual(OPEN_MS - 10);
-    await loggedLine(worker, (l) => String(l.message).startsWith('circuit breaker closed') && l.api === 'fhir', 1_000);
+    await loggedLine(worker, (l) => String(l.msg).startsWith('circuit breaker closed') && l.api === 'fhir', 1_000);
   }, 30_000);
 });

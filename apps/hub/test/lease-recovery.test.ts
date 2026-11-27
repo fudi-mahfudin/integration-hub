@@ -139,7 +139,7 @@ describe('lease recovery: a crashed worker’s step is taken over and causes one
     await mock.client.releaseHold(hold?.id ?? '');
     const caseId = completed.caseId;
     const discarded = await eventually(() =>
-      stale.logged().find((line) => line.caseId === caseId && line.message === 'the lease was lost before the outcome was stored; the outcome is discarded'),
+      stale.logged().find((line) => line.caseId === caseId && line.msg === 'the lease was lost before the outcome was stored; the outcome is discarded'),
     );
 
     expect(discarded).toMatchObject({ level: 'warn', step: 'create_visit', attempt: 1 });

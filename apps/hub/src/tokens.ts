@@ -11,3 +11,5 @@ export const CLOCK = Symbol('CLOCK');
 export const CASES = Symbol('CASES');
 /** The operator's reconciliation runs (#39). */
 export const RECONCILIATION = Symbol('RECONCILIATION');
+/** The hub service's log (#40). */
+export const LOG = Symbol('LOG');

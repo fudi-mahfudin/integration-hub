@@ -1,6 +1,6 @@
 import type { Redis } from 'ioredis';
 import type { Clock } from '../clock.js';
-import { log } from '../observability/log.js';
+import type { Log } from '../observability/log.js';
 import type { PlatformApi } from './circuit-breaker.js';
 
 /** The platform APIs the hub rate-limits itself on (#13); the token endpoint has its own backoff instead. */
@@ -74,8 +74,9 @@ export function createRateLimiter(deps: {
   rps: Record<RateLimitedApi, number>;
   /** How many worker processes share the rate: a process alone without Redis takes this share of it. */
   workerProcesses: number;
+  log: Log;
 }): RateLimiter {
-  const { redis, clock, urls, rps, workerProcesses } = deps;
+  const { redis, clock, urls, rps, workerProcesses, log } = deps;
   const now = () => clock().getTime();
   const shared = { fhir: bucketOf(rps.fhir), kfa: bucketOf(rps.kfa) };
   const own = { fhir: bucketOf(rps.fhir / workerProcesses), kfa: bucketOf(rps.kfa / workerProcesses) };

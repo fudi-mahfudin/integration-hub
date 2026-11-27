@@ -1,6 +1,6 @@
 import type { Redis } from 'ioredis';
 import type { Clock } from '../clock.js';
-import { log } from '../observability/log.js';
+import type { Log } from '../observability/log.js';
 
 /**
  * Until when every process must leave the token endpoint alone after a
@@ -21,8 +21,8 @@ export interface SharedTokenBackoff {
  * endpoint's host scopes it, since the throttle is that endpoint's. Only the
  * composition root calls this.
  */
-export function createRedisTokenBackoff(deps: { redis: Redis; authUrl: URL; clock: Clock }): SharedTokenBackoff {
-  const { redis, authUrl, clock } = deps;
+export function createRedisTokenBackoff(deps: { redis: Redis; authUrl: URL; clock: Clock; log: Log }): SharedTokenBackoff {
+  const { redis, authUrl, clock, log } = deps;
   const key = `token_backoff_until:${authUrl.host}`;
   return {
     async until() {

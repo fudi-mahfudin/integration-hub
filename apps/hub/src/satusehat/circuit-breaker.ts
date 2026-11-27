@@ -1,5 +1,5 @@
 import type { Clock } from '../clock.js';
-import { log } from '../observability/log.js';
+import type { Log } from '../observability/log.js';
 import { CircuitOpen } from './errors.js';
 
 /** The SATUSEHAT APIs the hub calls: FHIR, KFA v2 and the token endpoint, each with its own breaker (#13). */
@@ -29,8 +29,8 @@ export interface CircuitBreaker {
 }
 
 /** Builds one platform API's breaker. Only the composition root (and its tests) call this. */
-export function createCircuitBreaker(deps: { api: PlatformApi; clock: Clock; openMs: number }): CircuitBreaker {
-  const { api, clock, openMs } = deps;
+export function createCircuitBreaker(deps: { api: PlatformApi; clock: Clock; openMs: number; log: Log }): CircuitBreaker {
+  const { api, clock, openMs, log } = deps;
   const now = () => clock().getTime();
   let recent: { atMs: number; healthy: boolean }[] = [];
   let openUntilMs: number | null = null;
