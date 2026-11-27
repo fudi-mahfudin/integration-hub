@@ -26,6 +26,7 @@ const PROBLEMS = {
   CASE_NOT_DEAD_LETTERED: { status: 409, title: 'Only a dead-lettered case can be replayed' },
   CASE_NOT_ABANDONABLE: { status: 409, title: 'Only a waiting or dead-lettered case can be abandoned' },
   CASE_ABANDONED: { status: 409, title: 'The case was abandoned by an operator' },
+  RECONCILIATION_RUNNING: { status: 409, title: 'A reconciliation run is already queued or running' },
   NOT_FOUND: { status: 404, title: 'Not found' },
   INTERNAL_ERROR: { status: 500, title: 'Internal error' },
 } as const satisfies Record<string, { status: number; title: string }>;

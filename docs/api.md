@@ -6,7 +6,7 @@ The HTTP API the hub service offers to source systems. Domain terms are in [GLOS
 
 Every request carries `Authorization: Bearer <api key>`. Each source system has one static API key. The source system's identity, and the SATUSEHAT organization it belongs to, come from the key, never from the request body. A missing, malformed or unknown key is [`401 UNAUTHENTICATED`](#unauthenticated).
 
-The operator has one more static key, the **admin API key** (`HUB_ADMIN_API_KEY`; there is no user model, ADR 0001). Only it may call the operator endpoints ([replay](#post-v1casesidreplay), [abandon](#post-v1casesidabandon), [mapping administration](#put-v1adminmappingsdrugslocationslocalcode)); a source system's key there is [`403 FORBIDDEN`](#forbidden). On the read endpoints ([case list](#get-v1cases), [case](#get-v1casesid), [dead-letter summary](#get-v1dead-letterssummary)) it sees every source system's cases, and a source system's key only that source system's own.
+The operator has one more static key, the **admin API key** (`HUB_ADMIN_API_KEY`; there is no user model, ADR 0001). Only it may call the operator endpoints ([replay](#post-v1casesidreplay), [abandon](#post-v1casesidabandon), [mapping administration](#put-v1adminmappingsdrugslocationslocalcode), [reconciliation](#post-v1adminreconciliationruns)); a source system's key there is [`403 FORBIDDEN`](#forbidden). On the read endpoints ([case list](#get-v1cases), [case](#get-v1casesid), [dead-letter summary](#get-v1dead-letterssummary)) it sees every source system's cases, and a source system's key only that source system's own.
 
 ## `POST /v1/events`
 
@@ -241,7 +241,7 @@ Case status: `waiting`, `active`, `dead_lettered`, `completed`, `abandoned`. Ste
 | `abandonment` | For an `abandoned` case: the operator's `note`, `abandonedAt`, the `previousStatus` (`waiting` or `dead_lettered`), the `waitingFor` or `deadLetterReason` it had then (the other is `null`), and `remoteRecordsLeft`, the records its completed steps left at SATUSEHAT (`[{ step, type, id, version }]`). Otherwise `null`. |
 | `rejections` | The rejection log of the visit: every `VALIDATION_FAILED`, `UNSUPPORTED_MULTI_ITEM`, `PRESCRIPTION_MISMATCH`, `FINISHED_BEFORE_STARTED`, `EVENT_ALREADY_RECORDED` and `CASE_ABANDONED` answer to an event naming this `visitId` and an event type, oldest first, including those sent before the case opened. Only the code, the event type and the time are kept, never the body. It explains a waiting case and never changes it. |
 | `events` | The case's accepted source events, in the order the hub accepted them: the event `type`, when it was accepted (`receivedAt`, UTC), its `traceId` (always `null`: the hub records no traces yet), and how many [duplicate ingests](#idempotency) were answered with its original `202` (`duplicates`). A request with the same key and another body, or a resend after its key was purged (`409 EVENT_ALREADY_RECORDED`), is not a duplicate here. |
-| `divergences` | What [reconciliation](../GLOSSARY.md) found different at SATUSEHAT. Always empty: the hub does not reconcile yet. |
+| `divergences` | What the latest completed [reconciliation run](#post-v1adminreconciliationruns) that covered the case found different at SATUSEHAT: each `{ runId, checkedAt, class, step, resourceType, field, snapshot }`, as in the run's findings. A run covers a case when it checked it to the end, so a `skipped` or `unchecked` check doesn't count. Empty when nothing differed, or no run has covered the case. |
 | `steps[].attempts` | How many times a worker has claimed the step. A replay doesn't reset it: attempt numbers go on from it. |
 | `steps[].remote` | The record the step stored at SATUSEHAT, by its remote identifier and `meta.versionId`; `null` until the step completes. |
 | `steps[].deadLetterReason` | Why the step was dead-lettered; `null` unless it was. A step abandoned while dead-lettered keeps it. |
@@ -348,6 +348,99 @@ Admin API key only. Creates or replaces the operator's mapping of a source syste
 
 Admin API key only. Deletes the mapping: `204`, or `404 NOT_FOUND` when there is none. A step that needs it is dead-lettered `MAPPING_MISSING` at its next attempt; completed steps keep the values they pinned.
 
+## `POST /v1/admin/reconciliation/runs`
+
+Admin API key only. Requests a reconciliation run: a check that compares cases at rest with their records at SATUSEHAT and reports every divergence. It never changes a case. A worker executes it; `202 { "runId": "…" }`. While another run is queued or running, the request is [`409 RECONCILIATION_RUNNING`](#reconciliation_running), whose body names that run in `runId`.
+
+The body is optional. Without one, the run checks every case that is not `active` and whose last change (`updatedAt`) is within the lookback (`RECONCILIATION_LOOKBACK_MS`, default 7 days) before the run starts. The body can narrow that, never widen it:
+
+| Field | Meaning |
+|---|---|
+| `caseIds` | Only these cases: 1-1000 case ids. |
+| `since` | Only cases whose last change is at or after this time (see [Times](#times)). |
+
+A bad field is [`422 VALIDATION_FAILED`](#validation_failed).
+
+The workers also request a run on their own once the last run started longer ago than `RECONCILIATION_INTERVAL_MS` (default 15 min; `0` turns that off). Runs go one at a time across every worker process, under a Postgres advisory lock, and check one case at a time. Their searches share the worker's rate limit and circuit breakers with its steps. A run left `running` by a worker that stopped is marked `failed` by the next worker to take the lock.
+
+**What a check expects.** A completed step has exactly one record at SATUSEHAT under its business identifier: the one it stored. Any other step state has none, including an abandoned step (ADR 0007). One search per resource checks it, by `encounter/{org}` for the Encounter and by `prescription/{org}` for the MedicationRequest and the MedicationDispense. That is at most three calls per case. The prescription searches are left out when the case has no prescription. The record found must hold the values the step sent, by field:
+
+| Resource | Fields |
+|---|---|
+| Encounter | `status` (`arrived`, or `finished` once update visit completed), `subject`, `participant.individual`, `location`, and `meta.versionId` against the version the hub stored last |
+| MedicationRequest | `status` (`completed`), `subject`, `requester`, `encounter`, `medication` (the contained Medication's KFA code) |
+| MedicationDispense | `status` (`completed`), `subject`, `performer.actor`, `context`, `authorizingPrescription`, `medication` |
+
+**How a check ends.** Each case's check ends one of four ways:
+
+- `clean`: nothing differs.
+- `divergent`: one or more divergences.
+- `skipped`: the case changed during its check, or is `active` again, so nothing is compared.
+- `unchecked`: a search still failed after its [read retries](#retries), or its circuit breaker was open.
+
+A run with any `unchecked` case ends `completed_with_errors` instead of `completed`.
+
+**Divergence classes.**
+
+| `class` | Meaning |
+|---|---|
+| `REMOTE_MISSING` | A completed step's record is not found. |
+| `REMOTE_UNEXPECTED` | A record is found for a step that is not completed. |
+| `REMOTE_DUPLICATE` | A completed step's identifier finds more than one record. |
+| `REMOTE_ID_MISMATCH` | It finds one record, but not the one the step stored. |
+| `FIELD_MISMATCH` | The record holds another value in `field`. |
+
+Findings are kept as snapshots of what was expected and found. A field holding a person's IHS number (`subject`, `participant.individual`, `requester`, `performer.actor`) shows only `{ "differs": true }`, never the values.
+
+**Retention.** When a run is created, runs requested more than 14 days earlier are deleted with their findings. The latest completed run is always kept.
+
+## `GET /v1/admin/reconciliation/runs/{id}`
+
+Admin API key only. One run and a page of its findings, in the order it found them.
+
+| Parameter | Meaning |
+|---|---|
+| `wait` | Until the run has ended, hold the answer up to this many ms (0-60000; default 0) for it to end (a long-poll). |
+| `limit` | Findings per page, 1-500; default 100. |
+| `cursor` | The `nextCursor` of the page before. |
+
+```json
+{
+  "runId": "3c1d…",
+  "status": "completed",
+  "trigger": "operator",
+  "scope": { "caseIds": null, "since": null },
+  "requestedAt": "2026-03-02T02:00:00.000Z",
+  "startedAt": "2026-03-02T02:00:00.410Z",
+  "endedAt": "2026-03-02T02:00:03.120Z",
+  "error": null,
+  "counts": { "cases": 12, "clean": 10, "divergent": 1, "skipped": 1, "unchecked": 0 },
+  "findings": [
+    {
+      "caseId": "0b6f…", "source": "simulator", "visitId": "V-2026-000123",
+      "kind": "divergence", "class": "FIELD_MISMATCH", "step": "update_visit", "resourceType": "Encounter", "field": "status",
+      "snapshot": { "expected": "finished", "actual": "cancelled" }
+    },
+    { "caseId": "7a2e…", "source": "simulator", "visitId": "V-2026-000124", "kind": "skipped", "class": null, "step": null, "resourceType": null, "field": null, "snapshot": {} }
+  ],
+  "nextCursor": null
+}
+```
+
+`status` is one of:
+
+- `queued`: no worker has started it.
+- `running`.
+- `completed`.
+- `completed_with_errors`: some cases are `unchecked`.
+- `failed`: it stopped before the end, and `error` says why.
+
+`trigger` is `operator` or `schedule`. A finding's `kind` is `divergence`, `skipped` or `unchecked`. `class`, `step`, `resourceType` and `field` are `null` unless it is a divergence, and `field` is `null` unless the class is `FIELD_MISMATCH`. An `unchecked` finding's `snapshot` holds the `error` and its `readRetries`. An unknown id is `404 NOT_FOUND`.
+
+## `GET /v1/admin/reconciliation/runs`
+
+Admin API key only. The latest runs, newest first, without their findings: `{ "runs": [ … ] }`. `limit` is 1-100; default 20.
+
 ## Errors
 
 Every error is an RFC 9457 problem, `Content-Type: application/problem+json`:
@@ -426,6 +519,10 @@ Every error is an RFC 9457 problem, `Content-Type: application/problem+json`:
 ### CASE_NOT_ABANDONABLE
 
 `409`. Only a `waiting` or `dead_lettered` case can be abandoned.
+
+### RECONCILIATION_RUNNING
+
+`409`. A reconciliation run is already queued or running; `runId` names it. Ask for its result instead, or request again once it has ended.
 
 ### NOT_FOUND
 

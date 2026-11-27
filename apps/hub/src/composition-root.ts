@@ -30,6 +30,9 @@ import { log } from './observability/log.js';
 import { createOutbox } from './outbox/outbox.js';
 import { createCircuitBreaker, type PlatformApi } from './satusehat/circuit-breaker.js';
 import { createSatusehatClient } from './satusehat/client.js';
+import { createReconciler } from './reconciliation/reconciler.js';
+import { ReconciliationController } from './reconciliation/reconciliation.controller.js';
+import { createReconciliationRuns } from './reconciliation/runs.js';
 import { createRateLimiter } from './satusehat/rate-limiter.js';
 import { createAccessTokens } from './satusehat/token.js';
 import { createRedisTokenBackoff } from './satusehat/token-backoff.js';
@@ -39,14 +42,14 @@ import { submitDispense } from './steps/submit-dispense.js';
 import { submitPrescription } from './steps/submit-prescription.js';
 import { updateVisit } from './steps/update-visit.js';
 import { createWorkerLoop } from './worker/worker.js';
-import { ADMIN_KEY, CASES, CLOCK, DATABASE, INGEST, SOURCE_SYSTEMS } from './tokens.js';
+import { ADMIN_KEY, CASES, CLOCK, DATABASE, INGEST, RECONCILIATION, SOURCE_SYSTEMS } from './tokens.js';
 
 @Module({})
 class HubServiceModule {
   static register(providers: Provider[]): DynamicModule {
     return {
       module: HubServiceModule,
-      controllers: [HealthController, EventsController, CasesController, DeadLettersController, MappingsController],
+      controllers: [HealthController, EventsController, CasesController, DeadLettersController, MappingsController, ReconciliationController],
       providers: [...providers, { provide: APP_FILTER, useClass: ProblemFilter }],
     };
   }
@@ -100,6 +103,7 @@ export async function createHub(config: HubConfig, runtime: HubRuntime): Promise
       { provide: CLOCK, useValue: clock },
       { provide: CASES, useValue: createCases({ db, clock, stalledAfterMs: config.stalledAfterMs }) },
       { provide: INGEST, useValue: ingest },
+      { provide: RECONCILIATION, useValue: createReconciliationRuns({ db, clock }) },
     ]),
     new FastifyAdapter(),
     { logger: ['error', 'warn'], bodyParser: false },
@@ -146,9 +150,9 @@ export async function createHub(config: HubConfig, runtime: HubRuntime): Promise
 
 /** A booted worker process that has connected to Postgres. */
 export interface HubWorker {
-  /** Starts claiming steps. */
+  /** Starts claiming steps, and executing reconciliation runs. */
   start(): void;
-  /** Stops claiming, waits for the attempt in progress, then closes the Postgres pool, the SATUSEHAT connections and Redis. */
+  /** Stops claiming and reconciling, waits for the attempt and the case check in progress, then closes the Postgres pool, the SATUSEHAT connections and Redis. */
   close(): Promise<void>;
 }
 
@@ -211,11 +215,24 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
     pollIntervalMs: config.workerPollIntervalMs,
     attemptBudgetMs: config.attemptBudgetMs,
   });
+  // Reconciliation shares the transport, so its searches keep to the same rate limit and breakers (#39).
+  const reconciler = createReconciler({
+    db,
+    clock,
+    satusehatFor: (calls) => clientsFor(calls).satusehat,
+    intervalMs: config.reconciliation.intervalMs,
+    lookbackMs: config.reconciliation.lookbackMs,
+    pollIntervalMs: config.workerPollIntervalMs,
+    checkBudgetMs: config.attemptBudgetMs,
+  });
 
   return {
-    start: () => worker.start(),
+    start() {
+      worker.start();
+      reconciler.start();
+    },
     async close() {
-      await worker.stop();
+      await Promise.all([worker.stop(), reconciler.stop()]);
       await db.destroy();
       await dispatcher.close();
       redis.disconnect();

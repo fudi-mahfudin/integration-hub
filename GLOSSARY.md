@@ -126,6 +126,10 @@ _Avoid_: Sync, audit, repair
 A disagreement between a case's local state and the matching record at SATUSEHAT, found by reconciliation.
 _Avoid_: Drift, inconsistency
 
+**Reconciliation run**:
+One pass of reconciliation over the cases in its scope, requested by an operator or on a schedule and executed by one worker at a time. It checks each case once: the check is clean, finds divergences, is *skipped* (the case changed during its check, so nothing is compared) or is *unchecked* (a search at SATUSEHAT still failed, so nothing is known). Each divergence, skipped and unchecked case is a *finding* of the run.
+_Avoid_: Sync job, audit, scan
+
 ## Platform side
 
 **Remote identifier**:

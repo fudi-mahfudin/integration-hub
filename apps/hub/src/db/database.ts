@@ -2,6 +2,7 @@ import { Kysely, PostgresDialect, type ColumnType, type Generated } from 'kysely
 import pg from 'pg';
 import type { CaseStatus, DeadLetterReason, EventType, RemoteIdentifier, StepName, StepState } from '../cases/case-model.js';
 import type { RejectionCode } from '../cases/rejection-log.js';
+import type { DivergenceClass, ReconciliationCheckOutcome, ReconciliationRunStatus } from '../reconciliation/model.js';
 
 /** A `timestamptz` column: read as a `Date`, written as a `Date`. */
 type Timestamp = ColumnType<Date, Date, Date>;
@@ -177,6 +178,43 @@ export interface AbandonmentTable {
   remote_records_left: ColumnType<unknown, string, never>;
 }
 
+/** A reconciliation run (#39): requested by an operator or the schedule, executed by a worker under one advisory lock. */
+export interface ReconciliationRunTable {
+  id: Generated<string>;
+  status: ReconciliationRunStatus;
+  trigger: 'operator' | 'schedule';
+  /** Only these cases; null for every case in the default scope. */
+  case_ids: string[] | null;
+  /** Only cases changed since then; null when not given. */
+  since: Timestamp | null;
+  requested_at: Timestamp;
+  started_at: Timestamp | null;
+  ended_at: Timestamp | null;
+  /** Why a `failed` run failed; null otherwise. */
+  error: string | null;
+}
+
+/** One case a reconciliation run checked, and how the check ended (#39). */
+export interface ReconciliationCheckTable {
+  run_id: string;
+  case_id: string;
+  outcome: ReconciliationCheckOutcome;
+  checked_at: Timestamp;
+}
+
+/** What a reconciliation run found on one case (#39), stored as a snapshot. */
+export interface ReconciliationFindingTable {
+  id: ColumnType<string, never, never>;
+  run_id: string;
+  case_id: string;
+  kind: 'divergence' | 'skipped' | 'unchecked';
+  class: DivergenceClass | null;
+  step: StepName | null;
+  resource_type: RemoteIdentifier['type'] | null;
+  field: string | null;
+  snapshot: ColumnType<unknown, string, never>;
+}
+
 /** Every table, as Kysely sees it. */
 export interface Database {
   case: CaseTable;
@@ -190,6 +228,9 @@ export interface Database {
   kfa_product: KfaProductTable;
   replay: ReplayTable;
   abandonment: AbandonmentTable;
+  reconciliation_runs: ReconciliationRunTable;
+  reconciliation_checks: ReconciliationCheckTable;
+  reconciliation_findings: ReconciliationFindingTable;
 }
 
 /**

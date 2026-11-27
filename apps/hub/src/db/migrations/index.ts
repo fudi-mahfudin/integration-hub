@@ -8,6 +8,7 @@ import { leaseExpiryMigration } from './0006_lease_expiry.js';
 import { retriesMigration } from './0007_retries.js';
 import { replayAndAbandonMigration } from './0008_replay_and_abandon.js';
 import { caseListMigration } from './0009_case_list.js';
+import { reconciliationMigration } from './0010_reconciliation.js';
 
 /**
  * Every migration, in order. Keys are `NNNN_snake_case_name` and sort
@@ -24,4 +25,5 @@ export const migrations: Record<string, Migration> = {
   '0007_retries': retriesMigration,
   '0008_replay_and_abandon': replayAndAbandonMigration,
   '0009_case_list': caseListMigration,
+  '0010_reconciliation': reconciliationMigration,
 };
