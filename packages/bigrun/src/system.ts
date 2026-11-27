@@ -1,6 +1,6 @@
 // What the harness learns from the machine it runs on: git, compose and
 // docker. Each command's output is parsed here, at the boundary.
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -127,4 +127,34 @@ export async function captureEnvironment(repoRoot: string, containers: readonly 
     workerProcesses: containers.filter(isWorker).length,
     containerLimits: containers.map(({ service, cpus, memoryBytes }) => ({ service, cpus, memoryBytes })).toSorted((a, b) => a.service.localeCompare(b.service)),
   };
+}
+
+/** The compose service the load test's k6 runs in (profile `loadtest`). */
+const K6 = ['compose', '--profile', 'loadtest', 'run', '--rm', '--no-deps'];
+
+/** The k6 version the compose service `k6` runs, as `k6 version` prints it. */
+export async function k6Version(repoRoot: string): Promise<string> {
+  return run(repoRoot, 'docker', [...K6, 'k6', 'version']);
+}
+
+/**
+ * Runs the load test's k6 script in the compose service `k6`, its output
+ * shown as it comes, on the run directory `containerDir` (as the container
+ * mounts it), with `apiKey` the source API key it sends with, passed in its
+ * environment so it is never written to the run directory. It runs as this
+ * user, so the files it writes there are ours.
+ * Resolves to k6's exit code: 0, 99 when a threshold was crossed, anything
+ * else when k6 itself failed.
+ */
+export function runK6(repoRoot: string, containerDir: string, apiKey: string): Promise<number> {
+  const user = process.getuid && process.getgid ? ['--user', `${process.getuid()}:${process.getgid()}`] : [];
+  return new Promise((resolve, reject) => {
+    const child = spawn('docker', [...K6, ...user, '-e', `LOADTEST_DIR=${containerDir}`, '-e', 'LOADTEST_API_KEY', 'k6'], {
+      cwd: repoRoot,
+      env: { ...process.env, LOADTEST_API_KEY: apiKey },
+      stdio: 'inherit',
+    });
+    child.on('error', (err) => reject(new Error('starting k6 through `docker compose run` failed', { cause: err })));
+    child.on('exit', (code, signal) => resolve(code ?? (signal === null ? 1 : 128)));
+  });
 }

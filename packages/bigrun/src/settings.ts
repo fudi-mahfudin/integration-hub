@@ -101,7 +101,7 @@ export type RunKind = 'official' | 'ci' | 'unofficial';
 
 /** One `--set path=value`: a committed value this run replaced. */
 export interface Override {
-  /** Dotted path under `bigRun`, e.g. `arrival.eventsPerSecond`. */
+  /** Dotted path under the run's section of the commitments file, e.g. `arrival.eventsPerSecond` under `bigRun`. */
   path: string;
   value: unknown;
 }
@@ -142,7 +142,7 @@ export function loadSettings(commitments: unknown, argv: readonly string[]): Set
   if (args.ci) raw = scaledForCi(parse(raw), root.data.ciRun.visits);
   const overrides = args.sets.map((set) => {
     const override = parseOverride(set);
-    raw = withValueAt(raw, override);
+    raw = withValueAt(raw, override, 'bigRun');
     return override;
   });
   const bigRun = parse(raw);
@@ -172,7 +172,8 @@ function parse(raw: unknown): BigRunCommitments {
   throw new SettingsError(`the commitments don't match what the harness runs: ${issues.join('; ')}`);
 }
 
-function parseOverride(set: string): Override {
+/** One `--set path=value` argument as an override; the value is read as JSON, else as the text itself. */
+export function parseOverride(set: string): Override {
   const at = set.indexOf('=');
   if (at <= 0) throw new SettingsError(`--set needs path=value, got "${set}"`);
   const path = set.slice(0, at);
@@ -187,14 +188,14 @@ function parseOverride(set: string): Override {
   return { path, value };
 }
 
-/** A copy of `raw` with the override's value at its path, which must already exist. */
-function withValueAt(raw: unknown, override: Override): unknown {
+/** A copy of `raw`, the commitments file's `section`, with the override's value at its path, which must already exist. */
+export function withValueAt(raw: unknown, override: Override, section: string): unknown {
   const copy: unknown = structuredClone(raw);
   const keys = override.path.split('.');
   let node: unknown = copy;
   for (const [i, key] of keys.entries()) {
     if (typeof node !== 'object' || node === null || !(key in node)) {
-      throw new SettingsError(`--set ${override.path}: bigRun has no "${keys.slice(0, i + 1).join('.')}"`);
+      throw new SettingsError(`--set ${override.path}: ${section} has no "${keys.slice(0, i + 1).join('.')}"`);
     }
     // An object, checked just above.
     const record = node as Record<string, unknown>;

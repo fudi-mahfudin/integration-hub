@@ -228,3 +228,14 @@ services:
         condition: service_healthy
       mock:
         condition: service_healthy
+
+  # One-shot (#46): the load test's load generator. `pnpm loadtest` writes a run directory under
+  # results/ and runs this with LOADTEST_DIR naming it and LOADTEST_API_KEY set; it sends to the hub
+  # service by name, so it needs no published port. Never started by `up`.
+  k6:
+    image: grafana/k6:2.4.0
+    profiles: [loadtest]
+    volumes:
+      - ./packages/bigrun/k6:/scripts:ro
+      - ./results:/results
+    command: ["run", "--quiet", "/scripts/ingest.js"]

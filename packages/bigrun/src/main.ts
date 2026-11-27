@@ -6,7 +6,7 @@ import { MockSatusehatClient, type LogEntry, type MockReport } from '@integratio
 import { DEFAULT_WORLD_PATH, loadWorld } from '@integration-hub/mock-satusehat/world';
 import { planBatch, runBatch, type BatchOptions, type Plan } from '@integration-hub/simulator';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { z } from 'zod';
@@ -18,6 +18,7 @@ import { checkTopology, officialGuard } from './preflight.js';
 import { queryPrometheus } from './prometheus.js';
 import { updateIndex } from './publish.js';
 import { reconcileAfterDrain } from './reconciliation.js';
+import { newRunDirectory, runDirectoryBase } from './run-directory.js';
 import { indexedRun, renderReport, type Report } from './report.js';
 import { loadSettings, SettingsError, type BigRunCommitments, type Settings } from './settings.js';
 import { captureEnvironment, COMMITMENTS_FILE, composeUp, inspectContainers, readGitFacts } from './system.js';
@@ -184,19 +185,11 @@ function checkPlan(planned: Plan, b: BigRunCommitments): void {
 /**
  * A new directory for the run: `results/bigrun/<YYYY-MM-DD>-<shortsha>` for
  * an official run, `results/bigrun-unofficial/…-<kind>` (never committed) for
- * any other; `-2`, `-3`… when one already exists.
+ * any other.
  */
-async function runDirectory(at: Date, sha: string, runKind: Settings['kind']): Promise<{ name: string; path: string }> {
-  const parent = runKind === 'official' ? 'results/bigrun' : 'results/bigrun-unofficial';
-  const base = `${at.toISOString().slice(0, 10)}-${sha.slice(0, 7)}${runKind === 'official' ? '' : `-${runKind}`}`;
-  for (let n = 1; ; n++) {
-    const name = n === 1 ? base : `${base}-${n}`;
-    const path = `${repoRoot}${parent}/${name}`;
-    if (!existsSync(path)) {
-      await mkdir(path, { recursive: true });
-      return { name, path };
-    }
-  }
+function runDirectory(at: Date, sha: string, runKind: Settings['kind']): Promise<{ name: string; path: string }> {
+  const base = runDirectoryBase(at, sha);
+  return runKind === 'official' ? newRunDirectory(repoRoot, 'results/bigrun', base) : newRunDirectory(repoRoot, 'results/bigrun-unofficial', `${base}-${runKind}`);
 }
 
 async function writeJson(path: string, value: unknown): Promise<void> {
