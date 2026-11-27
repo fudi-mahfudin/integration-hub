@@ -61,9 +61,28 @@ The rules:
 - A change to the commitments file needs a reason in its commit message. Its full history is public: [history of `bigrun.commitments.json`](https://github.com/fudi-mahfudin/integration-hub/commits/main/bigrun.commitments.json).
 - The big-run harness will refuse an official run on a dirty tree or if the file changed since its own commit, and its report will record the git SHA, the file's hash and that commit's date.
 
-## Run it from a clean clone
+## Quick start
 
 You need Node 24 (see `.nvmrc`), pnpm 11, and Docker.
+
+```sh
+corepack enable     # use the pnpm version pinned in package.json
+pnpm stack:up       # build and start everything in compose, then run a small simulated batch to completion
+```
+
+`pnpm stack:up` builds the images. It starts Postgres, Redis, Prometheus, Grafana and Jaeger, runs the one-shot `migrate`, and starts the mock SATUSEHAT, the hub service and two workers, waiting until each is healthy. Then it runs the source simulator once. The simulator plans 20 fictional visits from the world dataset (seed 44). It sends their 80 source events, plus duplicates, events out of order, substitutions and fallback patient lookups, to the hub as the development source system. It waits until every case has completed and exits 0, or exits 1 and prints every failed check. Run it again for another batch: each run's visits get new ids. `SIM_SEED` and `SIM_VISITS` change the batch (`SIM_VISITS=200 pnpm stack:up`; the other settings are in [packages/simulator/README.md](packages/simulator/README.md)).
+
+While it runs and afterwards, look at:
+
+- the cases: `curl -H 'Authorization: Bearer dev-source-key' 'http://localhost:3000/v1/cases?source=simulator'`
+- what reached SATUSEHAT: `curl http://localhost:3001/__mock/report` (empty sections: no duplicate submission, nothing out of order) and `http://localhost:3001/__mock/log`
+- Grafana on http://localhost:3300, Jaeger on http://localhost:16686, Prometheus on http://localhost:9090
+
+`pnpm stack:down` stops everything and deletes its data.
+
+## Run it from a clean clone
+
+To develop, run the parts on the host instead:
 
 ```sh
 corepack enable     # use the pnpm version pinned in package.json
@@ -129,7 +148,7 @@ The hub never migrates itself: always run `pnpm migrate` before starting it. At 
 
 **Stopping.** `SIGTERM` or `SIGINT` (Ctrl-C) drains a process instead of killing it, and `/readyz` turns `503 draining`. The hub service answers requests on connections still open with `503 SERVICE_DRAINING` and gives requests in flight 10s; `SHUTDOWN_DELAY_MS` (default 0) keeps it serving that long first, for a load balancer. A worker claims nothing more and lets its attempt in progress end, for up to `WORKER_DRAIN_DEADLINE_MS` (default 70s). At that deadline, or at a second signal, it aborts the attempt and logs it as `worker_shutdown`, and another worker takes the step at once. A reconciliation run it was executing is stopped once it holds no step lease, marked `interrupted`, and not resumed. Both exit 0.
 
-**In containers.** `pnpm app:up` builds the hub image (`apps/hub/Dockerfile`) and starts the hub service on port 3000 and two workers on 3002 and 3003 in compose, after the one-shot `migrate` service has completed. The workers deliver to the mock SATUSEHAT on the host's port 3001. Compose gives the hub service 15s and the workers 80s to drain before it kills them (`stop_grace_period`).
+**In containers.** `pnpm app:up` builds the hub image (`apps/hub/Dockerfile`) and the mock's (`packages/mock-satusehat/Dockerfile`). It starts the mock SATUSEHAT on port 3001 (`MOCK_PORT`), the hub service on port 3000 and two workers on 3002 and 3003 in compose, after the one-shot `migrate` service has completed. The workers deliver to that mock, so stop a mock running on the host first. `pnpm stack:up` does the same and also runs the source simulator (see [Quick start](#quick-start)). Compose gives the hub service 15s and the workers 80s to drain before it kills them (`stop_grace_period`).
 
 ## Repository layout
 
@@ -138,9 +157,10 @@ The hub never migrates itself: always run `pnpm migrate` before starting it. At 
 | `apps/hub` | The hub: one NestJS + Fastify codebase, deployed as the hub service (`main.ts`) and the worker process (`worker-main.ts`) (ADR 0001) |
 | `apps/hub/seed` | The operator's location and drug mapping seeds, loaded idempotently at boot |
 | `packages/mock-satusehat` | The mock SATUSEHAT: a stateful fake platform with its own validator (ADR 0006) and the `/__mock/*` inspection and control API; never deployed publicly |
+| `packages/simulator` | The source simulator: plans seeded batches of fictional visits from the world dataset and sends them to the hub as a source system |
 | `docs/api.md` | The hub's API contract |
-| `compose.yaml` | Local infrastructure, and (profile `app`) the hub service, two workers and the one-shot `migrate`; only components from the closed list |
+| `compose.yaml` | Local infrastructure, and (profile `app`) the mock SATUSEHAT, the hub service, two workers and the one-shot `migrate`, and (profile `simulator`) the one-shot source simulator; only components from the closed list |
 | `observability` | Prometheus scrape config and the Grafana data source and dashboards, provisioned from committed JSON (Jaeger needs no config) |
 | `.github/workflows/ci.yml` | CI: typecheck, the import-boundary check (`pnpm boundaries`), and the same `pnpm test` against Postgres and Redis service containers |
 
-Later: `packages/simulator`, `apps/dashboard`.
+Later: `apps/dashboard`.
