@@ -26,7 +26,7 @@ export class SeededRandom {
   /** One element of a non-empty list. */
   pick<T>(items: readonly T[]): T {
     const item = items[Math.floor(this.next() * items.length)];
-    if (item === undefined) throw new Error('cannot pick from an empty list');
+    if (item === undefined) throw new Error(`pick needs a non-empty list, got ${items.length} items`);
     return item;
   }
 

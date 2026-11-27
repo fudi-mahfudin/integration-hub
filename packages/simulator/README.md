@@ -31,7 +31,7 @@ Original sends follow an open loop at a fixed arrival rate: they don't slow down
 | Variable | Default | What |
 |---|---|---|
 | `HUB_URL` | `http://localhost:3000/` | The hub service |
-| `SIMULATOR_API_KEY` | `dev-source-key` | The source system's API key (the hub's public development source, `simulator`) |
+| `SIM_API_KEY` | `dev-source-key` | The source system's API key (the hub's public development source, `simulator`) |
 | `SIM_SEED` | `44` | Fixes every draw |
 | `SIM_RUN_ID` | from the clock | 1-16 letters or digits; prefixes visit ids (`V-<runId>-00001`) and idempotency keys |
 | `SIM_VISITS` | `20` | Visits in the batch |

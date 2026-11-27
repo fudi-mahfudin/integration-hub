@@ -4,9 +4,13 @@ import type { HubTarget } from './run.js';
 
 /** The simulator's settings, read from the environment once. */
 export interface SimulatorConfig {
+  /** Where to send, and as which source system. */
   hub: HubTarget;
+  /** What the simulated batch is made of. */
   batch: BatchOptions;
+  /** How often an unfinished case is read. */
   pollIntervalMs: number;
+  /** How long the cases may take to complete after the last original send. */
   completionTimeoutMs: number;
 }
 
@@ -22,9 +26,8 @@ const ms = z.coerce.number().int().min(0);
  */
 const VARIABLES = {
   HUB_URL: [z.url(), 'http://localhost:3000/'],
-  SIMULATOR_API_KEY: [z.string().min(1), 'dev-source-key'],
+  SIM_API_KEY: [z.string().min(1), 'dev-source-key'],
   SIM_SEED: [z.coerce.number().int().min(0).max(4_294_967_295), '44'],
-  SIM_RUN_ID: [z.string().regex(/^[A-Za-z0-9]{1,16}$/, 'must be 1-16 letters or digits'), ''],
   SIM_VISITS: [z.coerce.number().int().min(1).max(100_000), '20'],
   SIM_EVENTS_PER_SECOND: [z.coerce.number().positive().max(10_000), '10'],
   SIM_OUT_OF_ORDER_SHARE: [share, '0.1'],
@@ -57,7 +60,8 @@ export function loadConfig(env: Env, now: Date): SimulatorConfig {
     // safeParse of this variable's own schema: the output type is the one declared.
     return parsed.data as z.output<(typeof VARIABLES)[V][0]>;
   };
-  const runId = env.SIM_RUN_ID === undefined ? now.getTime().toString(36).toUpperCase() : read('SIM_RUN_ID');
+  const runId = env.SIM_RUN_ID ?? now.getTime().toString(36).toUpperCase();
+  if (!/^[A-Za-z0-9]{1,16}$/.test(runId)) throw new Error(`SIM_RUN_ID must be 1-16 letters or digits, got "${runId}"`);
   const timing = { concurrent: read('SIM_DUPLICATES_CONCURRENT'), delayed: read('SIM_DUPLICATES_DELAYED'), late: read('SIM_DUPLICATES_LATE') };
   if (Math.abs(timing.concurrent + timing.delayed + timing.late - 1) > 1e-9) {
     throw new Error(`SIM_DUPLICATES_CONCURRENT, SIM_DUPLICATES_DELAYED and SIM_DUPLICATES_LATE must sum to 1, got ${timing.concurrent}, ${timing.delayed} and ${timing.late}`);
@@ -67,7 +71,7 @@ export function loadConfig(env: Env, now: Date): SimulatorConfig {
     throw new Error(`SIM_DUPLICATE_DELAY_MIN_MS must not exceed SIM_DUPLICATE_DELAY_MAX_MS, got ${delayWindow.min} and ${delayWindow.max}`);
   }
   return {
-    hub: { baseUrl: new URL(read('HUB_URL')), apiKey: read('SIMULATOR_API_KEY') },
+    hub: { baseUrl: new URL(read('HUB_URL')), apiKey: read('SIM_API_KEY') },
     batch: {
       seed: read('SIM_SEED'),
       runId,

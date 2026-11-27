@@ -196,6 +196,14 @@ _Avoid_: Remote identifier (that is the id SATUSEHAT assigns), external ID
 The one synthetic set of fake national records (KFA products, patients, practitioners, locations and the organization) that the mock SATUSEHAT answers from, the source simulator draws visits from, and the hub's mapping seed points at. It includes deliberate near-miss patients for the lookup fallbacks and canary values for redaction tests. Its size is a big-run commitment.
 _Avoid_: Test data, fixtures (a fixture is a response, not a record), seed data (seeding adds to the world until the next reset)
 
+**Source simulator**:
+The program that stands in for the source system: it sends simulated batches to the hub as the `simulator` source system, over HTTP only, and checks every answer.
+_Avoid_: Load generator (that is k6, for the load test), client
+
+**Simulated batch**:
+A seeded set of fictional visits drawn from the world dataset that the source simulator plans and sends: the four source events of each, with fixed shares of substitutions, fallback patient lookups, events sent out of order and duplicate ingests. The same seed and settings plan the same batch; a run id in its visit numbers and idempotency keys keeps runs apart.
+_Avoid_: Batch alone (a dispense's batch is its lot and expiry), load, scenario run
+
 **Contract check**:
 A manual comparison of how the real SATUSEHAT sandbox and the mock SATUSEHAT answer the same requests, by shape only (status, headers, fields and their types), never by value. It is how a change in the real platform is noticed.
 _Avoid_: Drift check (drift is avoided for divergence), integration test

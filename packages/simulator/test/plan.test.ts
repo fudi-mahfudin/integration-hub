@@ -84,22 +84,22 @@ describe('planBatch: a seeded batch of fictional visits drawn from the world dat
 
   it('identifies the share of fallback patients by a fallback that finds exactly that patient, and the rest by NIK', () => {
     const plan = planBatch(world, options);
-    expect(plan.visits.filter((v) => v.lookup !== 'nik')).toHaveLength(10);
-    expect(new Set(plan.visits.map((v) => v.lookup))).toEqual(new Set(['nik', 'mother_nik_birth_date', 'name_birth_date_gender']));
+    expect(plan.visits.filter((v) => v.lookupMethod !== 'nik')).toHaveLength(10);
+    expect(new Set(plan.visits.map((v) => v.lookupMethod))).toEqual(new Set(['nik', 'mother_nik_birth_date', 'name_birth_date_gender']));
     for (const visit of plan.visits) {
       const patient = z
         .object({ nik: z.string().optional(), motherNik: z.string().optional(), name: z.string().optional(), birthDate: z.string().optional(), gender: z.string().optional() })
         .parse(bodyOf(plan, visit.visitId, 'visit.started').data.patient);
       // How the mock SATUSEHAT searches, and the hub narrows a mother's NIK search by birthDate.
       const matches = world.patients.filter((p) =>
-        visit.lookup === 'nik'
+        visit.lookupMethod === 'nik'
           ? p.nik === patient.nik
-          : visit.lookup === 'mother_nik_birth_date'
+          : visit.lookupMethod === 'mother_nik_birth_date'
             ? p.motherNik === patient.motherNik && p.birthDate === patient.birthDate
             : p.name === patient.name && p.birthDate === patient.birthDate && p.gender === patient.gender,
       );
       expect(matches.map((p) => p.ihsNumber)).toEqual([visit.patientIhsNumber]);
-      if (visit.lookup !== 'nik') expect(patient.nik).toBeUndefined();
+      if (visit.lookupMethod !== 'nik') expect(patient.nik).toBeUndefined();
     }
   });
 

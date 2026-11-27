@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
-import type { Plan, PlannedSend } from './plan.js';
+import type { Plan, PlannedSend, VisitId } from './plan.js';
 
 /** The hub the simulator sends to, as its source system. */
 export interface HubTarget {
@@ -20,10 +20,14 @@ export interface RunOptions {
   report: (line: string) => void;
 }
 
+/** The hub's id of a case, from the `Location` of a `202`. */
+export type CaseId = string & { readonly __brand: 'CaseId' };
+
 /** A visit's case as last read. */
 export interface BatchCase {
-  visitId: string;
-  caseId: string;
+  visitId: VisitId;
+  caseId: CaseId;
+  /** Its status (`completed`, `dead_lettered`, …), or why it could not be read. */
   status: string;
 }
 
@@ -55,8 +59,8 @@ const caseStatus = z.object({ status: z.string() });
 export async function runBatch(plan: Plan, hub: HubTarget, options: RunOptions): Promise<BatchResult> {
   const started = performance.now();
   const problems: string[] = [];
-  const caseIds = new Map<string, string>();
-  const lateDuplicates = new Map<string, { send: PlannedSend; original: Answer }[]>();
+  const caseIds = new Map<VisitId, CaseId>();
+  const lateDuplicates = new Map<VisitId, { send: PlannedSend; original: Answer }[]>();
   const inFlight: Promise<void>[] = [];
   let duplicatesSent = 0;
 
@@ -69,20 +73,21 @@ export async function runBatch(plan: Plan, hub: HubTarget, options: RunOptions):
       });
       return { status: res.status, replayed: res.headers.get('idempotent-replayed') === 'true', body: await res.text(), location: res.headers.get('location') };
     } catch (err) {
-      problems.push(`${describe(send)}: the send failed: ${err instanceof Error ? err.message : String(err)}`);
+      problems.push(`${named(send)}: the send failed: ${err instanceof Error ? err.message : String(err)}`);
       return undefined;
     }
   };
   const noteCase = (send: PlannedSend, answer: Answer) => {
     const caseId = answer.location?.split('/').at(-1);
-    if (caseId) caseIds.set(send.visitId, caseId);
+    // The last segment of `Location: /v1/cases/{caseId}`.
+    if (caseId) caseIds.set(send.visitId, caseId as CaseId);
   };
   const checkDuplicate = async (send: PlannedSend, original: Answer) => {
     duplicatesSent++;
     const duplicate = await post(send);
     if (!duplicate) return;
     if (duplicate.status !== 202 || !duplicate.replayed || duplicate.body !== original.body) {
-      problems.push(`${describe(send)}: a duplicate was answered ${summary(duplicate)}, not the original 202 replayed`);
+      problems.push(`${named(send)}: a duplicate was answered ${summary(duplicate)}, not the original 202 replayed`);
     }
   };
 
@@ -90,18 +95,19 @@ export async function runBatch(plan: Plan, hub: HubTarget, options: RunOptions):
     if (send.duplicate?.kind === 'concurrent') {
       duplicatesSent++;
       const [first, second] = await Promise.all([post(send), post(send)]);
+      const accepted = [first, second].find((a) => a?.status === 202);
+      if (accepted) noteCase(send, accepted);
       if (!first || !second) return;
       const fresh = [first, second].filter((a) => !a.replayed);
       if (first.status !== 202 || second.status !== 202 || fresh.length !== 1 || first.body !== second.body) {
-        problems.push(`${describe(send)}: a concurrent pair was answered ${summary(first)} and ${summary(second)}, not one 202 and its replay`);
+        problems.push(`${named(send)}: a concurrent pair was answered ${summary(first)} and ${summary(second)}, not one 202 and its replay`);
       }
-      noteCase(send, first);
       return;
     }
     const original = await post(send);
     if (!original) return;
     if (original.status !== 202 || original.replayed) {
-      problems.push(`${describe(send)}: the original was answered ${summary(original)}, not 202`);
+      problems.push(`${named(send)}: the original was answered ${summary(original)}, not 202`);
       return;
     }
     noteCase(send, original);
@@ -126,18 +132,21 @@ export async function runBatch(plan: Plan, hub: HubTarget, options: RunOptions):
   );
 
   // Read every case until it completes or can't without an operator; a completed case gets its late duplicates.
-  const statuses = new Map<string, string>();
+  const statuses = new Map<VisitId, string>();
   const deadline = performance.now() + options.completionTimeoutMs;
   let lastCompleted = -1;
   for (;;) {
-    const open = plan.visits.filter((v) => caseIds.has(v.visitId) && !isFinal(statuses.get(v.visitId)));
-    for (const { visitId } of open) {
-      const status = await readStatus(hub, caseIds.get(visitId) ?? '');
+    const open = plan.visits.flatMap(({ visitId }) => {
+      const caseId = caseIds.get(visitId);
+      return caseId !== undefined && !isSettled(statuses.get(visitId)) ? [{ visitId, caseId }] : [];
+    });
+    await inChunks(open, READS_AT_ONCE, async ({ visitId, caseId }) => {
+      const status = await readStatus(hub, caseId);
       statuses.set(visitId, status);
       if (status === 'completed') {
         for (const { send, original } of lateDuplicates.get(visitId) ?? []) await checkDuplicate(send, original);
       }
-    }
+    });
     const completed = [...statuses.values()].filter((s) => s === 'completed').length;
     if (completed !== lastCompleted) options.report(`${completed} of ${plan.visits.length} cases completed`);
     lastCompleted = completed;
@@ -154,17 +163,31 @@ export async function runBatch(plan: Plan, hub: HubTarget, options: RunOptions):
     }
     const status = statuses.get(visitId) ?? 'unread';
     cases.push({ visitId, caseId, status });
-    if (status !== 'completed') problems.push(`${visitId}: case ${caseId} is ${status}, not completed`);
+    if (status !== 'completed') {
+      const unsent = lateDuplicates.get(visitId)?.length ?? 0;
+      problems.push(`${visitId}: case ${caseId} is ${status}, not completed${unsent > 0 ? `, so its ${unsent} late duplicates were not sent` : ''}`);
+    }
   }
   return { problems, cases };
 }
 
-/** A case that will not complete without an operator, or already has. */
-function isFinal(status: string | undefined): boolean {
+/** How many cases are read at once while waiting for completion. */
+const READS_AT_ONCE = 20;
+
+/**
+ * Whether reading a case again can show nothing new without an operator: it
+ * completed, was abandoned, or was dead-lettered (and waits for a replay).
+ */
+function isSettled(status: string | undefined): boolean {
   return status === 'completed' || status === 'dead_lettered' || status === 'abandoned';
 }
 
-async function readStatus(hub: HubTarget, caseId: string): Promise<string> {
+/** Runs `task` over `items`, at most `size` at a time. */
+async function inChunks<T>(items: readonly T[], size: number, task: (item: T) => Promise<void>): Promise<void> {
+  for (let i = 0; i < items.length; i += size) await Promise.all(items.slice(i, i + size).map(task));
+}
+
+async function readStatus(hub: HubTarget, caseId: CaseId): Promise<string> {
   try {
     const res = await fetch(new URL(`v1/cases/${encodeURIComponent(caseId)}`, hub.baseUrl), { headers: { authorization: `Bearer ${hub.apiKey}` } });
     const parsed = caseStatus.safeParse(await res.json());
@@ -175,5 +198,5 @@ async function readStatus(hub: HubTarget, caseId: string): Promise<string> {
   }
 }
 
-const describe = (send: PlannedSend) => `${send.visitId} ${send.eventType}`;
+const named = (send: PlannedSend) => `${send.visitId} ${send.eventType}`;
 const summary = (answer: Answer) => `${answer.status}${answer.replayed ? ' (replayed)' : ''}`;

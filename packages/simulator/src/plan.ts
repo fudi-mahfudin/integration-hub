@@ -32,24 +32,33 @@ export interface BatchOptions {
   };
 }
 
+/** A visit number the simulated source system gives a visit: `V-<runId>-00001`. */
+export type VisitId = string & { readonly __brand: 'VisitId' };
+/** The idempotency key the simulated source system attaches to one source event. */
+export type IdempotencyKey = string & { readonly __brand: 'IdempotencyKey' };
+
 /** The source event types, in the order a visit's steps need them. */
 export const EVENT_TYPES = ['visit.started', 'prescription.written', 'drug.dispensed', 'visit.finished'] as const;
 /** One of the four source event types. */
 export type EventType = (typeof EVENT_TYPES)[number];
 
-/** How the hub is expected to find a visit's patient (its lookup method). */
-export type PatientLookup = 'nik' | 'mother_nik_birth_date' | 'name_birth_date_gender';
+/** How the hub is expected to find a visit's patient: its lookup method (GLOSSARY.md), as the attempt log records it. */
+export type LookupMethod = 'nik' | 'mother_nik_birth_date' | 'name_birth_date_gender';
 
 /** One planned visit and what its delivery is expected to show. */
 export interface PlannedVisit {
-  visitId: string;
+  /** The visit's number at the source system. */
+  visitId: VisitId;
   /** `substitution`: the dispensed product is another one with the same active ingredients. */
   scenario: 'as_prescribed' | 'substitution';
-  lookup: PatientLookup;
+  lookupMethod: LookupMethod;
   /** Whether one of its events is sent before its predecessor. */
   outOfOrder: boolean;
+  /** The world patient the visit is for. */
   patientIhsNumber: string;
+  /** The KFA code (92 or 93) of the prescribed product. */
   prescribedKfaCode: string;
+  /** The KFA code (93) of the dispensed product. */
   dispensedKfaCode: string;
 }
 
@@ -58,9 +67,11 @@ export type DuplicateTiming = { kind: 'concurrent' } | { kind: 'delayed'; afterA
 
 /** One original send of a source event. */
 export interface PlannedSend {
-  visitId: string;
+  /** The visit the event is about. */
+  visitId: VisitId;
   eventType: EventType;
-  idempotencyKey: string;
+  /** Its key; a duplicate sends the same one. */
+  idempotencyKey: IdempotencyKey;
   /** The exact bytes sent; a duplicate sends them again. */
   body: string;
   /** When to send it, in ms from the batch's start. */
@@ -71,8 +82,11 @@ export interface PlannedSend {
 
 /** A planned batch: its visits, and its original sends in send order. */
 export interface Plan {
+  /** What the batch was planned from. */
   options: BatchOptions;
+  /** Every visit, in visit-number order. */
   visits: PlannedVisit[];
+  /** Every original send, in send order. */
   sends: PlannedSend[];
 }
 
@@ -92,17 +106,20 @@ export function planBatch(world: World, options: BatchOptions): Plan {
   const catalogue = new Catalogue(world);
   const physicians = world.practitioners.filter((p) => p.role === 'physician');
   const pharmacists = world.practitioners.filter((p) => p.role === 'pharmacist');
-  if (physicians.length === 0 || pharmacists.length === 0) throw new Error('the world dataset needs a physician and a pharmacist');
+  if (physicians.length === 0 || pharmacists.length === 0) {
+    throw new Error(`the world dataset needs a physician and a pharmacist, got ${physicians.length} and ${pharmacists.length}`);
+  }
 
   const substitutions = chosenVisits(random, options.visits, options.substitutionShare);
   const fallbacks = chosenVisits(random, options.visits, options.fallbackLookupShare);
   const outOfOrder = chosenVisits(random, options.visits, options.outOfOrder.share);
   const patients = new PatientDraw(world.patients);
   const visits: PlannedVisit[] = [];
-  const bodies = new Map<string, Record<EventType, string>>();
+  const bodies = new Map<VisitId, Record<EventType, string>>();
   for (let index = 0; index < options.visits; index++) {
-    const visitId = `V-${options.runId}-${String(index + 1).padStart(5, '0')}`;
-    const { patient, lookup } = fallbacks.has(index) ? patients.byFallback(random) : patients.byNik(random);
+    // The run id and a counter: the one place a visit number is made.
+    const visitId = `V-${options.runId}-${String(index + 1).padStart(5, '0')}` as VisitId;
+    const { patient, lookupMethod } = fallbacks.has(index) ? patients.byFallback(random) : patients.byNik(random);
     const physician = random.pick(physicians);
     const pharmacist = random.pick(pharmacists);
     const location = random.pick(VISIT_LOCATIONS);
@@ -112,7 +129,7 @@ export function planBatch(world: World, options: BatchOptions): Plan {
     visits.push({
       visitId,
       scenario: substitution ? 'substitution' : 'as_prescribed',
-      lookup,
+      lookupMethod,
       outOfOrder: outOfOrder.has(index),
       patientIhsNumber: patient.ihsNumber,
       prescribedKfaCode: prescribed.kfaCode,
@@ -120,7 +137,7 @@ export function planBatch(world: World, options: BatchOptions): Plan {
     });
     bodies.set(
       visitId,
-      visitEvents(random, { visitId, substitution, patient, lookup, physician, pharmacist, location, prescribed, dispensed, startedAt, catalogue }),
+      visitEvents(random, { visitId, substitution, patient, lookupMethod, physician, pharmacist, location, prescribed, dispensed, startedAt }),
     );
   }
 
@@ -132,7 +149,8 @@ export function planBatch(world: World, options: BatchOptions): Plan {
     sends.push({
       visitId,
       eventType,
-      idempotencyKey: `${options.runId}-${random.uuid()}`,
+      // The run id and a seeded UUID: the one place a key is made.
+      idempotencyKey: `${options.runId}-${random.uuid()}` as IdempotencyKey,
       body,
       atMs,
       duplicate: null,
@@ -172,8 +190,8 @@ class PatientDraw {
   }
 
   /** A patient identified by NIK. */
-  byNik(random: SeededRandom): { patient: WorldPatient; lookup: PatientLookup } {
-    return { patient: random.pick(this.patients), lookup: 'nik' };
+  byNik(random: SeededRandom): { patient: WorldPatient; lookupMethod: LookupMethod } {
+    return { patient: random.pick(this.patients), lookupMethod: 'nik' };
   }
 
   /**
@@ -181,13 +199,13 @@ class PatientDraw {
    * name + birthDate + gender. A patient no fallback tells apart (the world's deliberate
    * near-misses) is drawn again, since an ambiguous lookup dead-letters the case.
    */
-  byFallback(random: SeededRandom): { patient: WorldPatient; lookup: PatientLookup } {
+  byFallback(random: SeededRandom): { patient: WorldPatient; lookupMethod: LookupMethod } {
     for (;;) {
       const patient = random.pick(this.patients);
-      const usable: PatientLookup[] = [];
+      const usable: LookupMethod[] = [];
       if (this.byMotherNikBirthDate.get(motherKey(patient)) === 1) usable.push('mother_nik_birth_date');
       if (this.byNameBirthDateGender.get(nameKey(patient)) === 1) usable.push('name_birth_date_gender');
-      if (usable.length > 0) return { patient, lookup: random.pick(usable) };
+      if (usable.length > 0) return { patient, lookupMethod: random.pick(usable) };
     }
   }
 }
@@ -197,9 +215,9 @@ const nameKey = (p: WorldPatient) => `${p.name}|${p.birthDate}|${p.gender}`;
 const increment = (counts: Map<string, number>, key: string) => counts.set(key, (counts.get(key) ?? 0) + 1);
 
 /** The patient fields the source sends for a lookup method: only what that method searches by. */
-function patientIdentity(patient: WorldPatient, lookup: PatientLookup): Record<string, string> {
-  if (lookup === 'nik') return { nik: patient.nik };
-  if (lookup === 'mother_nik_birth_date') return { motherNik: patient.motherNik, birthDate: patient.birthDate };
+function patientIdentity(patient: WorldPatient, lookupMethod: LookupMethod): Record<string, string> {
+  if (lookupMethod === 'nik') return { nik: patient.nik };
+  if (lookupMethod === 'mother_nik_birth_date') return { motherNik: patient.motherNik, birthDate: patient.birthDate };
   return { name: patient.name, birthDate: patient.birthDate, gender: patient.gender };
 }
 
@@ -211,9 +229,16 @@ function chosenVisits(random: SeededRandom, count: number, share: number): Set<n
 
 /** A visit as the schedule sees it: which event, if any, it sends before its predecessor. */
 interface ScheduledVisit {
-  visitId: string;
+  visitId: VisitId;
   /** Event `swapAt + 1` is sent before event `swapAt`; null for a visit sent in order. */
   swapAt: number | null;
+}
+
+/** An original send's place in the schedule. */
+interface TimedSend {
+  visitId: VisitId;
+  eventType: EventType;
+  atMs: number;
 }
 
 /**
@@ -224,12 +249,12 @@ interface ScheduledVisit {
  * waiting on a held event, time skips to the first release, so the rate is
  * never exceeded.
  */
-function schedule(random: SeededRandom, visits: readonly ScheduledVisit[], options: BatchOptions): { visitId: string; eventType: EventType; atMs: number }[] {
+function schedule(random: SeededRandom, visits: readonly ScheduledVisit[], options: BatchOptions): TimedSend[] {
   const interval = 1000 / options.eventsPerSecond;
   const waiting = [...visits];
   const open: { visit: ScheduledVisit; next: number; held: { event: number; releaseAt: number } | null }[] = [];
-  const timed: { visitId: string; eventType: EventType; atMs: number }[] = [];
-  const send = (visitId: string, event: number, at: number) => {
+  const timed: TimedSend[] = [];
+  const send = (visitId: VisitId, event: number, at: number) => {
     const eventType = EVENT_TYPES[event];
     if (eventType === undefined) throw new Error(`visit ${visitId} has no event ${event}`);
     timed.push({ visitId, eventType, atMs: Math.round(at) });
@@ -243,9 +268,9 @@ function schedule(random: SeededRandom, visits: readonly ScheduledVisit[], optio
     const released = open.filter((v) => v.held !== null && v.held.releaseAt <= now);
     const ready = open.filter((v) => v.held === null);
     if (released.length > 0) {
-      const v = released.reduce((a, b) => ((a.held?.releaseAt ?? 0) <= (b.held?.releaseAt ?? 0) ? a : b));
-      send(v.visit.visitId, v.held?.event ?? -1, now);
-      v.held = null;
+      const firstReleased = released.reduce((earliest, other) => ((earliest.held?.releaseAt ?? 0) <= (other.held?.releaseAt ?? 0) ? earliest : other));
+      send(firstReleased.visit.visitId, firstReleased.held?.event ?? -1, now);
+      firstReleased.held = null;
     } else if (ready.length > 0) {
       const v = random.pick(ready);
       if (v.next === v.visit.swapAt) {
@@ -302,16 +327,16 @@ class Catalogue {
     );
     return random.pick(pairs);
   }
-
-  /** The unit a drug is counted in, as the dosage text names it. */
-  unitOf(drug: Drug): string {
-    return drug.product.doseForm.display.toLowerCase();
-  }
 }
 
 function isAsPrescribed(prescribed: Drug, dispensed: Drug): boolean {
   if (dispensed.product.level !== 93) return false;
   return dispensed.kfaCode === prescribed.kfaCode || dispensed.product.parent === prescribed.kfaCode;
+}
+
+/** The unit a drug is counted in, as the dosage text names it: its KFA dose form. */
+function unitOf(drug: Drug): string {
+  return drug.product.doseForm.display.toLowerCase();
 }
 
 function sameIngredients(a: Drug, b: Drug): boolean {
@@ -323,17 +348,16 @@ function sameIngredients(a: Drug, b: Drug): boolean {
 const SUBSTITUTION_REASONS = ['OS', 'FP', 'PATIENT_CHOICE'] as const;
 
 interface VisitFacts {
-  visitId: string;
+  visitId: VisitId;
   substitution: boolean;
   patient: WorldPatient;
-  lookup: PatientLookup;
+  lookupMethod: LookupMethod;
   physician: WorldPractitioner;
   pharmacist: WorldPractitioner;
   location: VisitLocation;
   prescribed: Drug;
   dispensed: Drug;
   startedAt: number;
-  catalogue: Catalogue;
 }
 
 /** The four source events of a visit, each as the exact JSON body to send. */
@@ -346,14 +370,14 @@ function visitEvents(random: SeededRandom, visit: VisitFacts): Record<EventType,
   const itemId = 'ITEM-1';
   const timesPerDay = random.int(1, 3);
   const quantity = timesPerDay * random.int(3, 10);
-  const unit = visit.catalogue.unitOf(visit.prescribed);
+  const unit = unitOf(visit.prescribed);
   const expiry = new Date(Date.UTC(2027 + random.int(0, 2), random.int(0, 11), random.int(1, 28)));
 
   const body = (type: EventType, occurredAt: number, data: Record<string, unknown>) =>
     JSON.stringify({ type, visitId: visit.visitId, occurredAt: wib(occurredAt), data });
   return {
     'visit.started': body('visit.started', visit.startedAt, {
-      patient: { ...patientIdentity(visit.patient, visit.lookup), mrn: `MRN-${visit.patient.ihsNumber.slice(1)}` },
+      patient: { ...patientIdentity(visit.patient, visit.lookupMethod), mrn: `MRN-${visit.patient.ihsNumber.slice(1)}` },
       practitioner: { nik: visit.physician.nik },
       encounterClass: visit.location.encounterClass,
       locationCode: visit.location.locationCode,

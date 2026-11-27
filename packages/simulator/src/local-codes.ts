@@ -7,7 +7,9 @@
 
 /** A local drug code and the KFA code (92 or 93) of the product it names. */
 export interface LocalDrugCode {
+  /** What the source system calls the drug. */
   drugCode: string;
+  /** The KFA code of the product it names. */
   kfaCode: string;
 }
 
@@ -35,7 +37,9 @@ export const LOCAL_DRUG_CODES: readonly LocalDrugCode[] = [
 
 /** A clinic a visit starts at, by local location code, and the encounter class its visits have. */
 export interface VisitLocation {
+  /** What the source system calls the clinic. */
   locationCode: string;
+  /** The `encounterClass` a visit there is sent with. */
   encounterClass: 'AMB' | 'EMER';
 }
 
