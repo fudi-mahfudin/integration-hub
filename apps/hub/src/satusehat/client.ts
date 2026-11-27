@@ -2,7 +2,6 @@ import { z } from 'zod';
 import type { OrganizationId } from '../auth/source-systems.js';
 import type { Brand } from '../brand.js';
 import type { PrescriptionId, RemoteId, RemoteIdentifier, VisitId } from '../cases/case-model.js';
-import type { RecordAtSatusehat } from '../reconciliation/model.js';
 import type { SatusehatConfig } from '../config.js';
 import { SatusehatRequestError, SatusehatResponseError } from './errors.js';
 import { encounterSystem, KFA_SYSTEM, prescriptionSystem, type FhirResource } from './resources.js';
@@ -47,6 +46,16 @@ export interface FoundEncounter {
   status: string;
   /** `period.end` as SATUSEHAT holds it; null when it has none. */
   periodEnd: string | null;
+}
+
+/**
+ * A record a search at SATUSEHAT found, reduced to what reconciliation
+ * compares (#39): its remote identifier, and the compared fields by FHIR path,
+ * each the string it holds (a reference, a code or a status), or null when absent.
+ */
+export interface RecordAtSatusehat {
+  remote: RemoteIdentifier;
+  fields: Record<string, string | null>;
 }
 
 /**
@@ -135,8 +144,8 @@ const comparedRecordSchema = storedRecordSchema.extend({
 type ComparedRecord = z.infer<typeof comparedRecordSchema>;
 
 /** The KFA code of a record's contained Medication `#medication`, as the hub sends it. */
-function medicationKfaCode(r: ComparedRecord): string | null {
-  const medication = r.contained?.find((c) => c.id === 'medication');
+function medicationKfaCode(record: ComparedRecord): string | null {
+  const medication = record.contained?.find((c) => c.id === 'medication');
   return medication?.code?.coding?.find((c) => c.system === KFA_SYSTEM)?.code ?? null;
 }
 

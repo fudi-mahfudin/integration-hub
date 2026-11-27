@@ -1,7 +1,7 @@
 import { sql, type Kysely } from 'kysely';
 import type { Clock } from '../clock.js';
 import type { Database } from '../db/database.js';
-import type { RemoteIdentifier, StepName } from '../cases/case-model.js';
+import type { CaseId, RemoteIdentifier, StepName } from '../cases/case-model.js';
 import { COMPLETED_RUN_STATUSES, ENDED_RUN_STATUSES, type DivergenceClass, type ReconciliationRunStatus } from './model.js';
 
 /** How long runs and their findings are kept (#39): older ones are deleted when a new run is created, the latest completed run aside. */
@@ -13,7 +13,7 @@ export type RunTrigger = 'operator' | 'schedule';
 /** The on-demand narrowing of a run's scope (#39); null for no narrowing. */
 export interface RunScope {
   /** Only these cases. */
-  caseIds: string[] | null;
+  caseIds: CaseId[] | null;
   /** Only cases whose last change is at or after this instant. */
   since: Date | null;
 }
@@ -86,7 +86,7 @@ export interface RunSummary {
 
 /** What a run found on one case, as the run view shows it. */
 export interface FindingView {
-  caseId: string;
+  caseId: CaseId;
   source: string;
   visitId: string;
   /** A divergence; or the case changed during its check (`skipped`); or a search failed (`unchecked`). */
@@ -135,18 +135,18 @@ function selectRuns(db: Kysely<Database>) {
 
 type RunRow = Awaited<ReturnType<ReturnType<typeof selectRuns>['executeTakeFirstOrThrow']>>;
 
-function toSummary(r: RunRow): RunSummary {
+function toSummary(row: RunRow): RunSummary {
   const count = (n: string | null) => Number(n ?? 0);
   return {
-    runId: r.id,
-    status: r.status,
-    trigger: r.trigger,
-    scope: { caseIds: r.case_ids, since: r.since?.toISOString() ?? null },
-    requestedAt: r.requested_at.toISOString(),
-    startedAt: r.started_at?.toISOString() ?? null,
-    endedAt: r.ended_at?.toISOString() ?? null,
-    error: r.error,
-    counts: { cases: count(r.cases), clean: count(r.clean), divergent: count(r.divergent), skipped: count(r.skipped), unchecked: count(r.unchecked) },
+    runId: row.id,
+    status: row.status,
+    trigger: row.trigger,
+    scope: { caseIds: row.case_ids, since: row.since?.toISOString() ?? null },
+    requestedAt: row.requested_at.toISOString(),
+    startedAt: row.started_at?.toISOString() ?? null,
+    endedAt: row.ended_at?.toISOString() ?? null,
+    error: row.error,
+    counts: { cases: count(row.cases), clean: count(row.clean), divergent: count(row.divergent), skipped: count(row.skipped), unchecked: count(row.unchecked) },
   };
 }
 
@@ -178,7 +178,8 @@ export async function readRun(db: Kysely<Database>, runId: string, page: Finding
       return {
         ...toSummary(row),
         findings: shown.map((f) => ({
-          caseId: f.case_id,
+          // A foreign key to the case table: a case id.
+          caseId: f.case_id as CaseId,
           source: f.source_system_id,
           visitId: f.visit_id,
           kind: f.kind,
@@ -212,7 +213,7 @@ export interface DivergenceView {
  * `skipped` or `unchecked` check doesn't count. Empty when no run has.
  * `db` may be a transaction, so the case view reads them from its snapshot.
  */
-export async function readCaseDivergences(db: Kysely<Database>, caseId: string): Promise<DivergenceView[]> {
+export async function readCaseDivergences(db: Kysely<Database>, caseId: CaseId): Promise<DivergenceView[]> {
   const check = await db
     .selectFrom('reconciliation_checks as k')
     .innerJoin('reconciliation_runs as r', 'r.id', 'k.run_id')
@@ -258,6 +259,7 @@ export interface ReconciliationRuns {
 /** Builds the operator's view of reconciliation runs over the hub database. Only the composition root calls this. */
 export function createReconciliationRuns(deps: { db: Kysely<Database>; clock: Clock }): ReconciliationRuns {
   const { db, clock } = deps;
+  // Widened so `includes` takes any status; it only reads the list.
   const ended = (run: RunView) => (ENDED_RUN_STATUSES as readonly string[]).includes(run.status);
   return {
     request: (scope) => requestRun(db, 'operator', scope, clock()),

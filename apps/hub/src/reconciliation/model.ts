@@ -4,6 +4,7 @@
  * pure functions.
  */
 import type { RemoteIdentifier, StepName } from '../cases/case-model.js';
+import type { RecordAtSatusehat } from '../satusehat/client.js';
 
 /** How a reconciliation run stands: waiting for a worker, executing, or ended. */
 export type ReconciliationRunStatus = 'queued' | 'running' | 'completed' | 'completed_with_errors' | 'failed';
@@ -30,16 +31,6 @@ export type ReconciliationCheckOutcome = 'clean' | 'divergent' | 'skipped' | 'un
  * compared field.
  */
 export type DivergenceClass = 'REMOTE_MISSING' | 'REMOTE_UNEXPECTED' | 'REMOTE_DUPLICATE' | 'REMOTE_ID_MISMATCH' | 'FIELD_MISMATCH';
-
-/**
- * A record a search at SATUSEHAT found, reduced to what reconciliation
- * compares: its remote identifier, and the compared fields by FHIR path, each
- * the string it holds (a reference, a code or a status), or null when absent.
- */
-export interface RecordAtSatusehat {
-  remote: RemoteIdentifier;
-  fields: Record<string, string | null>;
-}
 
 /** Fields that hold a person's IHS number: a finding says only that they differ, never their values. */
 const IHS_FIELDS = new Set(['subject', 'participant.individual', 'requester', 'performer.actor']);
@@ -77,15 +68,15 @@ export interface ResourceComparison {
   found: readonly RecordAtSatusehat[];
 }
 
-const remoteOf = (r: RecordAtSatusehat): RemoteIdentifier => r.remote;
+const remoteOf = (record: RecordAtSatusehat): RemoteIdentifier => record.remote;
 
 /**
  * The divergences of one resource of a case (#39): a completed step's
  * identifier finds exactly the record it stored, with the values it sent and
  * the `meta.versionId` the hub stored last; any other step's finds none.
  */
-export function compareResource(c: ResourceComparison): Divergence[] {
-  const { resourceType, expected, found } = c;
+export function compareResource(comparison: ResourceComparison): Divergence[] {
+  const { resourceType, step: creatingStep, expected, found } = comparison;
   const divergence = (cls: DivergenceClass, step: StepName, field: string | null, snapshot: Record<string, unknown>): Divergence => ({
     class: cls,
     step,
@@ -93,7 +84,7 @@ export function compareResource(c: ResourceComparison): Divergence[] {
     field,
     snapshot,
   });
-  if (!expected) return found.length === 0 ? [] : [divergence('REMOTE_UNEXPECTED', c.step, null, { expected: null, found: found.map(remoteOf) })];
+  if (!expected) return found.length === 0 ? [] : [divergence('REMOTE_UNEXPECTED', creatingStep, null, { expected: null, found: found.map(remoteOf) })];
   const [only] = found;
   if (!only) return [divergence('REMOTE_MISSING', expected.step, null, { expected: expected.remote, found: [] })];
   if (found.length > 1) return [divergence('REMOTE_DUPLICATE', expected.step, null, { expected: expected.remote, found: found.map(remoteOf) })];

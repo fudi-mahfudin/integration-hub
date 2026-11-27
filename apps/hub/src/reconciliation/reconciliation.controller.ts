@@ -5,6 +5,7 @@ import type { AdminKey } from '../auth/admin-key.js';
 import { Problem, type ProblemBody } from '../http/problem.js';
 import { parseRequestBody, parseRequestQuery } from '../http/request-body.js';
 import { parseSourceTime } from '../ingestion/source-time.js';
+import type { CaseId } from '../cases/case-model.js';
 import { UUID } from '../cases/read-case.js';
 import { ADMIN_KEY, RECONCILIATION } from '../tokens.js';
 import { isFindingCursor, type ReconciliationRuns, type RunSummary, type RunView } from './runs.js';
@@ -21,7 +22,18 @@ class ReconciliationRunning extends Problem {
 }
 
 const requestBody = z.object({
-  caseIds: z.array(z.string().regex(UUID, 'must be a case id')).min(1).max(1000).nullable().default(null),
+  caseIds: z
+    .array(
+      z
+        .string()
+        .regex(UUID, 'must be a case id')
+        // A uuid names a case or none: a run checks only the cases it finds.
+        .transform((id) => id as CaseId),
+    )
+    .min(1)
+    .max(1000)
+    .nullable()
+    .default(null),
   since: z
     .string()
     .transform((text, ctx) => {

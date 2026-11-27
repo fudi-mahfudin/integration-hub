@@ -9,4 +9,5 @@ export const INGEST = Symbol('INGEST');
 export const ADMIN_KEY = Symbol('ADMIN_KEY');
 export const CLOCK = Symbol('CLOCK');
 export const CASES = Symbol('CASES');
+/** The operator's reconciliation runs (#39). */
 export const RECONCILIATION = Symbol('RECONCILIATION');

@@ -162,3 +162,38 @@ describe('reconciliation retention (#39)', () => {
     await awaitRun(hub.baseUrl, created);
   });
 });
+
+describe('reconciliation behind an open circuit breaker (#39)', () => {
+  const world = freshWorld();
+  let hub: BootedHub;
+  let worker: BootedWorker;
+  beforeAll(async () => {
+    hub = await bootHub(world().env);
+    worker = await bootWorker(world().env);
+  });
+  afterAll(async () => {
+    await worker?.close();
+    await hub?.close();
+  });
+
+  it('shares the worker’s FHIR breaker: once its failing searches open it, the cases after are unchecked without a call', async () => {
+    const { mock } = world();
+    const cases = [];
+    for (let i = 0; i < 8; i++) cases.push(await completedCase(hub));
+    // Let the delivery's healthy calls leave the breaker's 10s window, so only the run's searches count.
+    await new Promise((resolve) => setTimeout(resolve, 10_500));
+    await mock.client.setFaults({ seed: 39, rules: [{ id: 'fhir-down', match: { method: 'GET', resourceType: 'Encounter' }, rate: 1, kind: 'http_503' }] });
+    try {
+      const run = await awaitRun(hub.baseUrl, await requestRun(hub.baseUrl, { caseIds: cases.map((c) => c.caseId) }), 30_000);
+
+      expect(run).toMatchObject({ status: 'completed_with_errors', counts: { cases: 8, unchecked: 8 } });
+      // 20 failed calls (7 cases × 3 tries, the 20th opening it) open the breaker; the last case's search is never sent.
+      const errors = run.findings.map((f) => String(f.snapshot.error));
+      expect(errors.at(-1)).toContain('circuit breaker is open');
+      const sent = (await mock.client.log({ resourceType: 'Encounter' })).filter((e) => e.fault === 'fhir-down');
+      expect(sent.length).toBeLessThan(8 * 3);
+    } finally {
+      await mock.client.setFaults({ seed: 39, rules: [] });
+    }
+  }, 60_000);
+});

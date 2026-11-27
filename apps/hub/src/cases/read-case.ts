@@ -5,7 +5,7 @@ import { selectCaseSummaries, toCaseSummary, type CaseScope, type CaseSummary, t
 import type { RemoteRecordLeft } from './operator-actions.js';
 import { readPins, type StepPins } from './pins.js';
 import { readRejections, type RejectionView } from './rejection-log.js';
-import type { DeadLetterReason, EventType, RemoteId, RemoteIdentifier, StepName, StepState } from './case-model.js';
+import type { CaseId, DeadLetterReason, EventType, RemoteId, RemoteIdentifier, StepName, StepState } from './case-model.js';
 
 /** One step as the case view shows it. */
 export interface CaseStepView {
@@ -148,7 +148,8 @@ export async function readCase(
         .orderBy('id')
         .execute();
       const rejections = await readRejections(trx, summary.source, summary.visitId);
-      const divergences = await readCaseDivergences(trx, caseId);
+      // The case just read under this id.
+      const divergences = await readCaseDivergences(trx, caseId as CaseId);
       const nameOf = (seq: number) => {
         const step = steps.find((s) => s.seq === seq);
         if (!step) throw new Error(`case ${caseId} has no step ${seq}`);

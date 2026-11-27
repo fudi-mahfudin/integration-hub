@@ -1,13 +1,13 @@
 import { sql, type Kysely } from 'kysely';
 import type { OrganizationId } from '../auth/source-systems.js';
-import type { PrescriptionId, RemoteId, RemoteIdentifier, StepName, StepState, VisitId } from '../cases/case-model.js';
+import type { CaseId, CaseStatus, PrescriptionId, RemoteId, RemoteIdentifier, StepName, StepState, VisitId } from '../cases/case-model.js';
 import { readCreateVisitPins, readSubmitDispensePins, readSubmitPrescriptionPins } from '../cases/pins.js';
 import type { Clock } from '../clock.js';
 import type { Database } from '../db/database.js';
 import { log } from '../observability/log.js';
-import type { SatusehatClient } from '../satusehat/client.js';
+import type { RecordAtSatusehat, SatusehatClient } from '../satusehat/client.js';
 import type { AttemptCalls } from '../satusehat/transport.js';
-import { compareResource, type Divergence, type ExpectedRecord, type RecordAtSatusehat, type ReconciliationCheckOutcome } from './model.js';
+import { compareResource, type Divergence, type ExpectedRecord, type ReconciliationCheckOutcome } from './model.js';
 import { requestRun } from './runs.js';
 
 /**
@@ -33,11 +33,24 @@ interface StepAtRest {
   pins: unknown;
 }
 
+/** What one case's searches found at SATUSEHAT, by resource. */
+interface FoundRecords {
+  encounters: RecordAtSatusehat[];
+  medicationRequests: RecordAtSatusehat[];
+  medicationDispenses: RecordAtSatusehat[];
+}
+
+/** One finding of a check, before it is stored: a divergence, or why the case went uncompared. */
+type Finding = { kind: 'skipped' | 'unchecked'; snapshot: Record<string, unknown> } | ({ kind: 'divergence' } & Divergence);
+
+/** An error's message, for a finding or a failed run; the hub's errors name a path, never a query. */
+const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
 /** A case as reconciliation reads it, from one snapshot: what it expects at SATUSEHAT and its version. */
 interface CaseAtRest {
   organizationId: OrganizationId;
   visitId: VisitId;
-  status: string;
+  status: CaseStatus;
   /** The case's last change: a change during the check makes it `skipped`. */
   version: number;
   steps: Record<StepName, StepAtRest>;
@@ -81,13 +94,28 @@ export function createReconciler(deps: {
       };
     });
 
-  async function endRun(runId: string, status: 'completed' | 'completed_with_errors' | 'failed', error: string | null): Promise<void> {
-    await db.updateTable('reconciliation_runs').set({ status, ended_at: clock(), error }).where('id', '=', runId).execute();
+  /**
+   * Ends a run that is still `running`: one another lock holder already
+   * marked `failed` stays so, and `false` says the run is no longer this one's.
+   */
+  async function endRun(session: Kysely<Database>, runId: string, status: 'completed' | 'completed_with_errors' | 'failed', error: string | null): Promise<boolean> {
+    const ended = await session
+      .updateTable('reconciliation_runs')
+      .set({ status, ended_at: clock(), error })
+      .where('id', '=', runId)
+      .where('status', '=', 'running')
+      .executeTakeFirst();
+    return ended.numUpdatedRows > 0n;
   }
 
-  /** Under the lock: fail orphaned runs, schedule one if due, then execute the oldest queued run. */
-  async function underLock(): Promise<void> {
-    const failed = await db
+  /**
+   * Under the lock: fail orphaned runs, schedule one if due, then execute the
+   * oldest queued run. `session` is the connection holding the lock, and every
+   * query goes through it: if it is lost, so is the lock, and the run stops at
+   * its next query instead of carrying on beside the next lock holder's.
+   */
+  async function underLock(session: Kysely<Database>): Promise<void> {
+    const failed = await session
       .updateTable('reconciliation_runs')
       .set({ status: 'failed', ended_at: clock(), error: 'left running without the lock: the worker executing it stopped' })
       .where('status', '=', 'running')
@@ -97,11 +125,11 @@ export function createReconciler(deps: {
 
     if (intervalMs > 0) {
       const now = clock();
-      const last = await db.selectFrom('reconciliation_runs').select((eb) => eb.fn.max('started_at').as('at')).executeTakeFirst();
-      if (!last?.at || last.at.getTime() <= now.getTime() - intervalMs) await requestRun(db, 'schedule', { caseIds: null, since: null }, now);
+      const last = await session.selectFrom('reconciliation_runs').select((eb) => eb.fn.max('started_at').as('at')).executeTakeFirst();
+      if (!last?.at || last.at.getTime() <= now.getTime() - intervalMs) await requestRun(session, 'schedule', { caseIds: null, since: null }, now);
     }
 
-    const run = await db
+    const run = await session
       .updateTable('reconciliation_runs')
       .set({ status: 'running', started_at: clock() })
       .where('id', '=', (eb) => eb.selectFrom('reconciliation_runs').select('id').where('status', '=', 'queued').orderBy('requested_at').limit(1))
@@ -110,15 +138,15 @@ export function createReconciler(deps: {
     if (!run) return;
     log('info', 'reconciliation run started', { runId: run.id });
     try {
-      await execute(run);
+      await execute(session, run);
     } catch (err) {
       log('error', 'reconciliation run failed', { runId: run.id, error: err });
-      await endRun(run.id, 'failed', err instanceof Error ? err.message : String(err));
+      await endRun(session, run.id, 'failed', messageOf(err));
     }
   }
 
-  async function execute(run: { id: string; case_ids: string[] | null; since: Date | null }): Promise<void> {
-    let scope = db
+  async function execute(session: Kysely<Database>, run: { id: string; case_ids: string[] | null; since: Date | null }): Promise<void> {
+    let scope = session
       .selectFrom('case')
       .select('id')
       .where('status', '<>', 'active')
@@ -131,25 +159,30 @@ export function createReconciler(deps: {
     let unchecked = 0;
     for (const { id } of cases) {
       if (!running) {
-        await endRun(run.id, 'failed', 'the worker stopped before the run ended');
+        await endRun(session, run.id, 'failed', 'the worker stopped before the run ended');
         return;
       }
-      if ((await checkCase(run.id, id)) === 'unchecked') unchecked++;
+      // Postgres generated these uuids as case ids.
+      if ((await checkCase(session, run.id, id as CaseId)) === 'unchecked') unchecked++;
     }
-    await endRun(run.id, unchecked > 0 ? 'completed_with_errors' : 'completed', null);
-    log('info', 'reconciliation run ended', { runId: run.id, cases: cases.length, unchecked });
+    if (await endRun(session, run.id, unchecked > 0 ? 'completed_with_errors' : 'completed', null)) {
+      log('info', 'reconciliation run ended', { runId: run.id, cases: cases.length, unchecked });
+    } else {
+      log('warn', 'a reconciliation run ended after another worker marked it failed; it stays failed', { runId: run.id });
+    }
   }
 
   /** Checks one case and records how the check ended, with what it found. */
-  async function checkCase(runId: string, caseId: string): Promise<ReconciliationCheckOutcome> {
-    const atRest = await readCaseAtRest(db, caseId);
+  async function checkCase(session: Kysely<Database>, runId: string, caseId: CaseId): Promise<ReconciliationCheckOutcome> {
+    const record = (outcome: ReconciliationCheckOutcome, findings: Finding[]) => recordCheck(session, runId, caseId, outcome, findings);
+    const atRest = await readCaseAtRest(session, caseId);
     // A case that is moving again since the run listed it is not at rest.
-    if (atRest.status === 'active') return record(runId, caseId, 'skipped', [{ kind: 'skipped', snapshot: {} }]);
+    if (atRest.status === 'active') return record('skipped', [{ kind: 'skipped', snapshot: {} }]);
 
     const calls: AttemptCalls = { budgetEndsAt: new Date(clock().getTime() + checkBudgetMs), readRetries: [] };
     const satusehat = satusehatFor(calls);
     const visit = { organizationId: atRest.organizationId, visitId: atRest.visitId };
-    let found: { encounters: RecordAtSatusehat[]; medicationRequests: RecordAtSatusehat[]; medicationDispenses: RecordAtSatusehat[] };
+    let found: FoundRecords;
     try {
       const prescription = atRest.prescriptionId === null ? null : { organizationId: atRest.organizationId, prescriptionId: atRest.prescriptionId };
       found = {
@@ -160,42 +193,44 @@ export function createReconciler(deps: {
     } catch (err) {
       // Reported, not retried: the run ends `completed_with_errors`, and the next run checks the case again.
       log('warn', 'a reconciliation check failed; the case is unchecked', { runId, caseId, error: err });
-      const message = err instanceof Error ? err.message : String(err);
-      return record(runId, caseId, 'unchecked', [{ kind: 'unchecked', snapshot: { error: message, readRetries: calls.readRetries } }]);
+      return record('unchecked', [{ kind: 'unchecked', snapshot: { error: messageOf(err), readRetries: calls.readRetries } }]);
     }
 
-    if ((await readVersion(db, caseId)) !== atRest.version) return record(runId, caseId, 'skipped', [{ kind: 'skipped', snapshot: {} }]);
+    if ((await readVersion(session, caseId)) !== atRest.version) return record('skipped', [{ kind: 'skipped', snapshot: {} }]);
     const divergences = compareCase(atRest, found);
     return record(
-      runId,
-      caseId,
       divergences.length > 0 ? 'divergent' : 'clean',
-      divergences.map((d) => ({ kind: 'divergence', ...d })),
+      divergences.map((divergence) => ({ kind: 'divergence', ...divergence })),
     );
   }
 
-  async function record(
+  /** Stores how one case's check ended, with its findings, in one transaction. */
+  async function recordCheck(
+    session: Kysely<Database>,
     runId: string,
-    caseId: string,
+    caseId: CaseId,
     outcome: ReconciliationCheckOutcome,
-    findings: ({ kind: 'skipped' | 'unchecked'; snapshot: Record<string, unknown> } | ({ kind: 'divergence' } & Divergence))[],
+    findings: Finding[],
   ): Promise<ReconciliationCheckOutcome> {
-    await db.transaction().execute(async (trx) => {
+    await session.transaction().execute(async (trx) => {
       await trx.insertInto('reconciliation_checks').values({ run_id: runId, case_id: caseId, outcome, checked_at: clock() }).execute();
       if (findings.length === 0) return;
       await trx
         .insertInto('reconciliation_findings')
         .values(
-          findings.map((f) => ({
-            run_id: runId,
-            case_id: caseId,
-            kind: f.kind,
-            class: f.kind === 'divergence' ? f.class : null,
-            step: f.kind === 'divergence' ? f.step : null,
-            resource_type: f.kind === 'divergence' ? f.resourceType : null,
-            field: f.kind === 'divergence' ? f.field : null,
-            snapshot: JSON.stringify(f.snapshot),
-          })),
+          findings.map((finding) => {
+            const divergence = finding.kind === 'divergence' ? finding : null;
+            return {
+              run_id: runId,
+              case_id: caseId,
+              kind: finding.kind,
+              class: divergence?.class ?? null,
+              step: divergence?.step ?? null,
+              resource_type: divergence?.resourceType ?? null,
+              field: divergence?.field ?? null,
+              snapshot: JSON.stringify(finding.snapshot),
+            };
+          }),
         )
         .execute();
     });
@@ -207,8 +242,9 @@ export function createReconciler(deps: {
       const { rows } = await sql<{ locked: boolean }>`select pg_try_advisory_lock(${RECONCILIATION_LOCK}) as locked`.execute(conn);
       if (!rows[0]?.locked) return;
       try {
-        await underLock();
+        await underLock(conn);
       } finally {
+        // If this fails, the connection is broken, and Postgres drops its session lock with it.
         await sql`select pg_advisory_unlock(${RECONCILIATION_LOCK})`.execute(conn);
       }
     });
@@ -241,13 +277,13 @@ export function createReconciler(deps: {
 }
 
 /** A case's version: its last change, in milliseconds. */
-async function readVersion(db: Kysely<Database>, caseId: string): Promise<number> {
+async function readVersion(db: Kysely<Database>, caseId: CaseId): Promise<number> {
   const { updated_at } = await db.selectFrom('case').select('updated_at').where('id', '=', caseId).executeTakeFirstOrThrow();
   return updated_at.getTime();
 }
 
 /** Reads a case and its steps from one snapshot. */
-function readCaseAtRest(db: Kysely<Database>, caseId: string): Promise<CaseAtRest> {
+function readCaseAtRest(db: Kysely<Database>, caseId: CaseId): Promise<CaseAtRest> {
   return db
     .transaction()
     .setIsolationLevel('repeatable read')
@@ -315,11 +351,8 @@ function completedRemote(step: StepAtRest): RemoteIdentifier | null {
  * (`finished`, at update visit's `meta.versionId`, once update visit
  * completed), the MedicationRequest and the MedicationDispense.
  */
-function compareCase(
-  c: CaseAtRest,
-  found: { encounters: RecordAtSatusehat[]; medicationRequests: RecordAtSatusehat[]; medicationDispenses: RecordAtSatusehat[] },
-): Divergence[] {
-  const { create_visit: create, submit_prescription: prescribe, submit_dispense: dispense, update_visit: update } = c.steps;
+function compareCase(atRest: CaseAtRest, found: FoundRecords): Divergence[] {
+  const { create_visit: create, submit_prescription: prescribe, submit_dispense: dispense, update_visit: update } = atRest.steps;
   const encounter = completedRemote(create);
   const visitPins = encounter ? readCreateVisitPins(create.pins) : null;
   const updated = completedRemote(update);
