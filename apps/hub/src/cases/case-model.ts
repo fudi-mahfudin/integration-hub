@@ -31,8 +31,9 @@ export const STEPS = [
 /** A step's name. */
 export type StepName = (typeof STEPS)[number]['name'];
 
-/** The seven step states of #8. */
+/** The seven step states of #8, and the operator-only `abandoned` (ADR 0007). */
 export type StepState =
+  | 'abandoned'
   | 'awaiting_event'
   | 'blocked'
   | 'ready'
@@ -150,6 +151,7 @@ export function deriveStatus(steps: readonly StepView[]): Exclude<CaseStatus, 'a
       return 'active';
     case 'blocked':
     case 'completed':
+    case 'abandoned':
       throw new Error(`invariant broken: the current step ${current.seq} is ${current.state}`);
   }
 }

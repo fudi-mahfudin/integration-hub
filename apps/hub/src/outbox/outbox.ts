@@ -27,6 +27,10 @@ export interface ClaimedStep {
   name: StepName;
   /** This claim's attempt number: the counter increments on claim (#8). */
   attempt: number;
+  /** This attempt's number toward the attempt cap: attempts since the step's last replay (#37). */
+  capAttempt: number;
+  /** When the step was last replayed; KFA details fetched before then are fetched again (#10). Null if never. */
+  replayedAt: Date | null;
   /** When the claim was taken: the attempt's start. */
   startedAt: Date;
   leaseToken: LeaseToken;
@@ -65,7 +69,8 @@ export interface Outbox {
    * rows other workers are claiming, under a new lease; `undefined` when
    * there is none. Taking over an expired lease logs the expired attempt as
    * `lease_expired`; when that was the last attempt allowed, the step is
-   * dead-lettered `RETRIES_EXHAUSTED` instead of claimed (#8).
+   * dead-lettered `RETRIES_EXHAUSTED` instead of claimed (#8). The cap
+   * counts only attempts since the step's last replay (#37).
    */
   claim(): Promise<ClaimedStep | undefined>;
   /**
@@ -161,8 +166,8 @@ export function createOutbox(deps: {
     db.transaction().execute(async (trx): Promise<ClaimedStep | 'again' | undefined> => {
       const now = clock();
       // Pick the oldest claimable row and lock it, skipping rows another worker has locked.
-      const { rows: picked } = await sql<{ case_id: string; seq: number; state: string; attempts: number }>`
-        select case_id, seq, state, attempts
+      const { rows: picked } = await sql<{ case_id: string; seq: number; state: string; attempts: number; attempts_before_replay: number }>`
+        select case_id, seq, state, attempts, attempts_before_replay
           from step
          where state = 'ready'
             or (state = 'retry_wait' and available_at <= ${now})
@@ -185,7 +190,8 @@ export function createOutbox(deps: {
             from step where case_id = ${caseId} and seq = ${row.seq}
           on conflict (case_id, seq, attempt) do nothing
         `.execute(trx);
-        if (row.attempts >= retry.maxAttempts) {
+        // The cap counts the attempts since the step's last replay (#37).
+        if (row.attempts - row.attempts_before_replay >= retry.maxAttempts) {
           // Lock the case as storeOutcome does; a case another transaction holds is left for the next try.
           const kase = await trx.selectFrom('case').select('id').where('id', '=', caseId).forUpdate().skipLocked().executeTakeFirst();
           if (!kase) return 'again';
@@ -216,7 +222,8 @@ export function createOutbox(deps: {
          where s.case_id = ${caseId}
            and s.seq = ${row.seq}
            and c.id = s.case_id
-        returning s.case_id as "caseId", s.seq, s.name, s.attempts as attempt, s.lease_token as "leaseToken",
+        returning s.case_id as "caseId", s.seq, s.name, s.attempts as attempt, s.attempts - s.attempts_before_replay as "capAttempt",
+                  s.replayed_at as "replayedAt", s.lease_token as "leaseToken",
                   c.source_system_id as "sourceSystemId", c.organization_id as "organizationId", c.visit_id as "visitId"
       `.execute(trx);
       const [claimed] = rows;
@@ -274,7 +281,7 @@ export function createOutbox(deps: {
         const now = clock();
         await trx.selectFrom('case').select('id').where('id', '=', step.caseId).forUpdate().executeTakeFirstOrThrow();
         const before = await readSteps(trx, step.caseId);
-        const retryAt = nextAttemptAt(retry, { attempt: step.attempt, endedAt: now, retryAfter: end.retryAfter }, random);
+        const retryAt = nextAttemptAt(retry, { attempt: step.capAttempt, endedAt: now, retryAfter: end.retryAfter }, random);
         const exhausted = retryAt === 'exhausted';
         const updated = await holding(trx, step)
           .set(

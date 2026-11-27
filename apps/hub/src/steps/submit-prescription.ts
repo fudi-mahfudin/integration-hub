@@ -75,7 +75,7 @@ async function attemptSubmitPrescription(deps: SubmitPrescriptionDeps, step: Cla
   if (!kfaCode) return mappingMissing({ kind: 'drug', localCode: drugCode });
   attempt.valuesUsed.kfaCode = kfaCode;
 
-  const resolved = await resolveKfaDetails({ db, kfa }, kfaCode, clock());
+  const resolved = await resolveKfaDetails({ db, kfa }, kfaCode, clock(), step.replayedAt);
   if (resolved.httpStatus !== null) attempt.httpStatus = resolved.httpStatus;
   const medication = resolved.details;
   if (!medication) return mappingMissing({ kind: 'kfa', localCode: drugCode, kfaCode });

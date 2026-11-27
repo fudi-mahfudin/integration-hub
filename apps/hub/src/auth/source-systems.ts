@@ -32,6 +32,11 @@ export class SourceSystems {
     }));
   }
 
+  /** The registered source system with this id, if any. */
+  find(id: string): SourceSystem | undefined {
+    return this.byKeyHash.find((e) => e.source.id === id)?.source;
+  }
+
   /** @throws Problem `UNAUTHENTICATED` (401) on a missing, malformed or unknown key. */
   authenticate(authorization: string | undefined): SourceSystem {
     const match = /^Bearer (\S+)$/.exec(authorization ?? '');

@@ -2,6 +2,7 @@ import { MockSatusehatClient } from '@integration-hub/mock-satusehat/client';
 import { createMockSatusehat } from '@integration-hub/mock-satusehat/server';
 import { DEFAULT_WORLD_PATH, loadWorld } from '@integration-hub/mock-satusehat/world';
 import { randomUUID } from 'node:crypto';
+import { ADMIN_API_KEY } from './events.js';
 
 /** The world dataset the mock answers from and the location mapping seed points at. */
 export const world = await loadWorld(DEFAULT_WORLD_PATH);
@@ -53,6 +54,7 @@ export function worldEnv(mockBaseUrl: URL, databaseUrl: string): Record<string, 
     SATUSEHAT_CLIENT_ID: world.organization.clientId,
     SATUSEHAT_CLIENT_SECRET: world.organization.clientSecret,
     WORKER_POLL_INTERVAL_MS: '20',
+    HUB_ADMIN_API_KEY: ADMIN_API_KEY,
   };
 }
 

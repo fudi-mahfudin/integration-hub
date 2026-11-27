@@ -6,6 +6,8 @@ The HTTP API the hub service offers to source systems. Domain terms are in [GLOS
 
 Every request carries `Authorization: Bearer <api key>`. Each source system has one static API key. The source system's identity, and the SATUSEHAT organization it belongs to, come from the key, never from the request body. A missing, malformed or unknown key is [`401 UNAUTHENTICATED`](#unauthenticated).
 
+The operator has one more static key, the **admin API key** (`HUB_ADMIN_API_KEY`; there is no user model, ADR 0001). Only it may call the operator endpoints ([replay](#post-v1casesidreplay), [abandon](#post-v1casesidabandon), [mapping administration](#put-v1adminmappingsdrugslocationslocalcode)); a source system's key there is [`403 FORBIDDEN`](#forbidden). It may also read any source system's case.
+
 ## `POST /v1/events`
 
 Sends one source event.
@@ -23,7 +25,7 @@ Sends one source event.
 2. `Idempotency-Key` present and valid (`400`).
 3. Key lookup: a key already accepted from this source system with the same body is a duplicate ingest and gets the original answer again; with a different body it is [`422 IDEMPOTENCY_KEY_REUSED`](#idempotency_key_reused).
 4. Event schema ([`422 VALIDATION_FAILED`](#validation_failed)), then a prescription's item count ([`422 UNSUPPORTED_MULTI_ITEM`](#unsupported_multi_item)).
-5. Checks against events already recorded for the visit ([`409 EVENT_ALREADY_RECORDED`](#event_already_recorded), [`422 UNSUPPORTED_MULTI_ITEM`](#unsupported_multi_item) for a second prescription item, [`422 PRESCRIPTION_MISMATCH`](#prescription_mismatch) when a prescription and its dispense name different items, or [`422 FINISHED_BEFORE_STARTED`](#finished_before_started) when a visit's `finishedAt` is not later than its `startedAt`).
+5. Checks against the visit's case: an operator abandoned it ([`409 CASE_ABANDONED`](#case_abandoned)); then against events already recorded for the visit ([`409 EVENT_ALREADY_RECORDED`](#event_already_recorded), [`422 UNSUPPORTED_MULTI_ITEM`](#unsupported_multi_item) for a second prescription item, [`422 PRESCRIPTION_MISMATCH`](#prescription_mismatch) when a prescription and its dispense name different items, or [`422 FINISHED_BEFORE_STARTED`](#finished_before_started) when a visit's `finishedAt` is not later than its `startedAt`).
 6. Accept (`202`).
 
 A true duplicate always gets the original answer. It is never validated again into a different answer.
@@ -129,7 +131,7 @@ A visit's two events may arrive in either order. Whichever arrives second is che
 
 ## `GET /v1/cases/{id}`
 
-A case's status, what a waiting case waits for, and its four steps in order. A source system sees only its own cases; any other id is [`404 NOT_FOUND`](#not_found).
+A case's status, what a waiting case waits for, what an operator did to it, and its four steps in order. A source system sees only its own cases; any other id is [`404 NOT_FOUND`](#not_found). The admin API key sees every case.
 
 ```json
 {
@@ -138,6 +140,13 @@ A case's status, what a waiting case waits for, and its four steps in order. A s
   "status": "waiting",
   "waitingFor": "prescription.written",
   "waitingSince": "2026-03-02T01:00:03.120Z",
+  "stalled": false,
+  "deadLetterReason": null,
+  "reasonClass": null,
+  "deadLetteredSince": null,
+  "replayCount": 0,
+  "replays": [],
+  "abandonment": null,
   "rejections": [
     { "code": "UNSUPPORTED_MULTI_ITEM", "eventType": "prescription.written", "rejectedAt": "2026-03-02T01:05:41.002Z" }
   ],
@@ -164,16 +173,23 @@ A case's status, what a waiting case waits for, and its four steps in order. A s
 }
 ```
 
-Case status: `waiting`, `active`, `dead_lettered`, `completed`, `abandoned`. Step state: `awaiting_event`, `blocked`, `ready`, `in_flight`, `retry_wait`, `completed`, `dead_lettered`.
+Case status: `waiting`, `active`, `dead_lettered`, `completed`, `abandoned`. Step state: `awaiting_event`, `blocked`, `ready`, `in_flight`, `retry_wait`, `completed`, `dead_lettered`, `abandoned`.
 
 | Field | Meaning |
 |---|---|
 | `waitingFor` | For a `waiting` case, the source event its next step needs; otherwise `null`. |
 | `waitingSince` | Since when a `waiting` case has waited for `waitingFor` (UTC); otherwise `null`. |
-| `rejections` | The rejection log of the visit: every `VALIDATION_FAILED`, `UNSUPPORTED_MULTI_ITEM`, `PRESCRIPTION_MISMATCH`, `FINISHED_BEFORE_STARTED` and `EVENT_ALREADY_RECORDED` answer to an event naming this `visitId` and an event type, oldest first, including those sent before the case opened. Only the code, the event type and the time are kept, never the body. It explains a waiting case and never changes it. |
-| `steps[].attempts` | How many times a worker has claimed the step. |
+| `stalled` | `true` for a `waiting` case that has waited (since `waitingSince`) longer than the stalled threshold, `STALLED_AFTER_MS` (default 24h), as of the read. It only flags the case for an operator; time never changes a case (ADR 0007). Always `false` for any other status. |
+| `deadLetterReason` | For a `dead_lettered` case, the reason its failed step was dead-lettered; otherwise `null`. |
+| `reasonClass` | For a `dead_lettered` case, what an operator can do about the reason: `replayable` (fix the cause outside the case, then [replay](#post-v1casesidreplay)) or `source_data` (the source events themselves are wrong, so [abandoning](#post-v1casesidabandon) is suggested); otherwise `null`. See [Dead-letter reasons](#dead-letter-reasons). Replay is never refused because of it. |
+| `deadLetteredSince` | Since when a `dead_lettered` case has been dead-lettered (UTC); otherwise `null`. |
+| `replayCount` | How many times an operator has replayed the case. |
+| `replays` | Every operator replay of the case, oldest first: the `step` replayed, the dead-letter `reason` it cleared, the operator's `note` (or `null`) and `replayedAt`. |
+| `abandonment` | For an `abandoned` case: the operator's `note`, `abandonedAt`, the `previousStatus` (`waiting` or `dead_lettered`), the `waitingFor` or `deadLetterReason` it had then (the other is `null`), and `remoteRecordsLeft`, the records its completed steps left at SATUSEHAT (`[{ step, type, id, version }]`). Otherwise `null`. |
+| `rejections` | The rejection log of the visit: every `VALIDATION_FAILED`, `UNSUPPORTED_MULTI_ITEM`, `PRESCRIPTION_MISMATCH`, `FINISHED_BEFORE_STARTED`, `EVENT_ALREADY_RECORDED` and `CASE_ABANDONED` answer to an event naming this `visitId` and an event type, oldest first, including those sent before the case opened. Only the code, the event type and the time are kept, never the body. It explains a waiting case and never changes it. |
+| `steps[].attempts` | How many times a worker has claimed the step. A replay doesn't reset it: attempt numbers go on from it. |
 | `steps[].remote` | The record the step stored at SATUSEHAT, by its remote identifier and `meta.versionId`; `null` until the step completes. |
-| `steps[].deadLetterReason` | Why the step was dead-lettered; `null` unless it was. |
+| `steps[].deadLetterReason` | Why the step was dead-lettered; `null` unless it was. A step abandoned while dead-lettered keeps it. |
 | `steps[].availableAt` | For a step in `retry_wait`, when a worker may claim it again (UTC); otherwise `null`. See [Retries](#retries). |
 | `steps[].pins` | The values the step sent, pinned when it completed; later steps read these, never the live mappings or lookups. Create visit pins `patientIhsNumber`, `practitionerIhsNumber` and `locationId`. Submit prescription pins the prescribed KFA product (`kfaCode`, `kfaLevel`, `parent92`, `activeIngredients`, its 91 codes) and `requesterIhsNumber`. Submit dispense pins the dispensed KFA product (the same four fields) and `pharmacistIhsNumber`. Update visit pins the create visit values it sent again. `null` until the step completes. |
 | `steps[].attemptLog` | Every attempt at the step, oldest first. Append-only. |
@@ -214,11 +230,55 @@ SATUSEHAT's answers can dead-letter a step too:
 |---|---|
 | `PLATFORM_FORBIDDEN` | SATUSEHAT answered `403`: the hub's credentials or configuration don't allow the call. Replay once that is fixed. |
 | `PAYLOAD_INVALID` | SATUSEHAT answered another `4xx` the hub can't retry its way past (`400`, `404` on a search or create, `409`, `412`, `422`, …): a hub bug, as above. |
-| `RETRIES_EXHAUSTED` | The step's 15th attempt failed transiently too (or its lease ran out). |
+| `RETRIES_EXHAUSTED` | The step's 15th attempt since it was last replayed failed transiently too (or its lease ran out). |
+
+Each reason has a class, shown as the case's `reasonClass`:
+
+| Class | Reasons |
+|---|---|
+| `replayable` | `MAPPING_MISSING`, `KFA_LEVEL_INVALID`, `RETRIES_EXHAUSTED`, `PLATFORM_FORBIDDEN`, `PATIENT_NOT_FOUND`, `PRACTITIONER_NOT_FOUND`, `PAYLOAD_INVALID`, `REMOTE_RECORD_MISSING`, `REMOTE_RECORD_AMBIGUOUS` |
+| `source_data` | `UNSUPPORTED_THERAPEUTIC_SUBSTITUTION`, `SUBSTITUTION_MISMATCH`, `PATIENT_AMBIGUOUS`, `PRACTITIONER_AMBIGUOUS` |
 
 ### Retries
 
 An attempt that fails transiently (a timeout, a network error or reset, any `5xx`, `408`, `429`, or a `401` that one token refresh didn't cure) sends its step to `retry_wait`. A worker claims it again at `availableAt`: after a random wait of up to `min(60s, 1s·2ⁿ⁻¹)` after attempt n, or the answer's `Retry-After` if that is later (capped at 300s; a past or unreadable value is ignored). Each attempt starts over with search-then-create, so a write SATUSEHAT applied but didn't answer is found and adopted, never sent twice. A read (search or KFA lookup) that fails transiently is retried within the attempt, after 100ms and then 400ms, and shows in `readRetries`; a write is never sent twice by one attempt. If update visit's stored Encounter id is stale (its search finds one other Encounter, or its `PUT` answers `404` or `410` and a search finds one), create visit's `remote` is refreshed to the one found and the step retried.
+
+## `POST /v1/cases/{id}/replay`
+
+Admin API key only. Resumes a `dead_lettered` case from its failed step. The body is optional: `{ "note": "drug mapping added" }` (a non-blank `note` of up to 2000 characters, or `null`).
+
+- The failed step becomes `ready` again with no current dead-letter reason, and its attempt cap counts from 0. Its attempt numbers go on from the last one; the attempt log, the replays before, the completed steps with their remote identifiers and pins, and the states of the later steps are kept. The case becomes `active`.
+- The step's next attempt re-resolves every value it needs from the live mappings and lookups, and fetches the KFA details of its codes from KFA v2 again, so a fixed mapping or a corrected KFA product takes effect at once.
+- The replay is recorded in the case's `replays`.
+
+`200` with the case as [`GET /v1/cases/{id}`](#get-v1casesid) shows it. A case in any other status is [`409 CASE_NOT_DEAD_LETTERED`](#case_not_dead_lettered); of two concurrent replays of one case, one replays it and the other gets that `409`. An unknown id is `404 NOT_FOUND`.
+
+## `POST /v1/cases/{id}/abandon`
+
+Admin API key only. Ends a case that can never complete, for good (ADR 0007). The body is required: `{ "note": "the visit was registered by mistake" }`; a missing or blank `note` (up to 2000 characters) is [`422 VALIDATION_FAILED`](#validation_failed).
+
+- Only a `waiting` or `dead_lettered` case can be abandoned; any other status is [`409 CASE_NOT_ABANDONABLE`](#case_not_abandonable).
+- In one transaction, every step not `completed` becomes `abandoned`, and the case `abandoned`. Nothing is sent to SATUSEHAT: records completed steps created there stay, and are listed in `abandonment.remoteRecordsLeft`.
+- Afterwards, a duplicate ingest of an event the case accepted still gets its original `202`; any other event for the visit is [`409 CASE_ABANDONED`](#case_abandoned), and is logged in the rejection log.
+
+`200` with the case as [`GET /v1/cases/{id}`](#get-v1casesid) shows it.
+
+## `PUT /v1/admin/mappings/{drugs|locations}/{localCode}`
+
+Admin API key only. Creates or replaces the operator's mapping of a source system's local code. The worker's seed files write the same tables. A mapping takes effect at a step's next attempt; a dead-lettered case needs a [replay](#post-v1casesidreplay).
+
+| Kind | Body |
+|---|---|
+| `drugs` | `{ "source": "simulator", "kfaCode": "92000001", "note": "Parasetamol 500 mg Tablet" }`: `kfaCode` is digits |
+| `locations` | `{ "source": "simulator", "locationId": "b017aa54-…", "note": null }` |
+
+`source` must be a registered source system's id. `note` is optional, non-empty, up to 500 characters. A bad field is [`422 VALIDATION_FAILED`](#validation_failed); any other kind is `404 NOT_FOUND`.
+
+`200` with the mapping as stored, for example `{ "source": "simulator", "localCode": "PCT500", "kfaCode": "92000001", "note": "Parasetamol 500 mg Tablet", "updatedAt": "2026-03-02T01:00:00.000Z" }`. `updatedAt` changes only when the mapping or its note does.
+
+## `DELETE /v1/admin/mappings/{drugs|locations}/{localCode}?source={source}`
+
+Admin API key only. Deletes the mapping: `204`, or `404 NOT_FOUND` when there is none. A step that needs it is dead-lettered `MAPPING_MISSING` at its next attempt; completed steps keep the values they pinned.
 
 ## Errors
 
@@ -227,7 +287,7 @@ Every error is an RFC 9457 problem, `Content-Type: application/problem+json`:
 ```json
 {
   "type": "https://github.com/fudi-mahfudin/integration-hub/blob/main/docs/api.md#validation_failed",
-  "title": "The source event failed validation",
+  "title": "The request failed validation",
   "status": 422,
   "code": "VALIDATION_FAILED",
   "errors": [
@@ -241,6 +301,10 @@ Every error is an RFC 9457 problem, `Content-Type: application/problem+json`:
 ### UNAUTHENTICATED
 
 `401`. The API key is missing, malformed or unknown. The response carries `WWW-Authenticate: Bearer`.
+
+### FORBIDDEN
+
+`403`. A source system's API key called an operator endpoint, which only the admin API key may call.
 
 ### IDEMPOTENCY_KEY_MISSING
 
@@ -256,7 +320,7 @@ Every error is an RFC 9457 problem, `Content-Type: application/problem+json`:
 
 ### VALIDATION_FAILED
 
-`422`. The event breaks its schema. Every violation is listed in `errors[]`, each with one of these codes:
+`422`. The event breaks its schema, or an operator request's body breaks its own (its `errors[]` use `REQUIRED` and `INVALID_FORMAT`). Every violation is listed in `errors[]`, each with one of these codes:
 
 | `errors[].code` | Meaning |
 |---|---|
@@ -282,6 +346,18 @@ Every error is an RFC 9457 problem, `Content-Type: application/problem+json`:
 ### EVENT_ALREADY_RECORDED
 
 `409`. The visit already has an event of this type under a different idempotency key, or under a key that has since been purged.
+
+### CASE_ABANDONED
+
+`409`. An operator abandoned the visit's case (ADR 0007); it takes no more events. A duplicate ingest of an event it accepted still gets its original answer. Nothing is recorded, apart from the rejection log.
+
+### CASE_NOT_DEAD_LETTERED
+
+`409`. Only a `dead_lettered` case can be replayed.
+
+### CASE_NOT_ABANDONABLE
+
+`409`. Only a `waiting` or `dead_lettered` case can be abandoned.
 
 ### NOT_FOUND
 

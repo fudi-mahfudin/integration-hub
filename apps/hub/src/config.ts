@@ -80,6 +80,14 @@ export interface HubConfig {
   redisUrl: string;
   /** The source systems allowed to post events, one static API key each. */
   sources: SourceSystemConfig[];
+  /**
+   * The operator's API key (`HUB_ADMIN_API_KEY`): mapping administration,
+   * replay and abandonment, and reading any source system's case. No user
+   * model (ADR 0001). The default is public: production must set it.
+   */
+  adminApiKey: string;
+  /** How long a case may wait before the case view flags it `stalled` (`STALLED_AFTER_MS`, default 24h, ADR 0007). */
+  stalledAfterMs: number;
   /** Which idempotency store backs ingest (`IDEMPOTENCY_STORE`). */
   idempotencyStore: IdempotencyStoreKind;
   /** Idempotency keys are kept at least this many hours; never below 24 (API contract). */
@@ -122,6 +130,9 @@ type Env = Record<string, string | undefined>;
  */
 const DEV_SOURCES: SourceSystemConfig[] = [{ id: 'simulator', organizationId: '99000001', apiKey: 'dev-source-key' }];
 
+/** The operator key a clean clone runs with; public, like `DEV_SOURCES`. */
+const DEV_ADMIN_API_KEY = 'dev-admin-key';
+
 const sourcesSchema = z
   .array(
     z.object({
@@ -141,6 +152,7 @@ const sourcesSchema = z
  */
 export function loadConfig(env: Env): HubConfig {
   const profile = parseProfile(env.SATUSEHAT_PROFILE ?? 'mock');
+  const sources = env.HUB_SOURCES === undefined ? DEV_SOURCES : parseSources(env.HUB_SOURCES);
   return {
     host: parseHost(env.HOST ?? '0.0.0.0'),
     port: parsePort(env.PORT ?? '3000'),
@@ -149,7 +161,9 @@ export function loadConfig(env: Env): HubConfig {
       'postgresql:',
     ]),
     redisUrl: parseUrl('REDIS_URL', env.REDIS_URL ?? 'redis://localhost:6379', ['redis:', 'rediss:']),
-    sources: env.HUB_SOURCES === undefined ? DEV_SOURCES : parseSources(env.HUB_SOURCES),
+    sources,
+    adminApiKey: parseAdminApiKey(env.HUB_ADMIN_API_KEY ?? DEV_ADMIN_API_KEY, sources),
+    stalledAfterMs: parsePositiveInt('STALLED_AFTER_MS', env.STALLED_AFTER_MS ?? '86400000'),
     idempotencyStore: parseStore(env.IDEMPOTENCY_STORE ?? 'postgres'),
     idempotencyRetentionHours: parseRetention(env.IDEMPOTENCY_RETENTION_HOURS ?? '24'),
     idempotencyPurgeIntervalMs: parseNonNegativeInt(
@@ -231,6 +245,13 @@ function parseSources(raw: string): SourceSystemConfig[] {
     throw new Error(`${expected}; ${problems.join('; ')}`);
   }
   return parsed.data;
+}
+
+function parseAdminApiKey(raw: string, sources: readonly SourceSystemConfig[]): string {
+  // The value is a secret, so it is not echoed back.
+  if (raw.trim() === '') throw new Error('HUB_ADMIN_API_KEY must not be empty');
+  if (sources.some((s) => s.apiKey === raw)) throw new Error('HUB_ADMIN_API_KEY must differ from every HUB_SOURCES apiKey');
+  return raw;
 }
 
 function parseStore(raw: string): IdempotencyStoreKind {
