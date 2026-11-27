@@ -105,9 +105,11 @@ export function buildServer({ platform, log, faults, parking, clock }: ServerDep
       case 'http_400':
         return injected(
           400,
-          templates.payloadRejected([
-            { code: 'PAYLOAD_INVALID', path: notApplied.resourceType ?? '(request)', message: `rejected by mock fault rule "${fault.ruleId}"` },
-          ]),
+          fault.echoRequest
+            ? templates.echoingRejection(fault.ruleId, req.url, typeof req.body === 'string' ? req.body : '')
+            : templates.payloadRejected([
+                { code: 'PAYLOAD_INVALID', path: notApplied.resourceType ?? '(request)', message: `rejected by mock fault rule "${fault.ruleId}"` },
+              ]),
         );
       case 'http_401':
         return injected(401, templates.unauthorized());

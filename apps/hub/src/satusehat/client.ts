@@ -184,8 +184,9 @@ export function createSatusehatClient(deps: {
     if (res.status !== expected) throw new SatusehatRequestError(method, url, res.status, text, res.retryAfter);
     try {
       return { url, json: JSON.parse(text) };
-    } catch (err) {
-      throw new SatusehatResponseError(method, url, 'a body that is not JSON', { cause: err });
+    } catch {
+      // No cause: the SyntaxError's message quotes the body, which is never logged (#40).
+      throw new SatusehatResponseError(method, url, 'a body that is not JSON');
     }
   }
 

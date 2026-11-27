@@ -16,7 +16,7 @@ function calls(breaker: CircuitBreaker, n: number, healthy: boolean) {
 describe('the circuit breaker of one platform API (#13)', () => {
   it('opens at 50% health failures over at least 20 calls, and then refuses calls', () => {
     const { clock } = manualClock();
-    const breaker = createCircuitBreaker({ api: 'fhir', clock, openMs: 30_000 });
+    const breaker = createCircuitBreaker({ api: 'fhir', clock, openMs: 30_000, log: () => {} });
     calls(breaker, 10, true);
     calls(breaker, 9, false);
     expect(breaker.isOpen()).toBe(false);
@@ -29,14 +29,14 @@ describe('the circuit breaker of one platform API (#13)', () => {
 
   it('does not open on fewer than 20 calls, however many fail', () => {
     const { clock } = manualClock();
-    const breaker = createCircuitBreaker({ api: 'fhir', clock, openMs: 30_000 });
+    const breaker = createCircuitBreaker({ api: 'fhir', clock, openMs: 30_000, log: () => {} });
     calls(breaker, 19, false);
     expect(breaker.isOpen()).toBe(false);
   });
 
   it('does not open below 50% failures', () => {
     const { clock } = manualClock();
-    const breaker = createCircuitBreaker({ api: 'kfa', clock, openMs: 30_000 });
+    const breaker = createCircuitBreaker({ api: 'kfa', clock, openMs: 30_000, log: () => {} });
     calls(breaker, 11, true);
     calls(breaker, 10, false);
     expect(breaker.isOpen()).toBe(false);
@@ -44,7 +44,7 @@ describe('the circuit breaker of one platform API (#13)', () => {
 
   it('only counts calls of the last 10s', () => {
     const { clock, advance } = manualClock();
-    const breaker = createCircuitBreaker({ api: 'fhir', clock, openMs: 30_000 });
+    const breaker = createCircuitBreaker({ api: 'fhir', clock, openMs: 30_000, log: () => {} });
     calls(breaker, 15, false);
     advance(10_001);
     calls(breaker, 10, false);
@@ -55,7 +55,7 @@ describe('the circuit breaker of one platform API (#13)', () => {
 
   it('after 30s open, admits one probe: a healthy one closes it', () => {
     const { clock, advance } = manualClock();
-    const breaker = createCircuitBreaker({ api: 'auth', clock, openMs: 30_000 });
+    const breaker = createCircuitBreaker({ api: 'auth', clock, openMs: 30_000, log: () => {} });
     calls(breaker, 20, false);
     advance(29_999);
     expect(() => breaker.admit()).toThrow(CircuitOpen);
@@ -75,7 +75,7 @@ describe('the circuit breaker of one platform API (#13)', () => {
 
   it('a failed probe opens it again for another 30s', () => {
     const { clock, advance } = manualClock();
-    const breaker = createCircuitBreaker({ api: 'fhir', clock, openMs: 30_000 });
+    const breaker = createCircuitBreaker({ api: 'fhir', clock, openMs: 30_000, log: () => {} });
     calls(breaker, 20, false);
     advance(30_000);
 

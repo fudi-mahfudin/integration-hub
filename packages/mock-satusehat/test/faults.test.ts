@@ -40,6 +40,26 @@ describe('fault rules', () => {
     expect(await mock.client.report()).toEqual({ faultSeed: 7, duplicates: [], outOfOrder: [], overlap: [] });
   });
 
+  it('an http_400 with echoRequest echoes the request URL and body in its OperationOutcome, as a platform error may echo a NIK', async () => {
+    const [patient] = world.patients;
+    if (!patient) throw new Error('the world dataset needs a patient');
+    await mock.client.setFaults({
+      seed: 1,
+      rules: [
+        { id: 'echo-search', match: { method: 'GET', resourceType: 'Patient' }, kind: 'http_400', params: { echoRequest: true }, firstN: 1 },
+        { id: 'echo-create', match: { method: 'POST', resourceType: 'Encounter' }, kind: 'http_400', params: { echoRequest: true }, firstN: 1 },
+      ],
+    });
+
+    const searched = await fhir(mock.baseUrl, token, `Patient?identifier=https://fhir.kemkes.go.id/id/nik|${patient.nik}`);
+    const created = await fhir(mock.baseUrl, token, 'Encounter', encounter('V-echo'));
+
+    expect(searched.status).toBe(400);
+    expect(JSON.stringify(await searched.json())).toContain(patient.nik);
+    expect(created.status).toBe(400);
+    expect(JSON.stringify(await created.json())).toContain('V-echo');
+  });
+
   it.each([
     ['http_503 without Retry-After', { kind: 'http_503' }, 503, null],
     ['http_503 with Retry-After seconds', { kind: 'http_503', params: { retryAfter: { form: 'seconds', seconds: 5 } } }, 503, '5'],

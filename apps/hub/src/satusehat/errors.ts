@@ -1,4 +1,31 @@
+import { z } from 'zod';
 import type { PlatformApi } from './circuit-breaker.js';
+
+const outcomeCodesSchema = z.object({
+  issue: z.array(
+    z.object({
+      code: z.string().optional(),
+      details: z.object({ coding: z.array(z.object({ code: z.string().optional() })).optional() }).optional(),
+    }),
+  ),
+});
+
+/** The issue codes of an OperationOutcome body (e.g. ` (invalid: PAYLOAD_INVALID)`), never its text; empty for any other body. */
+function describeOutcome(body: string): string {
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    return '';
+  }
+  const parsed = outcomeCodesSchema.safeParse(value);
+  if (!parsed.success || parsed.data.issue.length === 0) return '';
+  const issues = parsed.data.issue.map((issue) => {
+    const detailCodes = (issue.details?.coding ?? []).flatMap((c) => (c.code === undefined ? [] : [c.code]));
+    return [issue.code ?? 'unknown', ...detailCodes].join(': ');
+  });
+  return ` (${issues.join(', ')})`;
+}
 
 /** SATUSEHAT answered a request with a status the adapter did not expect. */
 export class SatusehatRequestError extends Error {
@@ -10,8 +37,9 @@ export class SatusehatRequestError extends Error {
     /** The instant the answer's `Retry-After` named (see `parseRetryAfter`), or null when it had none. */
     readonly retryAfter: Date | null,
   ) {
-    // Path only: the query may carry a NIK. The body is cut short; it is an OperationOutcome at most.
-    super(`SATUSEHAT ${method} ${url.pathname} answered ${status}: ${body.slice(0, 500)}`);
+    // Path only: the query may carry a NIK. Of the body, only the OperationOutcome's codes:
+    // its text may echo personal data, and is never logged verbatim (#40).
+    super(`SATUSEHAT ${method} ${url.pathname} answered ${status}${describeOutcome(body)}`);
     this.name = 'SatusehatRequestError';
   }
 }

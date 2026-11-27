@@ -1,6 +1,7 @@
-import { Catch, HttpException, type ArgumentsHost, type ExceptionFilter } from '@nestjs/common';
+import { Catch, HttpException, Inject, type ArgumentsHost, type ExceptionFilter } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
-import { log } from '../observability/log.js';
+import type { Log } from '../observability/log.js';
+import { LOG } from '../tokens.js';
 
 /** One violation in a problem's `errors[]`. `path` is a JSON Pointer (RFC 6901) into the request body. */
 export interface FieldError {
@@ -78,16 +79,28 @@ function sendProblem(reply: FastifyReply, problem: Problem): void {
   void reply.send(problem.toBody());
 }
 
-/** Renders every error leaving a controller (and Nest's own unknown-route 404s) as a problem. */
+/**
+ * Renders every error leaving a controller (and Nest's own unknown-route
+ * 404s) as a problem. A rejection is logged at `info` with its code, an
+ * unhandled error at `error`.
+ */
 @Catch()
 export class ProblemFilter implements ExceptionFilter {
+  constructor(@Inject(LOG) private readonly log: Log) {}
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const reply = host.switchToHttp().getResponse<FastifyReply>();
-    if (exception instanceof Problem) return sendProblem(reply, exception);
-    if (exception instanceof HttpException && exception.getStatus() === 404) {
-      return sendProblem(reply, new Problem('NOT_FOUND', []));
+    const problem =
+      exception instanceof Problem
+        ? exception
+        : exception instanceof HttpException && exception.getStatus() === 404
+          ? new Problem('NOT_FOUND', [])
+          : undefined;
+    if (problem) {
+      this.log('info', 'request rejected', { errorCode: problem.code, status: problem.status });
+      return sendProblem(reply, problem);
     }
-    log('error', 'unhandled error in a request', { error: exception });
+    this.log('error', 'unhandled error in a request', { errorCode: 'INTERNAL_ERROR', error: exception });
     sendProblem(reply, new Problem('INTERNAL_ERROR', []));
   }
 }

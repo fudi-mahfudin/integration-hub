@@ -56,8 +56,9 @@ export function createKfaClient(deps: { config: Pick<SatusehatConfig, 'kfaUrl'>;
       let json: unknown;
       try {
         json = JSON.parse(text);
-      } catch (err) {
-        throw new SatusehatResponseError('GET', url, 'a body that is not JSON', { cause: err });
+      } catch {
+        // No cause: the SyntaxError's message quotes the body, which is never logged (#40).
+        throw new SatusehatResponseError('GET', url, 'a body that is not JSON');
       }
       const parsed = lookupSchema.safeParse(json);
       if (!parsed.success) {

@@ -1,12 +1,10 @@
 import { systemClock } from './clock.js';
 import { createHub } from './composition-root.js';
 import { loadConfig } from './config.js';
-import { log } from './observability/log.js';
 
 // Hub service entry point. It never migrates; run the `migrate` command first.
-const hub = await createHub(loadConfig(process.env), { clock: systemClock });
-const baseUrl = await hub.listen();
-log('info', 'hub service listening', { url: baseUrl.href });
+const hub = await createHub(loadConfig(process.env), { clock: systemClock, logs: process.stdout });
+await hub.listen();
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.once(signal, () => {

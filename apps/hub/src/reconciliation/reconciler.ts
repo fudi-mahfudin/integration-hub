@@ -4,7 +4,7 @@ import type { CaseId, CaseStatus, PrescriptionId, RemoteId, RemoteIdentifier, St
 import { readCreateVisitPins, readSubmitDispensePins, readSubmitPrescriptionPins } from '../cases/pins.js';
 import type { Clock } from '../clock.js';
 import type { Database } from '../db/database.js';
-import { log } from '../observability/log.js';
+import type { Log } from '../observability/log.js';
 import type { RecordAtSatusehat, SatusehatClient } from '../satusehat/client.js';
 import type { AttemptCalls } from '../satusehat/transport.js';
 import { compareResource, type Divergence, type ExpectedRecord, type ReconciliationCheckOutcome } from './model.js';
@@ -79,8 +79,9 @@ export function createReconciler(deps: {
   pollIntervalMs: number;
   /** How long one case's check may go on making calls, as an attempt may. */
   checkBudgetMs: number;
+  log: Log;
 }): Reconciler {
-  const { db, clock, satusehatFor, intervalMs, lookbackMs, pollIntervalMs, checkBudgetMs } = deps;
+  const { db, clock, satusehatFor, intervalMs, lookbackMs, pollIntervalMs, checkBudgetMs, log } = deps;
   let running = false;
   let loop: Promise<void> | undefined;
   let wake: (() => void) | undefined;

@@ -1,11 +1,12 @@
 import type { Kysely } from 'kysely';
 import type { SourceSystem } from '../auth/source-systems.js';
 import type { Clock } from '../clock.js';
+import type { CaseId } from '../cases/case-model.js';
 import { countDuplicate, recordEvent, type AcceptedEvent, type RecordedEvent } from '../cases/record-event.js';
 import { isLoggedRejection, logRejection, type RejectionCode } from '../cases/rejection-log.js';
 import type { Database } from '../db/database.js';
 import { Problem } from '../http/problem.js';
-import { log } from '../observability/log.js';
+import { addToRequestContext, type Log } from '../observability/log.js';
 import { parseEvent, visitEventOf } from './event-schema.js';
 import { fingerprint, type Fingerprint, type RequestBody } from './fingerprint.js';
 import type { IdempotencyKey, IdempotencyStore, IngestResponse, StoredKey } from './idempotency-store.js';
@@ -22,8 +23,8 @@ export interface Ingest {
 }
 
 /** Builds ingest over an idempotency store and the hub database (for the rejection log). Only the composition root calls this. */
-export function createIngest(deps: { store: IdempotencyStore; db: Kysely<Database>; clock: Clock }): Ingest {
-  const { store, db, clock } = deps;
+export function createIngest(deps: { store: IdempotencyStore; db: Kysely<Database>; clock: Clock; log: Log }): Ingest {
+  const { store, db, clock, log } = deps;
 
   async function accept(source: SourceSystem, key: IdempotencyKey, body: RequestBody): Promise<IngestResponse> {
     const bodyFingerprint = fingerprint(body);
@@ -32,10 +33,16 @@ export function createIngest(deps: { store: IdempotencyStore; db: Kysely<Databas
     if (known) return countedDuplicate(source, body, answerDuplicate(known, bodyFingerprint));
 
     const event = await parseEventAfterKeyLookup(store, source, key, body, bodyFingerprint);
+    let caseId: CaseId | undefined;
     const result = await store.record(source.id, key, bodyFingerprint, (trx) =>
-      recordEvent(trx, source, event, clock()).then((recorded) => accepted(event, recorded)),
+      recordEvent(trx, source, event, clock()).then((recorded) => {
+        caseId = recorded.caseId;
+        return accepted(event, recorded);
+      }),
     );
-    return 'accepted' in result ? result.accepted : countedDuplicate(source, body, answerDuplicate(result.raced, bodyFingerprint));
+    if (!('accepted' in result)) return countedDuplicate(source, body, answerDuplicate(result.raced, bodyFingerprint));
+    log('info', 'source event accepted', { caseId });
+    return result.accepted;
   }
 
   /** Counts a duplicate ingest against the event it duplicates, then answers it. */
@@ -47,8 +54,9 @@ export function createIngest(deps: { store: IdempotencyStore; db: Kysely<Databas
       await countDuplicate(db, { sourceSystemId: source.id, ...named });
     } catch (err) {
       // The count only informs the case view; the source still gets its original answer, and no case changed.
-      log('error', 'counting a duplicate ingest failed', { eventType: named.eventType, error: err });
+      log('error', 'counting a duplicate ingest failed', { error: err });
     }
+    log('info', 'duplicate ingest; the original answer is sent again');
     return answer;
   }
 
@@ -60,13 +68,15 @@ export function createIngest(deps: { store: IdempotencyStore; db: Kysely<Databas
       await logRejection(db, { sourceSystemId: source.id, ...rejected }, code, clock());
     } catch (err) {
       // The log only explains a waiting case; the source still gets its answer, and no case changed.
-      log('error', 'logging an ingest rejection failed', { code, eventType: rejected.eventType, error: err });
+      log('error', 'logging an ingest rejection failed', { errorCode: code, error: err });
     }
   }
 
   return {
     async ingest(source, key, rawBody) {
       const body = readBody(rawBody);
+      const named = visitEventOf(body);
+      addToRequestContext({ source: source.id, ...(named === undefined ? {} : { eventType: named.eventType }) });
       try {
         return await accept(source, key, body);
       } catch (err) {

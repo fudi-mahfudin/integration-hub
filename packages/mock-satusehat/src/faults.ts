@@ -19,7 +19,8 @@ const kindSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('http_500'), params: noParams }),
   z.object({ kind: z.literal('http_503'), params: throttleParams }),
   z.object({ kind: z.literal('http_429'), params: throttleParams }),
-  z.object({ kind: z.literal('http_400'), params: noParams }),
+  // `echoRequest`: the OperationOutcome quotes the request's URL and body, as a platform error may echo a NIK (#40).
+  z.object({ kind: z.literal('http_400'), params: z.object({ echoRequest: z.boolean().optional() }).strict().default({}) }),
   z.object({ kind: z.literal('http_401'), params: noParams }),
   z.object({ kind: z.literal('timeout'), params: z.object({ ms: holdMs }).strict() }),
   z.object({ kind: z.literal('connection_reset'), params: noParams }),
@@ -81,7 +82,8 @@ export type RetryAfter = z.output<typeof retryAfterSchema>;
 
 /** The fault a rule decided for one request, with any random parameter (a latency range) already drawn. */
 export type Fault = { ruleId: string } & (
-  | { kind: 'http_500' | 'http_400' | 'http_401' | 'connection_reset' | 'http_500_after_apply' | 'hold' }
+  | { kind: 'http_500' | 'http_401' | 'connection_reset' | 'http_500_after_apply' | 'hold' }
+  | { kind: 'http_400'; echoRequest: boolean }
   | { kind: 'http_503' | 'http_429'; retryAfter: RetryAfter | null }
   | { kind: 'timeout' | 'timeout_after_apply' | 'latency'; ms: number }
 );
@@ -173,6 +175,8 @@ function faultOf(rule: Rule, u: number): Fault {
     case 'http_503':
     case 'http_429':
       return { ruleId, kind: rule.kind, retryAfter: rule.params.retryAfter ?? null };
+    case 'http_400':
+      return { ruleId, kind: 'http_400', echoRequest: rule.params.echoRequest ?? false };
     case 'timeout':
     case 'timeout_after_apply':
       return { ruleId, kind: rule.kind, ms: rule.params.ms };
