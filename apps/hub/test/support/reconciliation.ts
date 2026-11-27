@@ -1,5 +1,6 @@
 import { expect } from 'vitest';
 import { z } from 'zod';
+import { ENDED_RUN_STATUSES } from '../../src/reconciliation/model.js';
 import { adminRequest } from './events.js';
 
 const findingSchema = z.object({
@@ -32,7 +33,8 @@ export const runSchema = runSummarySchema.extend({ findings: z.array(findingSche
 /** A reconciliation run as tests read it. */
 export type Run = z.infer<typeof runSchema>;
 
-const ended = (r: Run) => ['completed', 'completed_with_errors', 'failed', 'interrupted'].includes(r.status);
+// Widened so `includes` takes any status; it only reads the list.
+const ended = (r: Run) => (ENDED_RUN_STATUSES as readonly string[]).includes(r.status);
 
 /** `POST /v1/admin/reconciliation/runs` with `body`, expecting `202`; resolves to the new run's id. */
 export async function requestRun(baseUrl: URL, body: unknown): Promise<string> {

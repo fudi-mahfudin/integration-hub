@@ -5,7 +5,7 @@ import type { Log } from '../observability/log.js';
 import { failSpan, inCaseTrace, inSpan, recordEndedSpan } from '../observability/tracing.js';
 import type { CircuitBreaker } from '../satusehat/circuit-breaker.js';
 import type { ClaimedStep, Outbox } from '../outbox/outbox.js';
-import { SatusehatRequestError } from '../satusehat/errors.js';
+import { AttemptAborted, SatusehatRequestError } from '../satusehat/errors.js';
 import type { AttemptCalls } from '../satusehat/transport.js';
 import { AttemptFailed, type AttemptFacts, type StepOutcome } from '../steps/step-outcome.js';
 import { classifyFailure } from './failure-class.js';
@@ -127,7 +127,8 @@ export function createWorkerLoop(deps: {
     } catch (err) {
       failSpan(span, err);
       const facts = failedAttemptFacts(err);
-      if (shutdown.signal.aborted) return released(step, facts, calls, err);
+      // Only a call the drain deadline cut: an attempt that failed on its own just as it struck is stored as it failed.
+      if (err instanceof AttemptAborted || (err instanceof AttemptFailed && err.cause instanceof AttemptAborted)) return releaseAtShutdown(step, facts, calls, err);
       const failure = classifyFailure(err);
       try {
         if ('permanent' in failure) {
@@ -156,7 +157,7 @@ export function createWorkerLoop(deps: {
   }
 
   /** Releases a step whose attempt the drain deadline cut short (#43); if that fails, its lease expires instead. */
-  async function released(step: ClaimedStep, facts: AttemptFacts, calls: AttemptCalls, err: unknown): Promise<AttemptSpanOutcome> {
+  async function releaseAtShutdown(step: ClaimedStep, facts: AttemptFacts, calls: AttemptCalls, err: unknown): Promise<AttemptSpanOutcome> {
     const fields = { caseId: step.caseId, step: step.name, attempt: step.attempt };
     try {
       if (!(await outbox.release(step, { facts, readRetries: calls.readRetries }))) {

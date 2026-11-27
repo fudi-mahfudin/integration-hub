@@ -40,7 +40,8 @@ export async function awaitSchema(db: Kysely<Database>, host: string): Promise<v
   const deadline = Date.now() + POSTGRES_WAIT_MS;
   for (;;) {
     try {
-      await sql`select 1`.execute(db);
+      // Bounded by what is left of the wait: a host that never answers must not hang start-up.
+      await withinMs(deadline - Date.now(), sql`select 1`.execute(db));
       break;
     } catch (err) {
       if (Date.now() >= deadline) throw new PostgresUnreachable(host, POSTGRES_WAIT_MS, { cause: err });
@@ -49,6 +50,15 @@ export async function awaitSchema(db: Kysely<Database>, host: string): Promise<v
   }
   const applied = await appliedVersion(db);
   if (applied !== BUILT_VERSION) throw new SchemaMismatch(applied, BUILT_VERSION);
+}
+
+/** `promise`, or a rejection once `ms` have passed first. A query still waiting carries on in the background; the pool is destroyed on exit. */
+function withinMs<T>(ms: number, promise: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`Postgres did not answer within ${ms}ms`)), Math.max(ms, 0));
+  });
+  return Promise.race([promise, timedOut]).finally(() => clearTimeout(timer));
 }
 
 /** The last migration applied to the database; `none` when the migration table is missing or empty. */

@@ -59,8 +59,8 @@ describe('worker graceful shutdown (#43)', () => {
     const env = await world();
     await mockOf().client.setFaults({ seed: 43, rules: [{ id: 'park-create', match: { method: 'POST', resourceType: 'Encounter' }, firstN: 1, kind: 'hold' }] });
     const worker = await spawn(env);
-    const a = worldVisitStarted();
-    const aLocation = (await postEvent(hubOf().baseUrl, { apiKey: WORLD_SOURCE_API_KEY, body: a })).headers.get('location');
+    const visitA = worldVisitStarted();
+    const aLocation = (await postEvent(hubOf().baseUrl, { apiKey: WORLD_SOURCE_API_KEY, body: visitA })).headers.get('location');
     const [hold] = await mockOf().client.holds(10_000);
     const bLocation = (await postEvent(hubOf().baseUrl, { apiKey: WORLD_SOURCE_API_KEY, body: worldVisitStarted() })).headers.get('location');
 
@@ -77,7 +77,7 @@ describe('worker graceful shutdown (#43)', () => {
     expect(caseA.steps[0]).toMatchObject({ state: 'completed', attempts: 1 });
     expect(caseA.steps[0]?.attemptLog.map((l) => l.outcome)).toEqual(['completed']);
     expect((await caseAt(bLocation)).steps[0]).toMatchObject({ state: 'ready', attempts: 0 });
-    const effects = (await mockOf().client.log({ visitKey: a.visitId })).filter((e) => e.effect !== 'none');
+    const effects = (await mockOf().client.log({ visitKey: visitA.visitId })).filter((e) => e.effect !== 'none');
     expect(effects.map((e) => `${e.resourceType} ${e.effect}`)).toEqual(['Encounter created']);
   }, 30_000);
 
@@ -148,12 +148,12 @@ describe('worker graceful shutdown (#43)', () => {
     replacement = await bootWorker(env);
     let location: string | null = null;
     for (const event of worldVisitEvents().events) location = (await postEvent(hubOf().baseUrl, { apiKey: WORLD_SOURCE_API_KEY, body: event })).headers.get('location');
-    const kase = await waitForCase(hubOf().baseUrl, location, (v) => v.status === 'completed', { apiKey: WORLD_SOURCE_API_KEY, timeoutMs: 10_000 });
+    const completedCase = await waitForCase(hubOf().baseUrl, location, (v) => v.status === 'completed', { apiKey: WORLD_SOURCE_API_KEY, timeoutMs: 10_000 });
     await replacement.close();
     replacement = undefined;
     await mockOf().client.setFaults({ seed: 43, rules: [{ id: 'park-search', match: { method: 'GET', resourceType: 'Encounter' }, firstN: 1, kind: 'hold' }] });
     const worker = await spawn(env);
-    const runId = await requestRun(hubOf().baseUrl, { caseIds: [kase.caseId] });
+    const runId = await requestRun(hubOf().baseUrl, { caseIds: [completedCase.caseId] });
     await mockOf().client.holds(10_000);
 
     worker.signal('SIGTERM');
@@ -162,7 +162,7 @@ describe('worker graceful shutdown (#43)', () => {
     expect(await readRun(hubOf().baseUrl, runId)).toMatchObject({ status: 'interrupted', endedAt: expect.any(String) });
     await mockOf().client.setFaults({ seed: 43, rules: [] });
     replacement = await bootWorker(env);
-    const next = await awaitRun(hubOf().baseUrl, await requestRun(hubOf().baseUrl, { caseIds: [kase.caseId] }));
+    const next = await awaitRun(hubOf().baseUrl, await requestRun(hubOf().baseUrl, { caseIds: [completedCase.caseId] }));
     expect(next).toMatchObject({ status: 'completed', counts: { cases: 1, clean: 1 } });
     expect(await readRun(hubOf().baseUrl, runId)).toMatchObject({ status: 'interrupted' });
   }, 30_000);

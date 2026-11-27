@@ -53,9 +53,9 @@ export function createReadiness(deps: { db: Kysely<Database>; redis: Redis }): R
 
   return {
     async check() {
-      const [pg, rd] = await Promise.all([postgres(), redisStatus()]);
-      const status: ReadinessStatus = draining ? 'draining' : pg.status === 'up' ? 'ready' : 'not_ready';
-      return { status, checks: { postgres: pg, redis: { status: rd, gating: false } } };
+      const [postgresCheck, redisCheck] = await Promise.all([postgres(), redisStatus()]);
+      const status: ReadinessStatus = draining ? 'draining' : postgresCheck.status === 'up' ? 'ready' : 'not_ready';
+      return { status, checks: { postgres: postgresCheck, redis: { status: redisCheck, gating: false } } };
     },
     drain() {
       draining = true;

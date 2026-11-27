@@ -262,7 +262,8 @@ export function createSatusehatTransport(deps: {
 function unlessAborted<T>(signal: AbortSignal, request: SatusehatRequest, promise: Promise<T>): Promise<T> {
   const abortedError = () => new AttemptAborted(request.method, request.url);
   if (signal.aborted) {
-    // Dropped: the attempt no longer waits for it.
+    // Safe to drop: the attempt is over and ends `worker_shutdown` whatever this wait comes to;
+    // the limiter, token cache and timers it belongs to handle their own failures.
     promise.catch(() => {});
     return Promise.reject(abortedError());
   }
