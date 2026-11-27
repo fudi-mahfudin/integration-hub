@@ -59,7 +59,24 @@ The rules:
 
 - **Every official run is published, pass or fail.**
 - A change to the commitments file needs a reason in its commit message. Its full history is public: [history of `bigrun.commitments.json`](https://github.com/fudi-mahfudin/integration-hub/commits/main/bigrun.commitments.json).
-- The big-run harness will refuse an official run on a dirty tree or if the file changed since its own commit, and its report will record the git SHA, the file's hash and that commit's date.
+- The big-run harness refuses an official run on a dirty tree or if the file changed since its own commit, and its report records the git SHA, the file's hash and that commit's date.
+
+## Big run results
+
+<!-- bigrun:start -->
+No official run yet. `pnpm bigrun --official` runs one, and `pnpm bigrun:publish` writes its results here.
+<!-- bigrun:end -->
+
+### Running the big run
+
+`pnpm bigrun` brings the compose stack up as committed (1 hub service and 2 workers with pinned limits, scheduled reconciliation off, 5% trace sampling), refuses to run if the stack differs or delivers anywhere but the mock, and drives the committed run. In order, it writes the manifest, sets the faults with one `PUT /__mock/faults`, sends the batch open loop at 50 events/s, and polls the case list every 5s. Then it judges every invariant from the hub's side and the mock's and writes a report. It exits 0 on PASS, 1 on FAIL and 2 if it refuses to start. Waiting gives up after 10 min without a completed step, or 60 min after the first send; either way it still writes a full FAIL report listing the stuck cases.
+
+- `pnpm bigrun --official`: the committed run, from a clean tree only. It writes `results/bigrun/<date>-<shortsha>/` (`report.md`, `report.json`, `manifest.json`, `mock-report.json`, and `mock-log.ndjson.gz`, which is not committed) and lists the run in [`results/bigrun/INDEX.md`](results/bigrun/INDEX.md). Commit them, pass or fail.
+- `pnpm bigrun:publish`: uploads the latest official run's mock log as a GitHub Release asset (`bigrun-<dir>`) and rewrites the section above.
+- `pnpm bigrun --ci`: the same run at 200 visits, with the same ratios, fault weights and deadlines. CI runs it on every pull request.
+- `pnpm bigrun --set path=value`: overrides a committed value under `bigRun` (e.g. `--set arrival.eventsPerSecond=25`). The report flags every override, and such a run is never official.
+
+Runs that are not official write to `results/bigrun-unofficial/` (not committed). The harness reaches the stack on `localhost` (`BIGRUN_HUB_URL`, `BIGRUN_MOCK_URL`, `BIGRUN_PROMETHEUS_URL`).
 
 ## Quick start
 
@@ -158,9 +175,11 @@ The hub never migrates itself: always run `pnpm migrate` before starting it. At 
 | `apps/hub/seed` | The operator's location and drug mapping seeds, loaded idempotently at boot |
 | `packages/mock-satusehat` | The mock SATUSEHAT: a stateful fake platform with its own validator (ADR 0006) and the `/__mock/*` inspection and control API; never deployed publicly |
 | `packages/simulator` | The source simulator: plans seeded batches of fictional visits from the world dataset and sends them to the hub as a source system |
+| `packages/bigrun` | The big-run harness (`pnpm bigrun`): drives the committed big run through the simulator, judges it from the hub's and the mock's side, and writes and publishes its report |
+| `results/bigrun` | Every official big run's report, and `INDEX.md` |
 | `docs/api.md` | The hub's API contract |
 | `compose.yaml` | Local infrastructure, and (profile `app`) the mock SATUSEHAT, the hub service, two workers and the one-shot `migrate`, and (profile `simulator`) the one-shot source simulator; only components from the closed list |
 | `observability` | Prometheus scrape config and the Grafana data source and dashboards, provisioned from committed JSON (Jaeger needs no config) |
-| `.github/workflows/ci.yml` | CI: typecheck, the import-boundary check (`pnpm boundaries`), and the same `pnpm test` against Postgres and Redis service containers |
+| `.github/workflows/ci.yml` | CI: typecheck, the import-boundary check (`pnpm boundaries`), and the same `pnpm test` against Postgres and Redis service containers; and the big run at 200 visits (`pnpm bigrun --ci`) against the compose stack |
 
 Later: `apps/dashboard`.

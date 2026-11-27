@@ -216,6 +216,14 @@ _Avoid_: Smoke test, integration test, sandbox run
 The fixed, published run of 10,000 source events, a fifth of them duplicates, with platform failures injected, whose commitments are fixed before any result. It passes only if no event is lost, nothing is submitted twice, and every case keeps its order.
 _Avoid_: Load test, stress test, benchmark
 
+**Official run**:
+A big run started with `--official` from a clean tree whose commitments file is exactly as last committed, with no overrides. Only official runs are listed in the results index and published, pass or fail; a scaled-down CI run or a run with overrides never is.
+_Avoid_: Real run, production run
+
+**Manifest**:
+What a big run expects, written before its first send: every planned visit with the four effects it must leave at SATUSEHAT, and every planned send with its idempotency key, timing and body hash. Both the hub-side and the mock-side checks are judged against it.
+_Avoid_: Plan (the simulator's plan holds the bodies; the manifest is the expected outcome), expectations file
+
 **Load test**:
 A run that measures how fast the hub accepts source events under a fixed arrival rate, with no injected failures, against thresholds fixed beforehand.
 _Avoid_: Big run, benchmark

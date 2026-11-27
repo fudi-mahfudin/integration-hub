@@ -118,6 +118,31 @@ importers:
         specifier: ^5.1.1
         version: 5.1.1(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(vite@8.3.8(@types/node@24.19.2)(esbuild@0.28.2)(tsx@4.23.15))
 
+  packages/bigrun:
+    dependencies:
+      '@integration-hub/mock-satusehat':
+        specifier: workspace:*
+        version: link:../mock-satusehat
+      '@integration-hub/simulator':
+        specifier: workspace:*
+        version: link:../simulator
+      tsx:
+        specifier: ^4.23.15
+        version: 4.23.15
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: ^24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^5.1.1
+        version: 5.1.1(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(vite@8.3.8(@types/node@24.19.2)(esbuild@0.28.2)(tsx@4.23.15))
+
   packages/mock-satusehat:
     dependencies:
       fastify:

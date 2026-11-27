@@ -20,6 +20,15 @@ module.exports = {
       from: { path: '^packages/simulator/' },
       to: { path: ['^apps/hub/', 'node_modules/@integration-hub/hub/'] },
     },
+    {
+      name: 'bigrun-is-independent-of-the-hub',
+      comment:
+        'The big-run harness judges the hub from outside (#45): it reads the hub only through its public API, ' +
+        'so it must not import any hub module.',
+      severity: 'error',
+      from: { path: '^packages/bigrun/' },
+      to: { path: ['^apps/hub/', 'node_modules/@integration-hub/hub/'] },
+    },
   ],
   options: {
     doNotFollow: { path: 'node_modules' },

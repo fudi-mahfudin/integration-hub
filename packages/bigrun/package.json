@@ -1,0 +1,22 @@
+{
+  "name": "@integration-hub/bigrun",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "bigrun": "node --import tsx src/main.ts",
+    "publish-results": "node --import tsx src/publish-main.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@integration-hub/mock-satusehat": "workspace:*",
+    "@integration-hub/simulator": "workspace:*",
+    "tsx": "^4.23.15",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.1"
+  }
+}

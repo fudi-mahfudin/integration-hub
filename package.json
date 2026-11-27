@@ -18,6 +18,8 @@
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
     "demo:naive-race": "pnpm --filter @integration-hub/hub demo:naive-race",
+    "bigrun": "pnpm --filter @integration-hub/bigrun bigrun",
+    "bigrun:publish": "pnpm --filter @integration-hub/bigrun publish-results",
     "boundaries": "depcruise packages apps --config .dependency-cruiser.cjs --exclude \"(^|/)(node_modules|dist)/\""
   },
   "devDependencies": {

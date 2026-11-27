@@ -7,3 +7,7 @@ coverage/
 !.env.example
 # Owner's private working notes; never committed
 .scratch/
+
+# Big-run output that is never committed (#45): runs that are not official, and mock logs (a release asset)
+results/bigrun-unofficial/
+results/bigrun/*/mock-log.ndjson.gz
