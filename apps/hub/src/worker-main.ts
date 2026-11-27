@@ -4,6 +4,7 @@ import { loadConfig } from './config.js';
 
 // Worker process entry point (ADR 0001). It never migrates; run the `migrate` command first.
 const worker = await createWorker(loadConfig(process.env), { clock: systemClock, logs: process.stdout });
+await worker.listen();
 worker.start();
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {

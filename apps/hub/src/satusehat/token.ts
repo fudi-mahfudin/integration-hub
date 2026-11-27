@@ -1,11 +1,12 @@
 import { fetch, type Dispatcher } from 'undici';
 import { z } from 'zod';
 import type { Clock } from '../clock.js';
+import { stopwatch, type WorkerMetrics } from '../observability/metrics.js';
 import type { SatusehatConfig } from '../config.js';
 import { SatusehatRequestError, SatusehatResponseError, TokenUnavailable } from './errors.js';
 import type { CircuitBreaker } from './circuit-breaker.js';
 import type { SharedTokenBackoff } from './token-backoff.js';
-import { parseRetryAfter } from './transport.js';
+import { isConnectTimeout, parseRetryAfter, statusClassOf } from './transport.js';
 
 /** The access token of one process. */
 export interface AccessTokens {
@@ -52,8 +53,9 @@ export function createAccessTokens(deps: {
   clock: Clock;
   shared: SharedTokenBackoff;
   breaker: CircuitBreaker;
+  metrics: Pick<WorkerMetrics, 'platformRequest'>;
 }): AccessTokens {
-  const { config, dispatcher, clock, shared, breaker } = deps;
+  const { config, dispatcher, clock, shared, breaker, metrics } = deps;
   let cached: { token: string; refreshAtMs: number; expiresAtMs: number } | undefined;
   let lastFetchedAtMs: number | undefined;
   let backoffUntilMs = 0;
@@ -66,14 +68,24 @@ export function createAccessTokens(deps: {
   async function request(): Promise<string> {
     const url = new URL('accesstoken?grant_type=client_credentials', config.authUrl);
     const requestedAtMs = now();
-    const res = await fetch(url, {
-      method: 'POST',
-      dispatcher,
-      signal: AbortSignal.timeout(config.callTimeoutMs),
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: config.clientId, client_secret: config.clientSecret }),
-    });
-    const text = await res.text();
+    const elapsed = stopwatch();
+    const signal = AbortSignal.timeout(config.callTimeoutMs);
+    let res: Awaited<ReturnType<typeof fetch>>;
+    let text: string;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        dispatcher,
+        signal,
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ client_id: config.clientId, client_secret: config.clientSecret }),
+      });
+      text = await res.text();
+    } catch (err) {
+      metrics.platformRequest('auth', 'token', signal.aborted || isConnectTimeout(err) ? 'timeout' : 'network', elapsed());
+      throw err;
+    }
+    metrics.platformRequest('auth', 'token', statusClassOf(res.status), elapsed());
     if (res.status !== 200) throw new SatusehatRequestError('POST', url, res.status, text, parseRetryAfter(res.headers.get('retry-after'), clock()));
     const parsed = tokenResponseSchema.safeParse(safeJson(text));
     if (!parsed.success) {

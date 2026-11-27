@@ -17,6 +17,7 @@ import type { HubConfig } from './config.js';
 import { createDatabase, type Database } from './db/database.js';
 import { runMigrations } from './db/migrate.js';
 import { HealthController } from './health/health.controller.js';
+import { MetricsController } from './health/metrics.controller.js';
 import { ProblemFilter } from './http/problem.js';
 import { EventsController } from './ingestion/events.controller.js';
 import type { IdempotencyStore } from './ingestion/idempotency-store.js';
@@ -27,7 +28,10 @@ import { createKfaClient } from './kfa/kfa-client.js';
 import { loadDrugMappingSeed } from './mapping/drug-mappings.js';
 import { loadLocationMappingSeed } from './mapping/location-mappings.js';
 import { MappingsController } from './mapping/mappings.controller.js';
+import { readDatabaseGauges } from './observability/database-gauges.js';
 import { createLog, runInRequestContext, type Log, type LogDestination } from './observability/log.js';
+import { createHubMetrics, createWorkerMetrics } from './observability/metrics.js';
+import { createMetricsServer } from './observability/metrics-server.js';
 import { nestLogger } from './observability/nest-logger.js';
 import { createOutbox } from './outbox/outbox.js';
 import { createCircuitBreaker, type PlatformApi } from './satusehat/circuit-breaker.js';
@@ -44,14 +48,14 @@ import { submitDispense } from './steps/submit-dispense.js';
 import { submitPrescription } from './steps/submit-prescription.js';
 import { updateVisit } from './steps/update-visit.js';
 import { createWorkerLoop } from './worker/worker.js';
-import { ADMIN_KEY, CASES, CLOCK, DATABASE, INGEST, LOG, RECONCILIATION, SOURCE_SYSTEMS } from './tokens.js';
+import { ADMIN_KEY, CASES, CLOCK, DATABASE, INGEST, LOG, METRICS, RECONCILIATION, SOURCE_SYSTEMS } from './tokens.js';
 
 @Module({})
 class HubServiceModule {
   static register(providers: Provider[]): DynamicModule {
     return {
       module: HubServiceModule,
-      controllers: [HealthController, EventsController, CasesController, DeadLettersController, MappingsController, ReconciliationController],
+      controllers: [HealthController, MetricsController, EventsController, CasesController, DeadLettersController, MappingsController, ReconciliationController],
       providers: [...providers, { provide: APP_FILTER, useClass: ProblemFilter }],
     };
   }
@@ -97,7 +101,9 @@ export async function createHub(config: HubConfig, runtime: HubRuntime): Promise
     config.idempotencyStore === 'naive-redis'
       ? createNaiveRedisIdempotencyStore({ db, redis, retentionHours: config.idempotencyRetentionHours })
       : createPostgresIdempotencyStore({ db, clock, retentionHours: config.idempotencyRetentionHours });
-  const ingest = createIngest({ store, db, clock, log });
+  // The database-derived gauges are the hub service's alone, read at each scrape (#15).
+  const metrics = createHubMetrics({ readDatabaseGauges: () => readDatabaseGauges(db, { now: clock(), stalledAfterMs: config.stalledAfterMs }) });
+  const ingest = createIngest({ store, db, clock, log, metrics });
   const sources = new SourceSystems(config.sources);
 
   const app = await NestFactory.create<NestFastifyApplication>(
@@ -107,7 +113,8 @@ export async function createHub(config: HubConfig, runtime: HubRuntime): Promise
       { provide: ADMIN_KEY, useValue: new AdminKey(config.adminApiKey, sources) },
       { provide: CLOCK, useValue: clock },
       { provide: LOG, useValue: log },
-      { provide: CASES, useValue: createCases({ db, clock, stalledAfterMs: config.stalledAfterMs }) },
+      { provide: METRICS, useValue: metrics },
+      { provide: CASES, useValue: createCases({ db, clock, stalledAfterMs: config.stalledAfterMs, metrics }) },
       { provide: INGEST, useValue: ingest },
       { provide: RECONCILIATION, useValue: createReconciliationRuns({ db, clock }) },
     ]),
@@ -161,9 +168,15 @@ export async function createHub(config: HubConfig, runtime: HubRuntime): Promise
 
 /** A booted worker process that has connected to Postgres. */
 export interface HubWorker {
+  /** Starts serving `/metrics` on `WORKER_PORT` and resolves to its base URL, e.g. `http://127.0.0.1:41235/`. */
+  listen(): Promise<URL>;
   /** Starts claiming steps, and executing reconciliation runs. */
   start(): void;
-  /** Stops claiming and reconciling, waits for the attempt and the case check in progress, then closes the Postgres pool, the SATUSEHAT connections and Redis. */
+  /**
+   * Stops claiming and reconciling, waits for the attempt and the case check
+   * in progress, then closes the metrics server, the Postgres pool, the
+   * SATUSEHAT connections and Redis.
+   */
   close(): Promise<void>;
 }
 
@@ -191,10 +204,12 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
   // Redis only shares the token backoff and the rate limit; the worker runs without it (#13).
   const redis = connectOptionalRedis(config.redisUrl, log);
   const shared = createRedisTokenBackoff({ redis, authUrl: config.satusehat.authUrl, clock, log });
+  // Work metrics come from the process doing the work (#15); the breakers' states are read at each scrape.
+  const metrics = createWorkerMetrics({ breakerStates: () => ({ fhir: breakers.fhir.state(), kfa: breakers.kfa.state(), auth: breakers.auth.state() }) });
   // One breaker per platform API, in this process's memory (#13).
-  const breakerOf = (api: PlatformApi) => createCircuitBreaker({ api, clock, openMs: config.satusehat.breakerOpenMs, log });
+  const breakerOf = (api: PlatformApi) => createCircuitBreaker({ api, clock, openMs: config.satusehat.breakerOpenMs, log, metrics });
   const breakers = { fhir: breakerOf('fhir'), kfa: breakerOf('kfa'), auth: breakerOf('auth') };
-  const tokens = createAccessTokens({ config: config.satusehat, dispatcher, clock, shared, breaker: breakers.auth });
+  const tokens = createAccessTokens({ config: config.satusehat, dispatcher, clock, shared, breaker: breakers.auth, metrics });
   const transport = createSatusehatTransport({
     tokens,
     breakers,
@@ -205,19 +220,21 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
       rps: config.satusehat.rateLimitRps,
       workerProcesses: config.workerProcesses,
       log,
+      metrics,
     }),
     dispatcher,
     callTimeoutMs: config.satusehat.callTimeoutMs,
     connectTimeoutMs: config.satusehat.connectTimeoutMs,
     clock,
     random: Math.random,
+    metrics,
   });
   const clientsFor = (calls: AttemptCalls) => ({
     satusehat: createSatusehatClient({ config: config.satusehat, transport, calls }),
     kfa: createKfaClient({ config: config.satusehat, transport, calls }),
   });
   const worker = createWorkerLoop({
-    outbox: createOutbox({ db, clock, leaseMs: config.workerLeaseMs, retry: config.retry, random: Math.random }),
+    outbox: createOutbox({ db, clock, leaseMs: config.workerLeaseMs, retry: config.retry, random: Math.random, metrics }),
     runners: {
       create_visit: (step, calls) => createVisit({ db, ...clientsFor(calls) }, step),
       submit_prescription: (step, calls) => submitPrescription({ db, ...clientsFor(calls), clock }, step),
@@ -239,9 +256,16 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
     pollIntervalMs: config.workerPollIntervalMs,
     checkBudgetMs: config.attemptBudgetMs,
     log,
+    metrics,
   });
+  const metricsServer = createMetricsServer({ metrics, host: config.host, port: config.workerPort, log });
 
   return {
+    async listen() {
+      const baseUrl = await metricsServer.listen();
+      log('info', 'worker serving metrics', { url: baseUrl.href });
+      return baseUrl;
+    },
     start() {
       worker.start();
       reconciler.start();
@@ -249,6 +273,7 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
     },
     async close() {
       await Promise.all([worker.stop(), reconciler.stop()]);
+      await metricsServer.close();
       await db.destroy();
       await dispatcher.close();
       redis.disconnect();

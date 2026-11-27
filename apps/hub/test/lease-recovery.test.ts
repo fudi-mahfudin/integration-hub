@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { bootHub, type BootedHub } from './support/boot-hub.js';
+import { bootWorker, type BootedWorker } from './support/boot-worker.js';
 import { getCase, postEvent, waitForCase } from './support/events.js';
 import { createFreshDatabase, type FreshDatabase } from './support/fresh-database.js';
 import { expectAtMostOneStepInMotion } from './support/invariants.js';
+import { scrapeMetrics, valueOf } from './support/metrics.js';
 import {
   type BootedMock,
   bootMock,
@@ -21,9 +23,12 @@ describe('lease recovery: a crashed worker’s step is taken over and causes one
   let database: FreshDatabase | undefined;
   let hub: BootedHub | undefined;
   const workers: SpawnedWorker[] = [];
+  let inProcess: BootedWorker | undefined;
 
   afterEach(async () => {
     await Promise.all(workers.splice(0).map((w) => w.stop()));
+    await inProcess?.close();
+    inProcess = undefined;
     await hub?.close();
     await database?.drop();
     await mock?.close();
@@ -77,7 +82,7 @@ describe('lease recovery: a crashed worker’s step is taken over and causes one
     expectAtMostOneStepInMotion(view);
   }, 30_000);
 
-  it('an attempt whose lease ran out is logged as lease_expired, ending when its lease did', async () => {
+  it('an attempt whose lease ran out is logged as lease_expired, ending when its lease did, and counted by the worker that took it over', async () => {
     mock = await bootMock();
     database = await createFreshDatabase();
     const env = { ...worldEnv(mock.baseUrl, database.url), WORKER_LEASE_MS: String(LEASE_MS) };
@@ -93,7 +98,9 @@ describe('lease recovery: a crashed worker’s step is taken over and causes one
     const [hold] = await mock.client.holds(10_000);
     await crashing.crash();
     await mock.client.releaseHold(hold?.id ?? '');
-    workers.push(await spawnWorker(env));
+    // In-process, so its /metrics can be scraped.
+    const replacement = await bootWorker(env);
+    inProcess = replacement;
 
     const view = await waitForCase(hub.baseUrl, accepted.headers.get('location'), (v) => v.steps[0]?.state === 'completed', {
       apiKey: WORLD_SOURCE_API_KEY,
@@ -107,6 +114,11 @@ describe('lease recovery: a crashed worker’s step is taken over and causes one
     // The expired attempt ended when its lease ran out, a lease's length after it started.
     expect(Date.parse(expired?.endedAt ?? '') - Date.parse(expired?.startedAt ?? '')).toBe(LEASE_MS);
     expect(Date.parse(completed?.startedAt ?? '')).toBeGreaterThanOrEqual(Date.parse(expired?.endedAt ?? ''));
+
+    const samples = await scrapeMetrics(replacement.baseUrl);
+    expect(valueOf(samples, 'step_attempts_total', { step: 'create_visit', outcome: 'lease_expired' })).toBe(1);
+    expect(valueOf(samples, 'step_attempt_duration_seconds_sum', { step: 'create_visit', outcome: 'lease_expired' })).toBe(LEASE_MS / 1000);
+    expect(valueOf(samples, 'step_attempts_total', { step: 'create_visit', outcome: 'success' })).toBe(1);
   }, 30_000);
   it('a stale worker’s late completion is discarded by the lease fence and changes nothing', async () => {
     mock = await bootMock();

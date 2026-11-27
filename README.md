@@ -99,6 +99,14 @@ node packages/mock-satusehat/dist/main.js   # mock SATUSEHAT on http://localhost
 node apps/hub/dist/worker-main.js           # claims steps from the Postgres outbox
 ```
 
+Each worker serves its metrics on `http://localhost:3002/metrics` (`WORKER_PORT`; a second worker on the same host needs another, e.g. `WORKER_PORT=3003`), and the hub service on `http://localhost:3000/metrics`. To see them in Grafana:
+
+```sh
+pnpm obs:up   # start Prometheus (http://localhost:9090) and Grafana (http://localhost:3300), wait until healthy
+```
+
+Prometheus scrapes the hub service on port 3000 and workers on 3002 and 3003 every 5s, through `host.docker.internal`. Grafana opens on the **Hub overview** dashboard (is ingest healthy, and where are the cases?); **Worker & outbox** (is work flowing?) and **Upstreams & cache** (is SATUSEHAT the problem?) are beside it in the *Integration Hub* folder. The dashboards are provisioned read-only from `observability/grafana/dashboards/*.json`: change the JSON, not the UI. There are no alert rules.
+
 The worker loads the mapping seeds at boot: `apps/hub/seed/location-mappings.json` (the simulator's location codes mapped to the world dataset's locations) and `apps/hub/seed/drug-mappings.json` (its local drug codes mapped to the world's KFA codes, plus two entries noted as deliberately wrong for the KFA failure paths). Loading them again changes nothing. KFA details are fetched from KFA v2 the first time a code is used and stored.
 
 Operators act with the admin API key (`HUB_ADMIN_API_KEY`; the development key `dev-admin-key` is public, and production must set its own): they keep mappings through `PUT`/`DELETE /v1/admin/mappings/...`, which writes the same tables as the seeds, and replay or abandon cases (see [docs/api.md](docs/api.md)). The seeds are loaded at every worker boot, so a seeded code an operator changed through the API is set back to its seed entry when a worker restarts: change the seed file too. A waiting case is flagged `stalled` after `STALLED_AFTER_MS` (default 24h); that changes nothing about it. Reconciliation compares the cases at rest with their records at SATUSEHAT and reports every divergence without changing a case. The workers run it every `RECONCILIATION_INTERVAL_MS` (default 15 min; `0` turns that off), and an operator can request a run through `POST /v1/admin/reconciliation/runs`.
@@ -111,7 +119,7 @@ To run the mock SATUSEHAT on its own (it needs no Postgres or Redis), see [packa
 
 `pnpm deps:down` stops the containers and deletes their data.
 
-Defaults match `compose.yaml`, so no `.env` is needed. If ports 5432 or 6379 are taken, start compose with `POSTGRES_PORT`/`REDIS_PORT` and point the hub and tests at them with `DATABASE_URL`/`REDIS_URL` (see `.env.example`).
+Defaults match `compose.yaml`, so no `.env` is needed. If ports 5432 or 6379 are taken, start compose with `POSTGRES_PORT`/`REDIS_PORT` (and `PROMETHEUS_PORT`/`GRAFANA_PORT` for 9090 and 3300) and point the hub and tests at them with `DATABASE_URL`/`REDIS_URL` (see `.env.example`).
 
 The hub never migrates itself: always run `pnpm migrate` before starting it. The test suite runs the same migrations in its global setup.
 
@@ -124,6 +132,7 @@ The hub never migrates itself: always run `pnpm migrate` before starting it. The
 | `packages/mock-satusehat` | The mock SATUSEHAT: a stateful fake platform with its own validator (ADR 0006) and the `/__mock/*` inspection and control API; never deployed publicly |
 | `docs/api.md` | The hub's API contract |
 | `compose.yaml` | Local infrastructure; only components from the closed list |
+| `observability` | Prometheus scrape config and the Grafana data source and dashboards, provisioned from committed JSON |
 | `.github/workflows/ci.yml` | CI: typecheck, the import-boundary check (`pnpm boundaries`), and the same `pnpm test` against Postgres and Redis service containers |
 
 Later: `packages/simulator`, `apps/dashboard`.

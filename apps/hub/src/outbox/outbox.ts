@@ -13,6 +13,7 @@ import {
 import { readSteps, writeCaseStatus } from '../cases/case-status.js';
 import type { Clock } from '../clock.js';
 import type { AttemptOutcome, Database } from '../db/database.js';
+import type { WorkerMetrics } from '../observability/metrics.js';
 import type { AttemptFacts, FinalOutcome } from '../steps/step-outcome.js';
 import type { ReadRetry } from '../satusehat/transport.js';
 import { nextAttemptAt, type RetryPolicy } from './retry-policy.js';
@@ -60,7 +61,9 @@ export type TransientStored = 'retry_wait' | 'exhausted' | 'lease_lost';
 /**
  * The Postgres outbox (ADR 0002). A step row is its own outbox entry: the
  * transaction that makes a step eligible sets it `ready`, and workers take it
- * from here under a lease.
+ * from here under a lease. Every attempt it logs, step it completes and step
+ * it dead-letters is counted in the worker's metrics once its transaction
+ * commits (#41), so the metrics agree with the attempt log.
  */
 export interface Outbox {
   /**
@@ -103,8 +106,10 @@ export function createOutbox(deps: {
   retry: RetryPolicy;
   /** Draws from [0, 1), for the backoff's jitter. */
   random: () => number;
+  metrics: Pick<WorkerMetrics, 'stepAttempt' | 'stepCompleted' | 'stepDeadLettered'>;
 }): Outbox {
-  const { db, clock, leaseMs, retry, random } = deps;
+  const { db, clock, leaseMs, retry, random, metrics } = deps;
+  const secondsSince = (startedAt: Date) => (clock().getTime() - startedAt.getTime()) / 1000;
 
   /** The insert of the attempt's row in the attempt log; the caller executes it. */
   const attemptRow = (
@@ -162,12 +167,14 @@ export function createOutbox(deps: {
    * One claim try in one transaction: `undefined` when nothing is claimable,
    * `'again'` when the row picked was dead-lettered (or its case was busy) instead.
    */
-  const claimOnce = () =>
-    db.transaction().execute(async (trx): Promise<ClaimedStep | 'again' | undefined> => {
+  const claimOnce = async (): Promise<ClaimedStep | 'again' | undefined> => {
+    // What the transaction counts in the metrics, once it has committed.
+    const committed: (() => void)[] = [];
+    const claimed = await db.transaction().execute(async (trx): Promise<ClaimedStep | 'again' | undefined> => {
       const now = clock();
       // Pick the oldest claimable row and lock it, skipping rows another worker has locked.
-      const { rows: picked } = await sql<{ case_id: string; seq: number; state: string; attempts: number; attempts_before_replay: number }>`
-        select case_id, seq, state, attempts, attempts_before_replay
+      const { rows: picked } = await sql<{ case_id: string; seq: number; name: StepName; state: string; attempts: number; attempts_before_replay: number }>`
+        select case_id, seq, name, state, attempts, attempts_before_replay
           from step
          where state = 'ready'
             or (state = 'retry_wait' and available_at <= ${now})
@@ -184,12 +191,15 @@ export function createOutbox(deps: {
       if (row.state === 'in_flight') {
         // Taking an expired lease over logs its attempt as `lease_expired` (#8), ended when the
         // lease ran out, unless that attempt already logged its own ending.
-        await sql`
+        const { rows: expired } = await sql<{ started_at: Date; ended_at: Date }>`
           insert into attempt (case_id, seq, attempt, started_at, ended_at, outcome, values_used, lookup_methods, violations, read_retries)
           select case_id, seq, attempts, claimed_at, lease_expires_at, 'lease_expired', '{}', '{}', '[]', '[]'
             from step where case_id = ${caseId} and seq = ${row.seq}
           on conflict (case_id, seq, attempt) do nothing
+          returning started_at, ended_at
         `.execute(trx);
+        // Counted by the claim that logs it: the worker that lost the lease counts nothing for it.
+        for (const a of expired) committed.push(() => metrics.stepAttempt(row.name, 'lease_expired', (a.ended_at.getTime() - a.started_at.getTime()) / 1000));
         // The cap counts the attempts since the step's last replay (#37).
         if (row.attempts - row.attempts_before_replay >= retry.maxAttempts) {
           // Lock the case as storeOutcome does; a case another transaction holds is left for the next try.
@@ -203,6 +213,7 @@ export function createOutbox(deps: {
             .where('seq', '=', row.seq)
             .execute();
           await writeRest(trx, caseId, row.seq, before, withState(before, row.seq, 'dead_lettered'), now);
+          committed.push(() => metrics.stepDeadLettered(row.name, 'RETRIES_EXHAUSTED'));
           return 'again';
         }
       }
@@ -226,10 +237,13 @@ export function createOutbox(deps: {
                   s.replayed_at as "replayedAt", s.lease_token as "leaseToken",
                   c.source_system_id as "sourceSystemId", c.organization_id as "organizationId", c.visit_id as "visitId"
       `.execute(trx);
-      const [claimed] = rows;
-      if (!claimed) throw new Error(`invariant broken: step ${caseId}/${row.seq}, locked for the claim, was not updated`);
-      return { ...claimed, startedAt: now };
+      const [taken] = rows;
+      if (!taken) throw new Error(`invariant broken: step ${caseId}/${row.seq}, locked for the claim, was not updated`);
+      return { ...taken, startedAt: now };
     });
+    for (const count of committed) count();
+    return claimed;
+  };
 
   return {
     async claim() {
@@ -241,11 +255,11 @@ export function createOutbox(deps: {
       return undefined;
     },
 
-    storeOutcome: (step, outcome, readRetries) =>
+    async storeOutcome(step, outcome, readRetries) {
       // Lock the case row (as ingest does, so an arriving event and an outcome
       // apply one at a time), change the step only if the claim still holds
       // its lease, store the re-derived case status, and log the attempt.
-      db.transaction().execute(async (trx) => {
+      const stored = await db.transaction().execute(async (trx) => {
         const now = clock();
         await trx.selectFrom('case').select('id').where('id', '=', step.caseId).forUpdate().executeTakeFirstOrThrow();
         const before = await readSteps(trx, step.caseId);
@@ -274,10 +288,20 @@ export function createOutbox(deps: {
         await writeRest(trx, step.caseId, step.seq, before, next(), now);
         await attemptRow(trx, step, now, { outcome: logged, errorCode, facts: outcome.attempt, readRetries }).execute();
         return true;
-      }),
+      });
+      if (!stored) return false;
+      if ('completed' in outcome) {
+        metrics.stepAttempt(step.name, 'success', secondsSince(step.startedAt));
+        metrics.stepCompleted(step.name);
+      } else {
+        metrics.stepAttempt(step.name, 'permanent', secondsSince(step.startedAt));
+        metrics.stepDeadLettered(step.name, outcome.deadLettered);
+      }
+      return true;
+    },
 
-    storeTransient: (step, end) =>
-      db.transaction().execute(async (trx): Promise<TransientStored> => {
+    async storeTransient(step, end) {
+      const stored = await db.transaction().execute(async (trx): Promise<TransientStored> => {
         const now = clock();
         await trx.selectFrom('case').select('id').where('id', '=', step.caseId).forUpdate().executeTakeFirstOrThrow();
         const before = await readSteps(trx, step.caseId);
@@ -305,6 +329,11 @@ export function createOutbox(deps: {
         await writeRest(trx, step.caseId, step.seq, before, withState(before, step.seq, exhausted ? 'dead_lettered' : 'retry_wait'), now);
         await attemptRow(trx, step, now, { outcome: end.outcome, errorCode: exhausted ? 'RETRIES_EXHAUSTED' : null, facts: end.facts, readRetries: end.readRetries }).execute();
         return exhausted ? 'exhausted' : 'retry_wait';
-      }),
+      });
+      if (stored === 'lease_lost') return stored;
+      metrics.stepAttempt(step.name, 'transient', secondsSince(step.startedAt));
+      if (stored === 'exhausted') metrics.stepDeadLettered(step.name, 'RETRIES_EXHAUSTED');
+      return stored;
+    },
   };
 }

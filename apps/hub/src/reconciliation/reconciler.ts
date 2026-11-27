@@ -5,6 +5,7 @@ import { readCreateVisitPins, readSubmitDispensePins, readSubmitPrescriptionPins
 import type { Clock } from '../clock.js';
 import type { Database } from '../db/database.js';
 import type { Log } from '../observability/log.js';
+import { stopwatch, type RunMetricOutcome, type WorkerMetrics } from '../observability/metrics.js';
 import type { RecordAtSatusehat, SatusehatClient } from '../satusehat/client.js';
 import type { AttemptCalls } from '../satusehat/transport.js';
 import { compareResource, type Divergence, type ExpectedRecord, type ReconciliationCheckOutcome } from './model.js';
@@ -80,8 +81,9 @@ export function createReconciler(deps: {
   /** How long one case's check may go on making calls, as an attempt may. */
   checkBudgetMs: number;
   log: Log;
+  metrics: Pick<WorkerMetrics, 'reconciliationRun' | 'reconciliationCheck'>;
 }): Reconciler {
-  const { db, clock, satusehatFor, intervalMs, lookbackMs, pollIntervalMs, checkBudgetMs, log } = deps;
+  const { db, clock, satusehatFor, intervalMs, lookbackMs, pollIntervalMs, checkBudgetMs, log, metrics } = deps;
   let running = false;
   let loop: Promise<void> | undefined;
   let wake: (() => void) | undefined;
@@ -134,19 +136,24 @@ export function createReconciler(deps: {
       .updateTable('reconciliation_runs')
       .set({ status: 'running', started_at: clock() })
       .where('id', '=', (eb) => eb.selectFrom('reconciliation_runs').select('id').where('status', '=', 'queued').orderBy('requested_at').limit(1))
-      .returning(['id', 'case_ids', 'since'])
+      .returning(['id', 'trigger', 'case_ids', 'since'])
       .executeTakeFirst();
     if (!run) return;
     log('info', 'reconciliation run started', { runId: run.id });
+    const elapsed = stopwatch();
+    let outcome: RunMetricOutcome = 'failed';
     try {
-      await execute(session, run);
+      outcome = await execute(session, run);
     } catch (err) {
       log('error', 'reconciliation run failed', { runId: run.id, error: err });
       await endRun(session, run.id, 'failed', messageOf(err));
+    } finally {
+      metrics.reconciliationRun(run.trigger, outcome, elapsed());
     }
   }
 
-  async function execute(session: Kysely<Database>, run: { id: string; case_ids: string[] | null; since: Date | null }): Promise<void> {
+  /** Executes a run over its scope; resolves to how it ended: `failed` when it was cut short, or another worker had marked it so. */
+  async function execute(session: Kysely<Database>, run: { id: string; case_ids: string[] | null; since: Date | null }): Promise<RunMetricOutcome> {
     let scope = session
       .selectFrom('case')
       .select('id')
@@ -161,16 +168,18 @@ export function createReconciler(deps: {
     for (const { id } of cases) {
       if (!running) {
         await endRun(session, run.id, 'failed', 'the worker stopped before the run ended');
-        return;
+        return 'failed';
       }
       // Postgres generated these uuids as case ids.
       if ((await checkCase(session, run.id, id as CaseId)) === 'unchecked') unchecked++;
     }
-    if (await endRun(session, run.id, unchecked > 0 ? 'completed_with_errors' : 'completed', null)) {
+    const status = unchecked > 0 ? 'completed_with_errors' : 'completed';
+    if (await endRun(session, run.id, status, null)) {
       log('info', 'reconciliation run ended', { runId: run.id, cases: cases.length, unchecked });
-    } else {
-      log('warn', 'a reconciliation run ended after another worker marked it failed; it stays failed', { runId: run.id });
+      return status;
     }
+    log('warn', 'a reconciliation run ended after another worker marked it failed; it stays failed', { runId: run.id });
+    return 'failed';
   }
 
   /** Checks one case and records how the check ended, with what it found. */
@@ -235,6 +244,7 @@ export function createReconciler(deps: {
         )
         .execute();
     });
+    metrics.reconciliationCheck(outcome);
     return outcome;
   }
 

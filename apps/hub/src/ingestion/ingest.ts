@@ -7,6 +7,7 @@ import { isLoggedRejection, logRejection, type RejectionCode } from '../cases/re
 import type { Database } from '../db/database.js';
 import { Problem } from '../http/problem.js';
 import { addToRequestContext, type Log } from '../observability/log.js';
+import type { HubMetrics } from '../observability/metrics.js';
 import { parseEvent, visitEventOf } from './event-schema.js';
 import { fingerprint, type Fingerprint, type RequestBody } from './fingerprint.js';
 import type { IdempotencyKey, IdempotencyStore, IngestResponse, StoredKey } from './idempotency-store.js';
@@ -23,8 +24,14 @@ export interface Ingest {
 }
 
 /** Builds ingest over an idempotency store and the hub database (for the rejection log). Only the composition root calls this. */
-export function createIngest(deps: { store: IdempotencyStore; db: Kysely<Database>; clock: Clock; log: Log }): Ingest {
-  const { store, db, clock, log } = deps;
+export function createIngest(deps: {
+  store: IdempotencyStore;
+  db: Kysely<Database>;
+  clock: Clock;
+  log: Log;
+  metrics: Pick<HubMetrics, 'ingestDuplicate'>;
+}): Ingest {
+  const { store, db, clock, log, metrics } = deps;
 
   async function accept(source: SourceSystem, key: IdempotencyKey, body: RequestBody): Promise<IngestResponse> {
     const bodyFingerprint = fingerprint(body);
@@ -56,6 +63,7 @@ export function createIngest(deps: { store: IdempotencyStore; db: Kysely<Databas
       // The count only informs the case view; the source still gets its original answer, and no case changed.
       log('error', 'counting a duplicate ingest failed', { error: err });
     }
+    metrics.ingestDuplicate(named.eventType);
     log('info', 'duplicate ingest; the original answer is sent again');
     return answer;
   }

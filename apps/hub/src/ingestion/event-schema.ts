@@ -249,6 +249,18 @@ function sourceInstant(value: string, field: string): Date {
   return parsed.instant;
 }
 
+/** The event type a raw body names, when it is JSON whose `type` is one of the four: the ingest metrics' `event_type` label (#41). */
+export function eventTypeOf(rawBody: string): EventType | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(rawBody);
+  } catch {
+    // Not JSON: it names no event type, and the schema rejects it.
+    return undefined;
+  }
+  return z.enum(EVENT_TYPES).safeParse(valueAt(value, ['type'])).data;
+}
+
 /**
  * The visit and event type a body names, when both are readable as the
  * envelope defines them: the rejection log (#8) and an event's duplicate
