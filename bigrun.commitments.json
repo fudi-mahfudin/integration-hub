@@ -125,6 +125,11 @@
     }
   },
 
+  "ciRun": {
+    "$comment": "The big run scaled down for CI on every pull request: these visits, every count scaled with them, every ratio, fault weight and deadline as in bigRun. Never published as the big run.",
+    "visits": 200
+  },
+
   "loadTest": {
     "tool": "k6",
     "executor": "constant-arrival-rate",
