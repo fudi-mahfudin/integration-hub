@@ -2,12 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 import { z } from 'zod';
+import { loadConfig } from '../src/config.js';
 import { startTracing, type Tracing } from '../src/observability/tracing.js';
 import { bootHub, type BootedHub } from './support/boot-hub.js';
 import { bootWorker, type BootedWorker } from './support/boot-worker.js';
 import { postEvent, waitForCase } from './support/events.js';
 import { createFreshDatabase, type FreshDatabase } from './support/fresh-database.js';
 import { scrapeMetrics, type Sample } from './support/metrics.js';
+import { readRedis } from './support/redis-contents.js';
 import { collectingExporter } from './support/traces.js';
 import {
   bootMock,
@@ -29,6 +31,9 @@ const CANARIES = [...world.patients, ...world.practitioners].flatMap((person) =>
   person.ihsNumber,
   ...('motherNik' in person ? [person.motherNik] : []),
 ]);
+
+/** Every NIK of the world dataset: none may reach Redis, in a key or a value (#47). */
+const CANARY_NIKS = [...world.patients, ...world.practitioners].flatMap((person) => [person.nik, ...('motherNik' in person ? [person.motherNik] : [])]);
 
 const lineSchema = z
   .object({
@@ -55,6 +60,8 @@ describe('logs, metrics and traces: structured, tied to their case, and free of 
   let lines: Line[] = [];
   /** Both processes' `/metrics` samples after the scenario. */
   let scraped: Sample[][] = [];
+  /** Every key in Redis after the scenario, and every string value. */
+  let redisContents: { keys: string[]; values: string[] } = { keys: [], values: [] };
   let closed = false;
 
   const send = (body: unknown, options: { idempotencyKey?: string; apiKey?: string | null } = {}) =>
@@ -111,6 +118,7 @@ describe('logs, metrics and traces: structured, tied to their case, and free of 
     caseIds.createEchoed = await deadLetteredVisit(2);
 
     scraped = await Promise.all([hub.baseUrl, worker.baseUrl].map(scrapeMetrics));
+    redisContents = await readRedis(loadConfig(process.env).redisUrl);
 
     // Closed here, so every line either process writes is captured before the assertions read them.
     closed = true;
@@ -157,6 +165,16 @@ describe('logs, metrics and traces: structured, tied to their case, and free of 
       for (const canary of [...CANARIES, ...visitIds]) expect(exported, `span ${span.name} holds "${canary}"`).not.toContain(canary);
       expect(exported).not.toMatch(/\d{16}/);
     }
+  });
+
+  it('no Redis key or value holds a canary NIK; no value holds a 16-digit run (#47)', () => {
+    const { keys, values } = redisContents;
+    expect(keys.some((key) => key.startsWith('ihs:patient:'))).toBe(true);
+    for (const entry of [...keys, ...values]) {
+      for (const nik of CANARY_NIKS) expect(entry, `Redis holds "${nik}"`).not.toContain(nik);
+    }
+    // Not keys: an HMAC's hex digest may hold 16 decimal digits in a row by chance.
+    for (const value of values) expect(value).not.toMatch(/\d{16}/);
   });
 
   it('each service logs as itself, and case-scoped lines carry the case id', () => {

@@ -1,5 +1,6 @@
 import type { DeadLetterReason, RemoteIdentifier, StepName } from '../cases/case-model.js';
 import type { CreateVisitPins, StepPins, SubmitDispensePins, SubmitPrescriptionPins, UpdateVisitPins } from '../cases/pins.js';
+import type { IhsCacheKey, LookupSource } from '../ihs-cache/ihs-number-cache.js';
 import type { Violation } from '../validation/validation.js';
 
 /** How a person's IHS number was found (#10, #32): by NIK, or by one of the fallbacks SATUSEHAT documents. */
@@ -16,8 +17,20 @@ export interface AttemptFacts {
   valuesUsed: Partial<CreateVisitPins> | Partial<SubmitPrescriptionPins> | Partial<SubmitDispensePins> | Partial<UpdateVisitPins>;
   /** How each person it looked up was found. */
   lookupMethods: { patient?: LookupMethod; practitioner?: LookupMethod; requester?: LookupMethod; pharmacist?: LookupMethod };
+  /** Where each IHS number it looked up came from: the cache or a search (#47). */
+  lookupSources: { patient?: LookupSource; practitioner?: LookupSource; requester?: LookupSource; pharmacist?: LookupSource };
+  /**
+   * The IHS-number cache entries it read or wrote (#47), deleted if SATUSEHAT
+   * permanently rejects its write. Not logged: the attempt log has `lookupSources`.
+   */
+  cacheKeys: IhsCacheKey[];
   /** Every violation the Validation module found; empty when the payload passed or was never checked. */
   violations: readonly Violation[];
+}
+
+/** The facts of an attempt that has resolved, sent and seen nothing yet. */
+export function newAttemptFacts(): AttemptFacts {
+  return { httpStatus: null, valuesUsed: {}, lookupMethods: {}, lookupSources: {}, cacheKeys: [], violations: [] };
 }
 
 /**

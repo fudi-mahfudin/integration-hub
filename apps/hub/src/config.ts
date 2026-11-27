@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { IHS_CACHES, type CacheName } from './ihs-cache/ihs-number-cache.js';
 import type { RetryPolicy } from './outbox/retry-policy.js';
 
 /** One registered source system and its static API key (#25). */
@@ -142,6 +143,22 @@ export interface HubConfig {
   reconciliation: ReconciliationConfig;
   /** Traces (#42), exported to Jaeger. */
   tracing: TracingConfig;
+  /** The IHS-number cache (#47). */
+  ihsCache: IhsCacheConfig;
+}
+
+/** The IHS-number cache (#47): which caches are on, and the secret their keys are made with. */
+export interface IhsCacheConfig {
+  /**
+   * The caches on (`IHS_CACHES`, comma-separated, default both; `none` turns
+   * both off). Only the Cache run turns one off, to measure it.
+   */
+  caches: CacheName[];
+  /**
+   * The HMAC pepper of the cache keys (`IHS_CACHE_PEPPER`), so a key can't be
+   * brute-forced back to its NIK. The default is public: production must set its own.
+   */
+  pepper: string;
 }
 
 /** How much is traced, and where spans are exported (#15, #42). */
@@ -174,6 +191,9 @@ type Env = Record<string, string | undefined>;
  * must set `HUB_SOURCES`.
  */
 const DEV_SOURCES: SourceSystemConfig[] = [{ id: 'simulator', organizationId: '99000001', apiKey: 'dev-source-key' }];
+
+/** The IHS-number cache pepper a clean clone runs with; public, like `DEV_SOURCES`. */
+const DEV_IHS_CACHE_PEPPER = 'dev-ihs-cache-pepper';
 
 /** The operator key a clean clone runs with; public, like `DEV_SOURCES`. */
 const DEV_ADMIN_API_KEY = 'dev-admin-key';
@@ -249,6 +269,10 @@ export function loadConfig(env: Env): HubConfig {
       sampleRatio: parseRatio('TRACE_SAMPLE_RATIO', env.TRACE_SAMPLE_RATIO ?? '1'),
       exportUrl: new URL(parseUrl('TRACE_EXPORT_URL', env.TRACE_EXPORT_URL ?? 'http://localhost:4318/v1/traces', ['http:', 'https:'])),
     },
+    ihsCache: {
+      caches: parseCaches(env.IHS_CACHES ?? IHS_CACHES.join(',')),
+      pepper: parseNonEmpty('IHS_CACHE_PEPPER', env.IHS_CACHE_PEPPER ?? DEV_IHS_CACHE_PEPPER),
+    },
   };
 }
 
@@ -308,6 +332,16 @@ function parseAdminApiKey(raw: string, sources: readonly SourceSystemConfig[]): 
   if (raw.trim() === '') throw new Error('HUB_ADMIN_API_KEY must not be empty');
   if (sources.some((s) => s.apiKey === raw)) throw new Error('HUB_ADMIN_API_KEY must differ from every HUB_SOURCES apiKey');
   return raw;
+}
+
+function parseCaches(raw: string): CacheName[] {
+  if (raw === 'none') return [];
+  const names = raw.split(',').map((name) => name.trim());
+  const caches = names.filter((name): name is CacheName => (IHS_CACHES as readonly string[]).includes(name));
+  if (caches.length !== names.length || new Set(caches).size !== caches.length) {
+    throw new Error(`IHS_CACHES must be "none" or a comma-separated list of distinct ${IHS_CACHES.join(', ')}, got "${raw}"`);
+  }
+  return caches;
 }
 
 function parseStore(raw: string): IdempotencyStoreKind {

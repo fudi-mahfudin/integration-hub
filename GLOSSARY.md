@@ -70,6 +70,14 @@ _Avoid_: Error (ambiguous with failures), issue (that is an OperationOutcome's)
 How a person's IHS number was found for an attempt: by NIK, or one of the documented fallbacks. It is recorded in the attempt log.
 _Avoid_: Match type, strategy
 
+**IHS-number cache**:
+Two caches in Redis, `ihs_patient` and `ihs_practitioner`, of IHS numbers found by an exact NIK lookup, kept 24h under a peppered hash of the NIK. A lookup may take its IHS number from the cache instead of searching SATUSEHAT, and the attempt log records which (`cache` or `remote`). It is never load-bearing: Redis down or slow is a miss, a replay searches past it, and a permanent rejection of a write deletes the entries its attempt used.
+_Avoid_: Pin (a pin is part of the case and never expires), person cache, NIK cache (it holds IHS numbers, never NIKs)
+
+**Lookup source**:
+Where an attempt took a person's IHS number from: `cache` (the IHS-number cache) or `remote` (a search at SATUSEHAT). It is recorded in the attempt log next to the lookup method.
+_Avoid_: Origin, hit (a hit is a cache request's result, counted in metrics)
+
 **Rejection log**:
 The hub's record of the source events it rejected at ingest for a visit, keyed by (source system, `visitId`): each rejection's code, event type and time, never its body. It explains why a waiting case is still waiting, and never changes a case.
 _Avoid_: Error log, attempt log (that is a step's record of its attempts), dead letter (that is a step's permanent failure)

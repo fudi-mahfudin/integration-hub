@@ -39,8 +39,9 @@ export async function bootMock(options: { tokenExpiresInSeconds?: number } = {})
 /**
  * The environment a hub and worker need to deliver the world's visits to
  * `mock`: one source system, `simulator` (the source the location mapping
- * seed is for), belonging to the world's organization, a fresh database, and
- * a fast worker poll.
+ * seed is for), belonging to the world's organization, a fresh database, a
+ * fast worker poll, and an IHS-number cache pepper of its own, so no other
+ * test run's cache entries are found in the shared Redis.
  */
 export function worldEnv(mockBaseUrl: URL, databaseUrl: string): Record<string, string> {
   return {
@@ -57,6 +58,7 @@ export function worldEnv(mockBaseUrl: URL, databaseUrl: string): Record<string, 
     HUB_ADMIN_API_KEY: ADMIN_API_KEY,
     // No scheduled reconciliation: its searches would show in the mock's log; a test requests the runs it needs.
     RECONCILIATION_INTERVAL_MS: '0',
+    IHS_CACHE_PEPPER: randomUUID(),
   };
 }
 

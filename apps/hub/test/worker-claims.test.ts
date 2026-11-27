@@ -51,7 +51,8 @@ describe('workers claiming from the outbox', () => {
     const tokenRequests = entries.filter((e) => e.path.startsWith('/oauth2/v1/accesstoken'));
     expect(tokenRequests).toHaveLength(1);
     expect(tokenRequests[0]?.response.status).toBe(200);
-    expect(entries.filter((e) => e.path.startsWith('/fhir-r4/') && e.response.status === 200).length).toBeGreaterThanOrEqual(6);
+    // Each visit searches for its Encounter; the first also looks up both people, whom the second finds in the IHS-number cache (#47).
+    expect(entries.filter((e) => e.path.startsWith('/fhir-r4/') && e.response.status === 200).length).toBeGreaterThanOrEqual(4);
   });
 
   it('concurrent workers carry out each step once: one claim and one Encounter per visit', async () => {

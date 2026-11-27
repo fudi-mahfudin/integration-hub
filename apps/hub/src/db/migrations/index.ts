@@ -11,6 +11,7 @@ import { caseListMigration } from './0009_case_list.js';
 import { reconciliationMigration } from './0010_reconciliation.js';
 import { traceparentMigration } from './0011_traceparent.js';
 import { gracefulShutdownMigration } from './0012_graceful_shutdown.js';
+import { lookupSourcesMigration } from './0013_lookup_sources.js';
 
 /**
  * Every migration, in order. Keys are `NNNN_snake_case_name` and sort
@@ -30,4 +31,5 @@ export const migrations: Record<string, Migration> = {
   '0010_reconciliation': reconciliationMigration,
   '0011_traceparent': traceparentMigration,
   '0012_graceful_shutdown': gracefulShutdownMigration,
+  '0013_lookup_sources': lookupSourcesMigration,
 };

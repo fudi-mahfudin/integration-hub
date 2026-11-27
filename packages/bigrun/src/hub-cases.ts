@@ -16,7 +16,7 @@ const caseViewSchema = z.object({
       state: z.string(),
       attempts: z.number().int(),
       deadLetterReason: z.string().nullable(),
-      attemptLog: z.array(z.object({ outcome: z.string(), errorCode: z.string().nullable(), endedAt: z.string().nullable() })),
+      attemptLog: z.array(z.object({ outcome: z.string(), errorCode: z.string().nullable(), startedAt: z.string(), endedAt: z.string().nullable() })),
     }),
   ),
 });

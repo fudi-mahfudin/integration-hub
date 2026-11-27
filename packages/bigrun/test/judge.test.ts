@@ -85,6 +85,7 @@ function completedCase(visitId: string, e2eSeconds: number, attempts: [number, n
       attemptLog: Array.from({ length: attempts[i] ?? 1 }, (_, n) => ({
         outcome: n === (attempts[i] ?? 1) - 1 ? 'completed' : 'failed',
         errorCode: null,
+        startedAt: at(0),
         endedAt: at(i === 3 && n === (attempts[i] ?? 1) - 1 ? e2eSeconds : 0.5),
       })),
     })),

@@ -39,6 +39,8 @@ export interface AttemptView {
   httpStatus: number | null;
   valuesUsed: unknown;
   lookupMethods: unknown;
+  /** Where each looked-up IHS number came from: `cache` or `remote` (#47). */
+  lookupSources: unknown;
   violations: unknown;
   /** The attempt's in-process read retries: sub-entries, not attempts (#13). */
   readRetries: unknown;
@@ -198,6 +200,7 @@ export async function readCase(
               // Written by the outbox from an attempt's facts, as JSON; shown as stored.
               valuesUsed: a.values_used,
               lookupMethods: a.lookup_methods,
+              lookupSources: a.lookup_sources,
               violations: a.violations,
               readRetries: a.read_retries,
             })),

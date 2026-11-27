@@ -1,13 +1,14 @@
 import type { StepName } from '../cases/case-model.js';
 import { SpanStatusCode, type Span } from '@opentelemetry/api';
 import type { AttemptOutcome } from '../db/database.js';
+import type { IhsNumberCache } from '../ihs-cache/ihs-number-cache.js';
 import type { Log } from '../observability/log.js';
 import { failSpan, inCaseTrace, inSpan, recordEndedSpan } from '../observability/tracing.js';
 import type { CircuitBreaker } from '../satusehat/circuit-breaker.js';
 import type { ClaimedStep, Outbox } from '../outbox/outbox.js';
 import { AttemptAborted, SatusehatRequestError } from '../satusehat/errors.js';
 import type { AttemptCalls } from '../satusehat/transport.js';
-import { AttemptFailed, type AttemptFacts, type StepOutcome } from '../steps/step-outcome.js';
+import { AttemptFailed, newAttemptFacts, type AttemptFacts, type StepOutcome } from '../steps/step-outcome.js';
 import { classifyFailure } from './failure-class.js';
 
 /** Logged when a claim that lost its lease reaches an outcome. */
@@ -43,7 +44,10 @@ export interface Worker {
  * that throws is classified (#13): a permanent failure dead-letters the step,
  * a transient one sends it to `retry_wait` (or, on its last allowed attempt,
  * dead-letters it `RETRIES_EXHAUSTED`). While any of `breakers` is open, it
- * claims nothing (#13), so a down platform consumes no attempts.
+ * claims nothing (#13), so a down platform consumes no attempts. A
+ * permanent rejection of a write deletes every IHS-number cache entry its
+ * attempt used (#47), since one of them may be what SATUSEHAT refused; a
+ * transient failure deletes nothing.
  *
  * Each claim is traced (#42) in the trace of the ingest span that accepted
  * the step's event: a `step.claim` span, then a `step.attempt` span over the
@@ -57,9 +61,10 @@ export function createWorkerLoop(deps: {
   pollIntervalMs: number;
   /** How long one attempt may go on making calls (#13). */
   attemptBudgetMs: number;
+  ihsCache: Pick<IhsNumberCache, 'forget'>;
   log: Log;
 }): Worker {
-  const { outbox, runners, breakers, pollIntervalMs, attemptBudgetMs, log } = deps;
+  const { outbox, runners, breakers, pollIntervalMs, attemptBudgetMs, ihsCache, log } = deps;
   let running = false;
   let loop: Promise<void> | undefined;
   let wake: (() => void) | undefined;
@@ -133,6 +138,8 @@ export function createWorkerLoop(deps: {
       try {
         if ('permanent' in failure) {
           log('error', 'attempt failed permanently; the step is dead-lettered', { ...fields, errorCode: failure.permanent, error: err });
+          // The hub doesn't parse the OperationOutcome to guess which reference was wrong (#20): every entry goes.
+          if (isWriteRejection(err)) await ihsCache.forget(facts.cacheKeys);
           if (!(await outbox.storeOutcome(step, { deadLettered: failure.permanent, attempt: facts }, calls.readRetries))) {
             log('warn', OUTCOME_DISCARDED, fields);
             return 'lease_lost';
@@ -212,10 +219,16 @@ export function createWorkerLoop(deps: {
   };
 }
 
+/** Whether SATUSEHAT answered one of the step's writes (a POST or PUT) with the status that failed the attempt. */
+function isWriteRejection(err: unknown): boolean {
+  const cause = err instanceof AttemptFailed ? err.cause : err;
+  return cause instanceof SatusehatRequestError && (cause.method === 'POST' || cause.method === 'PUT');
+}
+
 /** What a failed attempt had resolved, and the status SATUSEHAT answered when a request was what failed. */
 function failedAttemptFacts(err: unknown): AttemptFacts {
   const facts: AttemptFacts =
-    err instanceof AttemptFailed ? err.facts : { httpStatus: null, valuesUsed: {}, lookupMethods: {}, violations: [] };
+    err instanceof AttemptFailed ? err.facts : newAttemptFacts();
   const cause = err instanceof AttemptFailed ? err.cause : err;
   return cause instanceof SatusehatRequestError ? { ...facts, httpStatus: cause.status } : facts;
 }

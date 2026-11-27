@@ -52,7 +52,7 @@ Every number an evidence run is judged by is committed in [`bigrun.commitments.j
 
 - **Big run**: 10,000 events (2,000 visits × 4 events + 2,000 duplicates) with 30% transient faults on reads and writes, judged by zero lost events, zero duplicate submissions, order per case, and zero dead-lettered or abandoned cases.
 - **Load test**: ingest capacity at 200 events/s for 5 min after a 30s warm-up, with no faults, judged by p95, p99 and the non-2xx rate.
-- **Cache run**: the before-and-after that decides whether a cache stays in the code.
+- **Cache run**: the before-and-after that decides whether each IHS-number cache stays in the code (`pnpm cacherun`, below).
 - **World dataset**: 1,000 patients drawn uniformly across visits, and 30 practitioners.
 
 The rules:
@@ -92,6 +92,21 @@ No official load test yet. `pnpm loadtest --official` runs one and writes its re
 - `pnpm loadtest --set path=value`: overrides a committed value under `loadTest` (e.g. `--set durationSeconds=20`). The report flags every override, and such a run is never official. It writes to `results/k6-unofficial/` (not committed).
 
 The workers keep delivering the load test's cases after k6 ends. Run `pnpm stack:down` before a big run so the two don't share the stack.
+
+## Cache run results
+
+<!-- cacherun:start -->
+No official Cache run yet. `pnpm cacherun --official` runs one and writes its results here.
+<!-- cacherun:end -->
+
+### Running the Cache run
+
+`pnpm cacherun` decides from measured numbers whether each IHS-number cache stays in the code (#20). It runs the three committed arms, no cache, `ihs_practitioner` only, and both caches, three times each, alternating: 9 runs. Each run deletes the Postgres and Redis containers with their data, so it starts with no cases and a cold cache. It then brings the stack up as the big run does, with the arm's `IHS_CACHES` on the workers, and sets the mock to answer every read 150 ms and every write 300 ms late, with no faults. These latencies are assumed constants, not sandbox measurements. Then it drives the big run's batch to completion. It measures upstream reads (the GETs the mock received) per completed case, each cache's hit ratio (from the workers' `cache_requests_total`), end-to-end case time p50/p95, attempt duration and drain duration. A cache stays only if, against the arm without it, the median reads per completed case drop by ≥ 20%, the median of the runs' e2e p95 improves by ≥ 10% and by more than the max–min spread of either arm's runs, and an official big run passes with it on. A cache that misses is removed from the code, and its result stays published. With the committed latencies a run takes about 40 minutes, so the whole Cache run takes about 6 hours. It exits 0 once it has written its report, whatever the caches' outcomes, 1 if a run could not be measured (the runs measured so far stay in `runs.json`), and 2 if it refuses to start.
+
+- `pnpm cacherun --official`: the committed Cache run, from a clean tree only. It writes `results/cache/<date>-<shortsha>/` (`report.md`, `report.json`, `runs.json`), lists the run in `results/cache/INDEX.md`, and rewrites the section above. Commit them, pass or fail.
+- `pnpm cacherun --ci`: each run at the CI visits (200). `pnpm cacherun --set path=value` overrides a committed value under `cacheRun` (e.g. `--set runsPerArm=1`). Neither is ever official; they write to `results/cache-unofficial/` (not committed).
+
+It deletes the local Postgres and Redis data, like `pnpm stack:down`.
 
 ## Quick start
 
@@ -168,6 +183,8 @@ Operators act with the admin API key (`HUB_ADMIN_API_KEY`; the development key `
 
 The worker keeps under a rate limit per platform API (100 rps for FHIR and 50 for KFA v2 against the mock; 5 and 2 with `SATUSEHAT_PROFILE=live-sandbox`), shared by all worker processes through Redis. Without Redis, each worker keeps to its share of it, by `WORKER_PROCESSES` (default 2). While a platform API's circuit breaker is open, the worker claims nothing.
 
+The worker caches the IHS numbers it finds by an exact NIK lookup in Redis for 24h (`ihs_patient`, `ihs_practitioner`; `IHS_CACHES` turns either off), under an HMAC of the NIK with `IHS_CACHE_PEPPER` (the development pepper is public; production must set its own). Fallback lookups and "not found" are never cached. A Redis error, or an answer slower than 50 ms, counts as a miss. A replayed step searches past the cache and overwrites the entry, and SATUSEHAT permanently rejecting a step's write deletes every entry that attempt used. Each attempt log entry says whether each IHS number came from the cache or from SATUSEHAT (`lookupSources`). Redis keeps nothing on disk.
+
 To see why Redis alone can't detect duplicate ingests (ADR 0003), run `npm run demo:naive-race` (after `pnpm deps:up` and `pnpm migrate`). It fires 20 identical requests at once against the deliberately broken `IDEMPOTENCY_STORE=naive-redis` and then against the Postgres store, and prints how the answers differ.
 
 To run the mock SATUSEHAT on its own (it needs no Postgres or Redis), see [packages/mock-satusehat/README.md](packages/mock-satusehat/README.md).
@@ -192,8 +209,10 @@ The hub never migrates itself: always run `pnpm migrate` before starting it. At 
 | `packages/simulator` | The source simulator: plans seeded batches of fictional visits from the world dataset and sends them to the hub as a source system |
 | `packages/bigrun` | The big-run harness (`pnpm bigrun`): drives the committed big run through the simulator, judges it from the hub's and the mock's side, and writes and publishes its report |
 | `packages/bigrun/k6` | The load test's k6 script; `pnpm loadtest` (same package) builds its options from the commitments and judges its summary |
+| `packages/bigrun/src/cacherun` | The Cache run (`pnpm cacherun`, same package): runs the arms, measures them, and judges each IHS-number cache against the bar |
 | `results/bigrun` | Every official big run's report, and `INDEX.md` |
 | `results/k6` | Every official load test's report, and `INDEX.md` |
+| `results/cache` | Every official Cache run's report, and `INDEX.md` |
 | `docs/api.md` | The hub's API contract |
 | `compose.yaml` | Local infrastructure, and (profile `app`) the mock SATUSEHAT, the hub service, two workers and the one-shot `migrate`, (profile `simulator`) the one-shot source simulator, and (profile `loadtest`) k6, the load test's one-shot load generator; only components from the closed list |
 | `observability` | Prometheus scrape config and the Grafana data source and dashboards, provisioned from committed JSON (Jaeger needs no config) |

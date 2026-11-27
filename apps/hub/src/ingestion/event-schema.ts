@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { AcceptedEvent } from '../cases/record-event.js';
 import { EVENT_TYPES, type EventType, type PrescriptionId, type PrescriptionItemId, type VisitId } from '../cases/case-model.js';
+import type { Brand } from '../brand.js';
 import { Problem, type FieldError } from '../http/problem.js';
 import type { RequestBody } from './fingerprint.js';
 import { DATE_FLOOR, DATE_FLOOR_DAY, isCalendarDate, parseSourceTime } from './source-time.js';
@@ -32,7 +33,11 @@ const sourceTime = (opts: { floor: boolean }) =>
     }
   });
 
-const nik = z.string().regex(NIK, 'must be 16 digits');
+/** A national ID number (Nomor Induk Kependudukan): 16 digits. Personal data: never logged, and never a cache key on its own (#47). */
+export type Nik = Brand<string, 'Nik'>;
+
+// Branded once its 16 digits are checked.
+const nik = z.string().regex(NIK, 'must be 16 digits').transform((value) => value as Nik);
 const birthDate = z.string().refine(isCalendarDate, 'must be a calendar date written YYYY-MM-DD');
 const gender = z.enum(['male', 'female'], 'must be "male" or "female"');
 
@@ -302,7 +307,7 @@ function valueAt(input: unknown, path: readonly PropertyKey[]): unknown {
 
 /** How the source identifies a practitioner, requester or pharmacist: by NIK, or by name + birthDate + gender (#6). */
 export interface PractitionerFacts {
-  nik?: string | undefined;
+  nik?: Nik | undefined;
   name?: string | undefined;
   /** A calendar date `YYYY-MM-DD`. */
   birthDate?: string | undefined;
@@ -311,7 +316,7 @@ export interface PractitionerFacts {
 
 /** How the source identifies a patient: by NIK, mother's NIK + birthDate, or name + birthDate + gender (#6). */
 export interface PatientFacts extends PractitionerFacts {
-  motherNik?: string | undefined;
+  motherNik?: Nik | undefined;
 }
 
 /** The fields of a recorded `visit.started` that the create visit step sends. */

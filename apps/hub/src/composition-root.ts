@@ -26,6 +26,7 @@ import type { IdempotencyStore } from './ingestion/idempotency-store.js';
 import { createIngest } from './ingestion/ingest.js';
 import { createNaiveRedisIdempotencyStore } from './ingestion/naive-redis-idempotency-store.js';
 import { createPostgresIdempotencyStore } from './ingestion/postgres-idempotency-store.js';
+import { createIhsNumberCache } from './ihs-cache/ihs-number-cache.js';
 import { createKfaClient } from './kfa/kfa-client.js';
 import { loadDrugMappingSeed } from './mapping/drug-mappings.js';
 import { loadLocationMappingSeed } from './mapping/location-mappings.js';
@@ -288,6 +289,8 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
     random: Math.random,
     metrics,
   });
+  // Fails open (#47): a Redis that is down or slow is a miss, so the worker runs without it.
+  const ihsCache = createIhsNumberCache({ redis, pepper: config.ihsCache.pepper, enabled: config.ihsCache.caches, log, metrics });
   const clientsFor = (calls: AttemptCalls) => ({
     satusehat: createSatusehatClient({ config: config.satusehat, transport, calls }),
     kfa: createKfaClient({ config: config.satusehat, transport, calls }),
@@ -295,14 +298,15 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
   const worker = createWorkerLoop({
     outbox: createOutbox({ db, clock, leaseMs: config.workerLeaseMs, retry: config.retry, random: Math.random, metrics }),
     runners: {
-      create_visit: (step, calls) => createVisit({ db, ...clientsFor(calls) }, step),
-      submit_prescription: (step, calls) => submitPrescription({ db, ...clientsFor(calls), clock }, step),
-      submit_dispense: (step, calls) => submitDispense({ db, ...clientsFor(calls), clock }, step),
+      create_visit: (step, calls) => createVisit({ db, ...clientsFor(calls), ihsCache }, step),
+      submit_prescription: (step, calls) => submitPrescription({ db, ...clientsFor(calls), clock, ihsCache }, step),
+      submit_dispense: (step, calls) => submitDispense({ db, ...clientsFor(calls), clock, ihsCache }, step),
       update_visit: (step, calls) => updateVisit({ db, ...clientsFor(calls) }, step),
     },
     breakers: Object.values(breakers),
     pollIntervalMs: config.workerPollIntervalMs,
     attemptBudgetMs: config.attemptBudgetMs,
+    ihsCache,
     log,
   });
   // Reconciliation shares the transport, so its searches keep to the same rate limit and breakers (#39).

@@ -7,7 +7,8 @@
     "bigrun": "node --import tsx src/main.ts",
     "publish-results": "node --import tsx src/publish-main.ts",
     "loadtest": "node --import tsx src/loadtest-main.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "cacherun": "node --import tsx src/cacherun-main.ts"
   },
   "dependencies": {
     "@integration-hub/mock-satusehat": "workspace:*",

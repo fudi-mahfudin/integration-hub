@@ -57,6 +57,15 @@ export async function composeUp(repoRoot: string, env: Record<string, string>): 
   await run(repoRoot, 'docker', ['compose', '--profile', 'app', 'up', '-d', '--build', '--wait', '--force-recreate', ...APPLICATION], env);
 }
 
+/**
+ * Removes the Postgres and Redis containers with their anonymous volumes, so
+ * the next `composeUp` starts both empty: no cases from an earlier run, and a
+ * cold IHS-number cache (#47). Every run of a Cache run starts from the same state.
+ */
+export async function resetDataStores(repoRoot: string): Promise<void> {
+  await run(repoRoot, 'docker', ['compose', '--profile', 'app', 'rm', '--stop', '--force', '-v', 'postgres', 'redis']);
+}
+
 const psLine = z.object({ ID: z.string(), Service: z.string() });
 const inspected = z.array(
   z.object({

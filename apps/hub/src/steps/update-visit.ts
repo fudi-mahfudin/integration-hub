@@ -10,7 +10,7 @@ import { platformTime } from '../satusehat/platform-time.js';
 import { finishedEncounterResource } from '../satusehat/resources.js';
 import { validateStepPayload } from '../validation/validation.js';
 import { readCompletedCreateVisit } from './completed-steps.js';
-import { AttemptFailed, rejected, type AttemptFacts, type StepOutcome } from './step-outcome.js';
+import { AttemptFailed, newAttemptFacts, rejected, type AttemptFacts, type StepOutcome } from './step-outcome.js';
 
 /** What update visit reads and calls. */
 export interface UpdateVisitDeps {
@@ -34,7 +34,7 @@ type UpdateVisitAttempt = AttemptFacts & { valuesUsed: Partial<UpdateVisitPins> 
  * refreshed and the step retried; none found is `REMOTE_RECORD_MISSING` (#10).
  */
 export async function updateVisit(deps: UpdateVisitDeps, step: ClaimedStep): Promise<StepOutcome> {
-  const attempt: UpdateVisitAttempt = { httpStatus: null, valuesUsed: {}, lookupMethods: {}, violations: [] };
+  const attempt: UpdateVisitAttempt = newAttemptFacts();
   try {
     return await attemptUpdateVisit(deps, step, attempt);
   } catch (err) {
