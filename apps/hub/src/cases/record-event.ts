@@ -1,4 +1,4 @@
-import type { Transaction } from 'kysely';
+import type { Kysely, Transaction } from 'kysely';
 import type { SourceSystem } from '../auth/source-systems.js';
 import type { Database } from '../db/database.js';
 import { Problem, type FieldError } from '../http/problem.js';
@@ -10,6 +10,7 @@ import {
   stepForEvent,
   type CaseId,
   type CaseStatus,
+  type EventType,
   type PrescriptionId,
   type PrescriptionItemId,
   type VisitId,
@@ -249,4 +250,27 @@ async function alreadyRecorded(trx: Transaction<Database>, caseId: string, event
       message: 'the visit already has a prescription with another prescriptionId or itemId; a case supports one drug item',
     },
   ]);
+}
+
+/** An accepted event, by the source system, visit and event type that name it. */
+export interface NamedEvent {
+  sourceSystemId: SourceSystem['id'];
+  visitId: VisitId;
+  eventType: EventType;
+}
+
+/**
+ * Counts one duplicate ingest of `event`: a request answered with the
+ * event's original `202` (#7, #38). One atomic increment, so concurrent
+ * duplicates are each counted. Changes no case.
+ */
+export async function countDuplicate(db: Kysely<Database>, event: NamedEvent): Promise<void> {
+  await db
+    .updateTable('source_event')
+    .set((eb) => ({ duplicates: eb('duplicates', '+', 1) }))
+    .where('type', '=', event.eventType)
+    .where('case_id', '=', (eb) =>
+      eb.selectFrom('case').select('case.id').where('case.source_system_id', '=', event.sourceSystemId).where('case.visit_id', '=', event.visitId),
+    )
+    .execute();
 }

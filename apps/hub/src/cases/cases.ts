@@ -2,10 +2,17 @@ import type { Kysely } from 'kysely';
 import type { Clock } from '../clock.js';
 import type { Database } from '../db/database.js';
 import { abandonCase, replayCase } from './operator-actions.js';
-import { readCase, type CaseScope, type CaseView } from './read-case.js';
+import type { CaseScope } from './case-summary.js';
+import { summariseDeadLetters, type DeadLetterGroup } from './dead-letter-summary.js';
+import { listCases, type CaseFilter, type CasePage, type CasePageRequest } from './list-cases.js';
+import { readCase, type CaseView } from './read-case.js';
 
 /** Cases as the HTTP API reads them and operators act on them. */
 export interface Cases {
+  /** A page of the cases in `scope` matching `filter`, newest first, with `stalled` computed now. */
+  list(scope: CaseScope, filter: CaseFilter, page: CasePageRequest): Promise<CasePage>;
+  /** The dead-lettered cases in `scope`, grouped by reason. */
+  deadLetterSummary(scope: CaseScope): Promise<DeadLetterGroup[]>;
   /** One case in `scope`, with `stalled` computed now; `undefined` when there is none. */
   read(scope: CaseScope, caseId: string): Promise<CaseView | undefined>;
   /** Replays a dead-lettered case from its failed step (see `replayCase`), and answers the case as it is then. */
@@ -24,6 +31,8 @@ export function createCases(deps: { db: Kysely<Database>; clock: Clock; stalledA
     return view;
   };
   return {
+    list: (scope, filter, page) => listCases(db, scope, filter, page, { now: clock(), stalledAfterMs }),
+    deadLetterSummary: (scope) => summariseDeadLetters(db, scope),
     read,
     async replay(caseId, note) {
       await replayCase(db, caseId, note, clock());
