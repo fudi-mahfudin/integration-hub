@@ -9,6 +9,7 @@
   "scripts": {
     "deps:up": "docker compose up -d --wait postgres redis",
     "obs:up": "docker compose up -d --wait prometheus grafana jaeger",
+    "app:up": "docker compose --profile app up -d --build --wait hub worker-1 worker-2",
     "deps:down": "docker compose down -v",
     "migrate": "pnpm --filter @integration-hub/hub migrate",
     "build": "pnpm -r --if-present build",

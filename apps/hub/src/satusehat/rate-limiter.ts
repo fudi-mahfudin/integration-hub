@@ -27,6 +27,8 @@ export interface RateLimiter {
    * answers, from this one otherwise. Without a hint, nothing changes.
    */
   holdOff(api: RateLimitedApi, until: Date | null): Promise<void>;
+  /** Which bucket the next call would come from: the shared one while Redis is connected, else the process's own. For readiness (#43). */
+  mode(): LimiterMode;
 }
 
 /**
@@ -146,5 +148,7 @@ export function createRateLimiter(deps: {
         fellBack(err);
       }
     },
+    // Commands fail at once while the connection is not ready (no offline queue), so the next call falls back.
+    mode: () => (redis.status === 'ready' ? 'redis' : 'local_fallback'),
   };
 }

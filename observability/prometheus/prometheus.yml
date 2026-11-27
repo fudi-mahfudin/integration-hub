@@ -1,5 +1,5 @@
-# Scrapes the hub service and the workers every 5s (#41). They run on the
-# host (see the README), so Prometheus reaches them through host.docker.internal.
+# Scrapes the hub service and the workers every 5s (#41). They run on the host or
+# in compose with their ports published (see the README): either way Prometheus reaches them through host.docker.internal.
 # No alert rules and no Alertmanager (#15): the stalled flag and the
 # dead-letter screen are the operator's signals.
 global:

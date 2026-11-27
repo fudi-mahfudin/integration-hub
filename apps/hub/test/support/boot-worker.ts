@@ -7,7 +7,7 @@ import type { LogDestination } from '../../src/observability/log.js';
 export interface BootedWorker {
   /** Where the worker serves `/metrics`, e.g. `http://127.0.0.1:41235/`. */
   baseUrl: URL;
-  /** Stops claiming, waits for the attempt in progress, and releases its connections. */
+  /** Drains the worker (see `HubWorker.close`) and releases its connections. */
   close(): Promise<void>;
 }
 
@@ -21,6 +21,6 @@ export interface BootedWorker {
 export async function bootWorker(env: Record<string, string>, logs: LogDestination = process.stdout): Promise<BootedWorker> {
   const worker = await createWorker(loadConfig({ ...process.env, WORKER_PORT: '0', HOST: '127.0.0.1', ...env }), { clock: systemClock, logs });
   const baseUrl = await worker.listen();
-  worker.start();
+  await worker.start();
   return { baseUrl, close: () => worker.close() };
 }

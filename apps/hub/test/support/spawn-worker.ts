@@ -5,11 +5,18 @@ import { z } from 'zod';
 
 const HUB_DIR = fileURLToPath(new URL('../../', import.meta.url));
 const READY_LINE = 'worker claiming steps';
+const SERVING_LINE = 'worker serving health and metrics';
 
 /** A worker running as a child process, booted through the production entry point. */
 export interface SpawnedWorker {
+  /** Where the worker serves `/livez`, `/readyz` and `/metrics`, e.g. `http://127.0.0.1:41235/`. */
+  baseUrl: URL;
   /** Every structured line the worker has logged to stdout so far, oldest first. */
   logged(): Record<string, unknown>[];
+  /** Sends `signal` to the process, as an orchestrator would, without waiting for it to exit. */
+  signal(signal: NodeJS.Signals): void;
+  /** Resolves to the process's exit code once it has exited (null if a signal ended it). */
+  exited(): Promise<number | null>;
   /** Kills the process with SIGKILL, as a crash would, and resolves once it has exited. */
   crash(): Promise<void>;
   /** Stops the process with SIGTERM if it is still running, and resolves once it has exited. */
@@ -28,6 +35,7 @@ export async function spawnWorker(env: Record<string, string>): Promise<SpawnedW
     env: { ...process.env, WORKER_PORT: '0', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  const exited = new Promise<number | null>((resolve) => child.once('exit', (code) => resolve(code)));
   let stdout = '';
   let stderr = '';
   child.stdout?.on('data', (chunk: Buffer) => {
@@ -48,13 +56,19 @@ export async function spawnWorker(env: Record<string, string>): Promise<SpawnedW
     child.stdout?.on('data', onData);
     child.once('exit', onExit);
   });
+  const logged = () =>
+    stdout
+      .split('\n')
+      // The last piece is a line still being written, or empty.
+      .slice(0, -1)
+      .map((line) => z.record(z.string(), z.unknown()).parse(JSON.parse(line)));
+  const serving = logged().find((line) => line.msg === SERVING_LINE);
+  const baseUrl = new URL(z.string().parse(serving?.url));
   return {
-    logged: () =>
-      stdout
-        .split('\n')
-        // The last piece is a line still being written, or empty.
-        .slice(0, -1)
-        .map((line) => z.record(z.string(), z.unknown()).parse(JSON.parse(line))),
+    baseUrl,
+    logged,
+    signal: (signal) => child.kill(signal),
+    exited: () => exited,
     crash: () => end(child, 'SIGKILL'),
     stop: () => end(child, 'SIGTERM'),
   };

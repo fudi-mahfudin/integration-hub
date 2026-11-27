@@ -4,7 +4,7 @@ The HTTP API the hub service offers to source systems. Domain terms are in [GLOS
 
 ## Authentication
 
-Every request under `/v1/` carries `Authorization: Bearer <api key>` ([`/metrics`](#get-metrics) and `/livez` take none). Each source system has one static API key. The source system's identity, and the SATUSEHAT organization it belongs to, come from the key, never from the request body. A missing, malformed or unknown key is [`401 UNAUTHENTICATED`](#unauthenticated).
+Every request under `/v1/` carries `Authorization: Bearer <api key>` ([`/metrics`](#get-metrics), [`/livez` and `/readyz`](#get-livez-and-get-readyz) take none). Each source system has one static API key. The source system's identity, and the SATUSEHAT organization it belongs to, come from the key, never from the request body. A missing, malformed or unknown key is [`401 UNAUTHENTICATED`](#unauthenticated).
 
 The operator has one more static key, the **admin API key** (`HUB_ADMIN_API_KEY`; there is no user model, ADR 0001). Only it may call the operator endpoints ([replay](#post-v1casesidreplay), [abandon](#post-v1casesidabandon), [mapping administration](#put-v1adminmappingsdrugslocationslocalcode), [reconciliation](#post-v1adminreconciliationruns)); a source system's key there is [`403 FORBIDDEN`](#forbidden). On the read endpoints ([case list](#get-v1cases), [case](#get-v1casesid), [dead-letter summary](#get-v1dead-letterssummary)) it sees every source system's cases, and a source system's key only that source system's own.
 
@@ -22,6 +22,7 @@ Sends one source event.
 
 ### Order of checks
 
+0. A hub service that is shutting down refuses the request before reading it ([`503 SERVICE_DRAINING`](#service_draining)).
 1. Authenticate (`401`).
 2. `Idempotency-Key` present and valid (`400`).
 3. Key lookup: a key already accepted from this source system with the same body is a duplicate ingest and gets the original answer again; with a different body it is [`422 IDEMPOTENCY_KEY_REUSED`](#idempotency_key_reused).
@@ -126,7 +127,7 @@ A visit's two events may arrive in either order. Whichever arrives second is che
 
 - **Duplicate ingest.** The same source system, the same `Idempotency-Key` and the same body get the original status and body back verbatim, plus `Idempotent-Replayed: true`. "Same body" means the same SHA-256 fingerprint of the RFC 8785 canonical JSON, so key order and whitespace don't matter.
 - **Same key, different body**: [`422 IDEMPOTENCY_KEY_REUSED`](#idempotency_key_reused). Nothing is recorded.
-- **Only a `202` consumes a key.** After a `400`, `401`, `409` or `422` nothing is recorded, and the same key may be sent again, for example with a corrected body.
+- **Only a `202` consumes a key.** After a `400`, `401`, `409`, `422` or `503` nothing is recorded, and the same key may be sent again, for example with a corrected body.
 - **Concurrent identical requests** open exactly one case and all get the same answer.
 - **Retention.** An accepted key is kept for **at least 24 hours**, then deleted by a periodic purge (hourly by default). Until it is purged, a resend still gets the original answer. After that, an identical resend gets [`409 EVENT_ALREADY_RECORDED`](#event_already_recorded) instead. The event is still recorded once; only the answer differs.
 
@@ -249,7 +250,7 @@ Case status: `waiting`, `active`, `dead_lettered`, `completed`, `abandoned`. Ste
 | `steps[].availableAt` | For a step in `retry_wait`, when a worker may claim it again (UTC); otherwise `null`. See [Retries](#retries). |
 | `steps[].pins` | The values the step sent, pinned when it completed; later steps read these, never the live mappings or lookups. Create visit pins `patientIhsNumber`, `practitionerIhsNumber` and `locationId`. Submit prescription pins the prescribed KFA product (`kfaCode`, `kfaLevel`, `parent92`, `activeIngredients`, its 91 codes) and `requesterIhsNumber`. Submit dispense pins the dispensed KFA product (the same four fields) and `pharmacistIhsNumber`. Update visit pins the create visit values it sent again. `null` until the step completes. |
 | `steps[].attemptLog` | Every attempt at the step, oldest first. Append-only. |
-| `attemptLog[].outcome` | `completed`; `dead_lettered`; `failed` (it failed transiently: the step waits in `retry_wait`, or, if this was its last allowed attempt, is dead-lettered with `errorCode` `RETRIES_EXHAUSTED`); `attempt_budget_exceeded` (it had less time left than one call may take, so it stopped; transient, like `failed`); `lease_expired` (its lease ran out before it stored an outcome, and another attempt took the step over; it ended when the lease ran out, and an outcome it reaches later is thrown away); `discarded` (no longer written: shown only on attempts logged before `lease_expired` existed, whose late outcome was thrown away). |
+| `attemptLog[].outcome` | `completed`; `dead_lettered`; `failed` (it failed transiently: the step waits in `retry_wait`, or, if this was its last allowed attempt, is dead-lettered with `errorCode` `RETRIES_EXHAUSTED`); `attempt_budget_exceeded` (it had less time left than one call may take, so it stopped; transient, like `failed`); `lease_expired` (its lease ran out before it stored an outcome, and another attempt took the step over; it ended when the lease ran out, and an outcome it reaches later is thrown away); `worker_shutdown` (the worker carrying it out was shutting down and cut it short at its drain deadline; the step waits in `retry_wait` with `availableAt` the attempt's end, so another worker takes it at once. It counts as an attempt but never exhausts the attempt cap, and a write it sent may have been applied: the next attempt finds it by search-then-create); `discarded` (no longer written: shown only on attempts logged before `lease_expired` existed, whose late outcome was thrown away). |
 | `attemptLog[].errorCode` | The dead-letter reason the attempt reached (`RETRIES_EXHAUSTED` on a transient last attempt); otherwise `null`. |
 | `attemptLog[].httpStatus` | The status of the last SATUSEHAT response the attempt read; `null` if it sent nothing. |
 | `attemptLog[].valuesUsed`, `lookupMethods` | What the attempt had resolved, as far as it got (the values its step pins), and how each person was found: `nik`, `mother_nik_birth_date` or `name_birth_date_gender`. A person the attempt did not find has no entry. IHS numbers are looked up on every attempt, never reused from another case. |
@@ -362,7 +363,7 @@ The body is optional. Without one, the run checks every case that is not `active
 
 A bad field is [`422 VALIDATION_FAILED`](#validation_failed).
 
-The workers also request a run on their own once the last run started longer ago than `RECONCILIATION_INTERVAL_MS` (default 15 min; `0` turns that off). Runs go one at a time across every worker process, under a Postgres advisory lock, and check one case at a time. Their searches share the worker's rate limit and circuit breakers with its steps. A run left `running` by a worker that stopped is marked `failed` by the next worker to take the lock.
+The workers also request a run on their own once the last run started longer ago than `RECONCILIATION_INTERVAL_MS` (default 15 min; `0` turns that off). Runs go one at a time across every worker process, under a Postgres advisory lock, and check one case at a time. Their searches share the worker's rate limit and circuit breakers with its steps. A run left `running` by a worker that died is marked `failed` by the next worker to take the lock. A worker that shuts down gracefully stops its run at once if it holds no step lease, or else at its drain deadline, and marks it `interrupted`; it is never resumed, and the next run starts fresh.
 
 **What a check expects.** A completed step has exactly one record at SATUSEHAT under its business identifier: the one it stored. Any other step state has none, including an abandoned step (ADR 0007). One search per resource checks it, by `encounter/{org}` for the Encounter and by `prescription/{org}` for the MedicationRequest and the MedicationDispense. That is at most three calls per case. The prescription searches are left out when the case has no prescription. The record found must hold the values the step sent, by field:
 
@@ -435,12 +436,42 @@ Admin API key only. One run and a page of its findings, in the order it found th
 - `completed`.
 - `completed_with_errors`: some cases are `unchecked`.
 - `failed`: it stopped before the end, and `error` says why.
+- `interrupted`: the worker executing it shut down first. It is never resumed; request another.
 
 `trigger` is `operator` or `schedule`. A finding's `kind` is `divergence`, `skipped` or `unchecked`. `class`, `step`, `resourceType` and `field` are `null` unless it is a divergence, and `field` is `null` unless the class is `FIELD_MISMATCH`. An `unchecked` finding's `snapshot` holds the `error` and its `readRetries`. An unknown id is `404 NOT_FOUND`.
 
 ## `GET /v1/admin/reconciliation/runs`
 
 Admin API key only. The latest runs, newest first, without their findings: `{ "runs": [ … ] }`. `limit` is 1-100; default 20.
+
+## `GET /livez` and `GET /readyz`
+
+No API key. Both the hub service and each worker (on `WORKER_PORT`) serve them.
+
+`GET /livez` is `200 {"status":"ok"}` whenever the process's event loop answers. It checks no dependency, so an orchestrator never restarts a process because its database is down.
+
+`GET /readyz` is `200` when the process is ready and `503` when it is not:
+
+```json
+{
+  "status": "ready",
+  "checks": {
+    "postgres": { "status": "up", "latencyMs": 3 },
+    "redis": { "status": "up", "gating": false }
+  }
+}
+```
+
+- `status` is `ready`, `not_ready` (Postgres did not answer `SELECT 1` within 1s) or `draining` (the process is shutting down). Only those two things gate readiness.
+- Redis is reported but never gates (`gating: false`, ADR 0003): ingest keeps to Postgres, and the workers' rate limit falls back to a bucket of their own.
+- A worker's body also shows each platform API's circuit breaker, `"breakers": { "fhir": "closed", "kfa": "closed", "auth": "closed" }` (`closed`, `half_open` or `open`), and the rate limiter's mode, `"limiter": { "mode": "redis" }` (`redis` or `local_fallback`). Both are information: an open breaker means SATUSEHAT is unhealthy, not the worker. A worker claims nothing until its first readiness check succeeds.
+
+Neither checks the migrations: a process checks its schema once, at start-up. It waits up to 30s for Postgres, then exits `1` if the last migration applied is not the one it was built for. Run the `migrate` command first.
+
+**Shutdown.** On `SIGTERM` or `SIGINT`, `/readyz` turns `503 draining` at once.
+
+- The hub service keeps serving for `SHUTDOWN_DELAY_MS` (default 0), then stops accepting connections. A request arriving on a connection still open gets [`503 SERVICE_DRAINING`](#service_draining). Requests in flight have 10s to finish; a request cut off then either committed or rolled back as a whole, so resending it with the same `Idempotency-Key` gets the original `202` or a fresh accept.
+- A worker stops claiming and lets the attempt in progress end, for up to `WORKER_DRAIN_DEADLINE_MS` (default 70s: the 60s attempt budget and a margin). At the deadline, or at a second signal, it aborts the attempt's calls and logs it as `worker_shutdown`, and another worker takes the step at once. Then it exits `0`.
 
 ## `GET /metrics`
 
@@ -532,6 +563,10 @@ Every error is an RFC 9457 problem, `Content-Type: application/problem+json`:
 ### NOT_FOUND
 
 `404`. No such resource for this source system.
+
+### SERVICE_DRAINING
+
+`503`. The hub service is shutting down and did not read the request. The response carries `Retry-After: 5` and `Connection: close`: send it again, with the same `Idempotency-Key`, on a new connection.
 
 ### INTERNAL_ERROR
 

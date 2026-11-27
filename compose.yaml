@@ -1,5 +1,32 @@
 # Closed component list only (see issue #1). This file grows as components land;
 # nothing outside the list is ever added.
+
+# The hub image's runtime settings, shared by the hub service and the workers (profile `app`).
+x-hub: &hub
+  image: integration-hub/hub:local
+  profiles: [app]
+  depends_on:
+    # The schema first (#43): a process exits 1 on a schema other than its build's.
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+x-hub-env: &hub-env
+  DATABASE_URL: postgres://hub:hub@postgres:5432/hub
+  REDIS_URL: redis://redis:6379
+  TRACE_EXPORT_URL: http://jaeger:4318/v1/traces
+
+x-worker-env: &worker-env
+  <<: *hub-env
+  # The mock SATUSEHAT runs on the host (see the README).
+  SATUSEHAT_AUTH_URL: http://host.docker.internal:3001/oauth2/v1/
+  SATUSEHAT_FHIR_URL: http://host.docker.internal:3001/fhir-r4/v1/
+  SATUSEHAT_KFA_URL: http://host.docker.internal:3001/kfa-v2/
+  WORKER_PROCESSES: "2"
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -87,3 +114,69 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  # One-shot: applies pending migrations, then exits; the hub service and workers wait for it (#43).
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/hub/Dockerfile
+    image: integration-hub/hub:local
+    profiles: [app]
+    command: ["node", "dist/db/migrate-cli.js"]
+    environment:
+      DATABASE_URL: postgres://hub:hub@postgres:5432/hub
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Pinned big-run limits (bigrun.commitments.json bigRun.topology.composeLimits).
+  hub:
+    <<: *hub
+    cpus: 1
+    mem_limit: 512m
+    environment:
+      <<: *hub-env
+    ports:
+      - "${HUB_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    # The hub service drains for up to 10s (#43); Docker's 10s default would SIGKILL it first.
+    stop_grace_period: 15s
+
+  worker-1:
+    <<: *hub
+    cpus: 1
+    mem_limit: 512m
+    command: ["node", "--import", "./dist/instrumentation.js", "dist/worker-main.js"]
+    environment:
+      <<: *worker-env
+      WORKER_PORT: "3002"
+    ports:
+      - "3002:3002"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3002/readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    # A worker drains for up to 70s (#43); Docker's 10s default would SIGKILL it mid-attempt.
+    stop_grace_period: 80s
+
+  worker-2:
+    <<: *hub
+    cpus: 1
+    mem_limit: 512m
+    command: ["node", "--import", "./dist/instrumentation.js", "dist/worker-main.js"]
+    environment:
+      <<: *worker-env
+      WORKER_PORT: "3003"
+    ports:
+      - "3003:3003"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3003/readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 80s

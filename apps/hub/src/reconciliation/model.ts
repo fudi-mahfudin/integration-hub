@@ -6,11 +6,14 @@
 import type { RemoteIdentifier, StepName } from '../cases/case-model.js';
 import type { RecordAtSatusehat } from '../satusehat/client.js';
 
-/** How a reconciliation run stands: waiting for a worker, executing, or ended. */
-export type ReconciliationRunStatus = 'queued' | 'running' | 'completed' | 'completed_with_errors' | 'failed';
+/**
+ * How a reconciliation run stands: waiting for a worker, executing, or ended.
+ * `interrupted`: the worker executing it shut down first (#43); it is never resumed.
+ */
+export type ReconciliationRunStatus = 'queued' | 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'interrupted';
 
 /** The statuses of a run that has ended: a run in one of them never changes again. */
-export const ENDED_RUN_STATUSES = ['completed', 'completed_with_errors', 'failed'] as const satisfies readonly ReconciliationRunStatus[];
+export const ENDED_RUN_STATUSES = ['completed', 'completed_with_errors', 'failed', 'interrupted'] as const satisfies readonly ReconciliationRunStatus[];
 
 /** The statuses of a run whose checks count: it went through its whole scope. */
 export const COMPLETED_RUN_STATUSES = ['completed', 'completed_with_errors'] as const satisfies readonly ReconciliationRunStatus[];

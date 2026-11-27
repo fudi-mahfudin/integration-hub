@@ -5,7 +5,7 @@ import { stopwatch, type PlatformOperation, type PlatformStatusClass, type Worke
 import { inSpan } from '../observability/tracing.js';
 import type { CircuitBreaker } from './circuit-breaker.js';
 import type { RateLimitedApi, RateLimiter } from './rate-limiter.js';
-import { AttemptBudgetExceeded, SatusehatNetworkError, SatusehatTimeoutError } from './errors.js';
+import { AttemptAborted, AttemptBudgetExceeded, SatusehatNetworkError, SatusehatTimeoutError } from './errors.js';
 import type { AccessTokens } from './token.js';
 
 /**
@@ -25,13 +25,16 @@ export interface ReadRetry {
 
 /**
  * What every call of one attempt shares: when the attempt's budget runs out,
- * and the read retries it has made so far, which go in its attempt log row.
+ * the read retries it has made so far, which go in its attempt log row, and
+ * the signal that aborts it.
  */
 export interface AttemptCalls {
   /** When the attempt budget runs out: no call starts with less than one call timeout left before it. */
   budgetEndsAt: Date;
   /** The attempt's read retries so far, appended as they happen. */
   readRetries: ReadRetry[];
+  /** Aborted when the worker shuts down at its drain deadline (#43): the call in progress is cut, and none is sent after. */
+  signal: AbortSignal;
 }
 
 /** One request to SATUSEHAT (FHIR or KFA v2), sent with the process's access token. */
@@ -74,6 +77,8 @@ export interface SatusehatTransport {
    * failed try, or resolves to the last answer, whatever its status. Each send
    * is its own span (#42), `satusehat.search|create|update` or `kfa.lookup`,
    * its `read_retry` 0 for the first and the read retry's number after it.
+   * Once `calls.signal` is aborted, it throws `AttemptAborted`: whatever it
+   * was waiting for (the rate limit, a token, an answer, a read retry's delay) is cut short.
    */
   send(calls: AttemptCalls, request: SatusehatRequest): Promise<SatusehatAnswer>;
 }
@@ -162,7 +167,7 @@ export function createSatusehatTransport(deps: {
    * health failure. A 429 holds off the platform API's calls.
    */
   async function exchange(calls: AttemptCalls, request: SatusehatRequest, token: string): Promise<SatusehatAnswer> {
-    await limiter.acquire(request.api);
+    await unlessAborted(calls.signal, request, limiter.acquire(request.api));
     checkBudget(calls, request);
     const report = breakers[request.api].admit();
     const elapsed = stopwatch();
@@ -171,8 +176,11 @@ export function createSatusehatTransport(deps: {
     };
     let answer: SatusehatAnswer;
     try {
-      answer = await exchangeOnce(request, token);
+      answer = await exchangeOnce(calls.signal, request, token);
     } catch (err) {
+      // An aborted call says nothing of the platform's health, and the process is shutting down:
+      // its breaker is left as it is (a probe's breaker stays half-open, in a process about to exit).
+      if (err instanceof AttemptAborted) throw err;
       report(false);
       measured(noAnswerClassOf(err));
       throw err;
@@ -183,10 +191,11 @@ export function createSatusehatTransport(deps: {
     return answer;
   }
 
-  /** One HTTP exchange within the call timeout, connect to last byte. */
-  async function exchangeOnce(request: SatusehatRequest, token: string): Promise<SatusehatAnswer> {
+  /** One HTTP exchange within the call timeout, connect to last byte, cut short when `aborted` is. */
+  async function exchangeOnce(aborted: AbortSignal, request: SatusehatRequest, token: string): Promise<SatusehatAnswer> {
     const { method, url, accept, body } = request;
-    const signal = AbortSignal.timeout(callTimeoutMs);
+    const timeout = AbortSignal.timeout(callTimeoutMs);
+    const signal = AbortSignal.any([timeout, aborted]);
     try {
       const res = await fetch(url, {
         method,
@@ -197,7 +206,8 @@ export function createSatusehatTransport(deps: {
       });
       return { status: res.status, text: await res.text(), retryAfter: parseRetryAfter(res.headers.get('retry-after'), clock()) };
     } catch (err) {
-      if (signal.aborted) throw new SatusehatTimeoutError(method, url, callTimeoutMs, { cause: err });
+      if (aborted.aborted) throw new AttemptAborted(method, url, { cause: err });
+      if (timeout.aborted) throw new SatusehatTimeoutError(method, url, callTimeoutMs, { cause: err });
       if (isConnectTimeout(err)) {
         throw new SatusehatTimeoutError(method, url, connectTimeoutMs, { cause: err });
       }
@@ -207,10 +217,10 @@ export function createSatusehatTransport(deps: {
 
   /** One try: the exchange, and after a 401 one token refresh and resend. The token comes first, so its fetch (and the rate limit's wait) count against the budget too. */
   async function tryOnce(calls: AttemptCalls, request: SatusehatRequest): Promise<SatusehatAnswer> {
-    const token = await tokens.current();
+    const token = await unlessAborted(calls.signal, request, tokens.current());
     const answer = await exchange(calls, request, token);
     if (answer.status !== 401) return answer;
-    const renewed = await tokens.renew(token);
+    const renewed = await unlessAborted(calls.signal, request, tokens.renew(token));
     // No new token yet (refreshed too recently): the 401 stands, and is transient.
     if (renewed === null) return answer;
     return exchange(calls, request, renewed);
@@ -238,10 +248,38 @@ export function createSatusehatTransport(deps: {
         }
         calls.readRetries.push(retry);
         const delayMs = READ_RETRY_DELAYS_MS[n - 1] ?? 0;
-        await sleep(delayMs * (1 - READ_RETRY_JITTER + 2 * READ_RETRY_JITTER * random()));
+        await unlessAborted(calls.signal, request, sleep(delayMs * (1 - READ_RETRY_JITTER + 2 * READ_RETRY_JITTER * random())));
       }
     },
   };
+}
+
+/**
+ * `promise`, unless `signal` is aborted first (or already): then `AttemptAborted`
+ * for `request`. What `promise` was doing carries on in the background, and its
+ * outcome is dropped.
+ */
+function unlessAborted<T>(signal: AbortSignal, request: SatusehatRequest, promise: Promise<T>): Promise<T> {
+  const abortedError = () => new AttemptAborted(request.method, request.url);
+  if (signal.aborted) {
+    // Dropped: the attempt no longer waits for it.
+    promise.catch(() => {});
+    return Promise.reject(abortedError());
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortedError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      },
+    );
+  });
 }
 
 function sleep(ms: number): Promise<void> {
