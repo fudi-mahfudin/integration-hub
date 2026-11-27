@@ -1,7 +1,9 @@
 import type { Kysely } from 'kysely';
 import type { SourceSystemId } from '../auth/source-systems.js';
 import type { AttemptOutcome, Database } from '../db/database.js';
+import type { RemoteRecordLeft } from './operator-actions.js';
 import { readPins, type StepPins } from './pins.js';
+import { reasonClassOf, type ReasonClass } from './reason-class.js';
 import { readRejections, type RejectionView } from './rejection-log.js';
 import type {
   CaseId,
@@ -52,6 +54,36 @@ export interface AttemptView {
   readRetries: unknown;
 }
 
+/** One operator replay as the case view shows it. */
+export interface ReplayView {
+  /** The step replayed: the one that was dead-lettered. */
+  step: StepName;
+  /** The dead-letter reason the replay cleared. */
+  reason: DeadLetterReason;
+  /** The operator's note, if they gave one. */
+  note: string | null;
+  /** ISO 8601 UTC. */
+  replayedAt: string;
+}
+
+/** An abandonment as the case view shows it. */
+export interface AbandonmentView {
+  /** The operator's required note: why the case can never complete. */
+  note: string;
+  /** ISO 8601 UTC. */
+  abandonedAt: string;
+  previousStatus: 'waiting' | 'dead_lettered';
+  /** What the case waited for, if it was waiting. */
+  waitingFor: EventType | null;
+  /** Why the case was dead-lettered, if it was. */
+  deadLetterReason: DeadLetterReason | null;
+  /** The records its completed steps left at SATUSEHAT. */
+  remoteRecordsLeft: RemoteRecordLeft[];
+}
+
+/** Which cases a read may see: one source system's, or, for the operator, every case. */
+export type CaseScope = { sourceSystemId: SourceSystemId } | 'operator';
+
 /** A case as `GET /v1/cases/{id}` shows it: its status, what a waiting case waits for, and its steps in order. */
 export interface CaseView {
   caseId: CaseId;
@@ -61,23 +93,41 @@ export interface CaseView {
   waitingFor: EventType | null;
   /** Since when a waiting case has waited for it, ISO 8601 UTC; null unless `waiting`. */
   waitingSince: string | null;
+  /** Whether a waiting case has waited longer than the stalled threshold, as of the read (ADR 0007); it changes nothing about the case. */
+  stalled: boolean;
+  /** Why a dead-lettered case's failed step was dead-lettered; null unless `dead_lettered`. */
+  deadLetterReason: DeadLetterReason | null;
+  /** What an operator can do about `deadLetterReason` (#21); null unless `dead_lettered`. */
+  reasonClass: ReasonClass | null;
+  /** Since when a dead-lettered case has been dead-lettered, ISO 8601 UTC; null unless `dead_lettered`. */
+  deadLetteredSince: string | null;
+  /** How many times an operator has replayed the case (#37). */
+  replayCount: number;
+  /** The operator's replays of the case, oldest first (#37). */
+  replays: ReplayView[];
+  /** The operator's abandonment of the case; null unless `abandoned` (ADR 0007). */
+  abandonment: AbandonmentView | null;
   /** The visit's ingest rejections, oldest first; they explain a waiting case and never change it (#8). */
   rejections: RejectionView[];
   steps: CaseStepView[];
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** A case id's shape; any other string names no case. */
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Reads one case of one source system, or `undefined` when that source system
- * has no case with this id (any string is accepted; a non-uuid finds nothing).
+ * Reads one case in `scope`, or `undefined` when there is no such case in it
+ * (any string is accepted; a non-uuid finds nothing). `stalled` is computed
+ * against `now`: a waiting case is stalled once it has waited longer than
+ * `stalledAfterMs`.
  * Reads case and steps from one snapshot, so a step change committing between
  * the two reads can't show under the old case status.
  */
 export async function readCase(
   db: Kysely<Database>,
-  sourceSystemId: SourceSystemId,
+  scope: CaseScope,
   caseId: string,
+  stall: { now: Date; stalledAfterMs: number },
 ): Promise<CaseView | undefined> {
   if (!UUID.test(caseId)) return undefined;
   return db
@@ -85,12 +135,12 @@ export async function readCase(
     .setIsolationLevel('repeatable read')
     .setAccessMode('read only')
     .execute(async (trx) => {
-      const kase = await trx
+      let query = trx
         .selectFrom('case')
-        .select(['id', 'visit_id', 'status', 'waiting_for', 'waiting_since'])
-        .where('id', '=', caseId)
-        .where('source_system_id', '=', sourceSystemId)
-        .executeTakeFirst();
+        .select(['id', 'source_system_id', 'visit_id', 'status', 'waiting_for', 'waiting_since', 'dead_lettered_since'])
+        .where('id', '=', caseId);
+      if (scope !== 'operator') query = query.where('source_system_id', '=', scope.sourceSystemId);
+      const kase = await query.executeTakeFirst();
       if (!kase) return undefined;
       const steps = await trx
         .selectFrom('step')
@@ -105,8 +155,16 @@ export async function readCase(
         .orderBy('seq')
         .orderBy('attempt')
         .execute();
-      // Read back from the row this case's visit id was written to.
-      const rejections = await readRejections(trx, sourceSystemId, kase.visit_id as VisitId);
+      const replays = await trx.selectFrom('replay').select(['seq', 'reason', 'note', 'replayed_at']).where('case_id', '=', caseId).orderBy('id').execute();
+      const abandonment = await trx.selectFrom('abandonment').selectAll().where('case_id', '=', caseId).executeTakeFirst();
+      // Read back from the row this case's source and visit ids were written to.
+      const rejections = await readRejections(trx, kase.source_system_id as SourceSystemId, kase.visit_id as VisitId);
+      const deadLetterReason = kase.status === 'dead_lettered' ? (steps.find((s) => s.state === 'dead_lettered')?.dead_letter_reason ?? null) : null;
+      const nameOf = (seq: number) => {
+        const step = steps.find((s) => s.seq === seq);
+        if (!step) throw new Error(`case ${caseId} has no step ${seq}`);
+        return step.name;
+      };
       return {
         // Read back from the row this case's ids were written to.
         caseId: kase.id as CaseId,
@@ -114,6 +172,26 @@ export async function readCase(
         status: kase.status,
         waitingFor: kase.waiting_for,
         waitingSince: kase.waiting_since?.toISOString() ?? null,
+        stalled:
+          kase.status === 'waiting' &&
+          kase.waiting_since !== null &&
+          stall.now.getTime() - kase.waiting_since.getTime() > stall.stalledAfterMs,
+        deadLetterReason,
+        reasonClass: deadLetterReason === null ? null : reasonClassOf(deadLetterReason),
+        deadLetteredSince: kase.status === 'dead_lettered' ? (kase.dead_lettered_since?.toISOString() ?? null) : null,
+        replayCount: replays.length,
+        replays: replays.map((r) => ({ step: nameOf(r.seq), reason: r.reason, note: r.note, replayedAt: r.replayed_at.toISOString() })),
+        abandonment: abandonment
+          ? {
+              note: abandonment.note,
+              abandonedAt: abandonment.abandoned_at.toISOString(),
+              previousStatus: abandonment.previous_status,
+              waitingFor: abandonment.waiting_for,
+              deadLetterReason: abandonment.dead_letter_reason,
+              // Written by abandonCase from the case's completed steps, as JSON; shown as stored.
+              remoteRecordsLeft: abandonment.remote_records_left as RemoteRecordLeft[],
+            }
+          : null,
         rejections,
         steps: steps.map((s) => ({
           step: s.name,

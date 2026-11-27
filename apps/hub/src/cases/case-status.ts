@@ -25,6 +25,8 @@ export async function writeCaseStatus(
         waitingForEvent === null
           ? null
           : sql<Date>`case when waiting_for = ${waitingForEvent} then waiting_since else ${now}::timestamptz end`,
+      dead_lettered_since:
+        status === 'dead_lettered' ? sql<Date>`case when status = 'dead_lettered' then dead_lettered_since else ${now}::timestamptz end` : null,
       updated_at: now,
     })
     .where('id', '=', caseId)

@@ -6,6 +6,7 @@ import { submitPrescriptionMigration } from './0004_submit_prescription.js';
 import { updateVisitMigration } from './0005_update_visit.js';
 import { leaseExpiryMigration } from './0006_lease_expiry.js';
 import { retriesMigration } from './0007_retries.js';
+import { replayAndAbandonMigration } from './0008_replay_and_abandon.js';
 
 /**
  * Every migration, in order. Keys are `NNNN_snake_case_name` and sort
@@ -20,4 +21,5 @@ export const migrations: Record<string, Migration> = {
   '0005_update_visit': updateVisitMigration,
   '0006_lease_expiry': leaseExpiryMigration,
   '0007_retries': retriesMigration,
+  '0008_replay_and_abandon': replayAndAbandonMigration,
 };

@@ -131,6 +131,22 @@ export const caseViewSchema = z.object({
   status: z.string(),
   waitingFor: z.string().nullable(),
   waitingSince: z.string().nullable(),
+  stalled: z.boolean(),
+  deadLetterReason: z.string().nullable(),
+  reasonClass: z.enum(['replayable', 'source_data']).nullable(),
+  deadLetteredSince: z.string().nullable(),
+  replayCount: z.number().int(),
+  replays: z.array(z.object({ step: z.string(), reason: z.string(), note: z.string().nullable(), replayedAt: z.string() })),
+  abandonment: z
+    .object({
+      note: z.string(),
+      abandonedAt: z.string(),
+      previousStatus: z.string(),
+      waitingFor: z.string().nullable(),
+      deadLetterReason: z.string().nullable(),
+      remoteRecordsLeft: z.array(z.object({ step: z.string(), type: z.string(), id: z.string(), version: z.string().nullable() })),
+    })
+    .nullable(),
   rejections: z.array(z.object({ code: z.string(), eventType: z.string(), rejectedAt: z.string() })),
   steps: z.array(
     z.object({
@@ -184,4 +200,25 @@ export async function waitForCase(
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error(`case ${caseId} did not reach the expected state; last seen ${JSON.stringify(last)}`);
+}
+
+/** The operator's admin API key `bootHub` tests register as `HUB_ADMIN_API_KEY`. */
+export const ADMIN_API_KEY = 'test-admin-key';
+
+/** A request to the hub with the admin API key (or `apiKey`, `null` for none); a non-string body is JSON-encoded. */
+export function adminRequest(
+  baseUrl: URL,
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  path: string,
+  options: { body?: unknown; apiKey?: string | null } = {},
+): Promise<Response> {
+  const headers: Record<string, string> = {};
+  const apiKey = options.apiKey === undefined ? ADMIN_API_KEY : options.apiKey;
+  if (apiKey !== null) headers.authorization = `Bearer ${apiKey}`;
+  if (options.body !== undefined) headers['content-type'] = 'application/json';
+  return fetch(new URL(path, baseUrl), {
+    method,
+    headers,
+    body: options.body === undefined ? undefined : typeof options.body === 'string' ? options.body : JSON.stringify(options.body),
+  });
 }

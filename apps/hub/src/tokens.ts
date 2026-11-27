@@ -6,3 +6,6 @@
 export const DATABASE = Symbol('DATABASE');
 export const SOURCE_SYSTEMS = Symbol('SOURCE_SYSTEMS');
 export const INGEST = Symbol('INGEST');
+export const ADMIN_KEY = Symbol('ADMIN_KEY');
+export const CLOCK = Symbol('CLOCK');
+export const CASES = Symbol('CASES');

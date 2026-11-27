@@ -50,6 +50,7 @@ export interface RecordedEvent {
  * stores the event, releases or blocks its step, and stores the re-derived
  * case status (#8). The released step is the outbox entry (ADR 0002): it
  * becomes claimable when this transaction commits.
+ * @throws Problem `CASE_ABANDONED` (409) when an operator abandoned the case (ADR 0007).
  * @throws Problem `EVENT_ALREADY_RECORDED` (409) when the case already has an event of this type.
  * @throws Problem `UNSUPPORTED_MULTI_ITEM` (422) when the case already has a prescription with another item (ADR 0004).
  * @throws Problem `PRESCRIPTION_MISMATCH` (422) when the other event of the prescription/dispense pair is recorded
@@ -77,7 +78,7 @@ export async function recordEvent(
       updated_at: now,
     })
     .onConflict((oc) => oc.constraint('case_source_system_visit_key').doNothing())
-    .returning('id')
+    .returning(['id', 'status'])
     .executeTakeFirst();
 
   if (opened) {
@@ -97,15 +98,17 @@ export async function recordEvent(
   }
 
   // Lock the case so concurrent events for the same visit apply one at a time.
-  const { id } =
+  const { id, status } =
     opened ??
     (await trx
       .selectFrom('case')
-      .select('id')
+      .select(['id', 'status'])
       .where('source_system_id', '=', source.id)
       .where('visit_id', '=', event.visitId)
       .forUpdate()
       .executeTakeFirstOrThrow());
+  // An abandoned case is final (ADR 0007): it takes no more events.
+  if (status === 'abandoned') throw new Problem('CASE_ABANDONED', []);
 
   const stored = await trx
     .insertInto('source_event')

@@ -17,6 +17,8 @@ export interface CaseTable {
   waiting_for: EventType | null;
   /** Since when the case has waited for `waiting_for`; null unless `waiting`. */
   waiting_since: Timestamp | null;
+  /** Since when a `dead_lettered` case has been dead-lettered; null otherwise (#37). */
+  dead_lettered_since: Timestamp | null;
   opened_at: Timestamp;
   updated_at: Timestamp;
 }
@@ -42,6 +44,10 @@ export interface StepTable {
   remote_id: string | null;
   remote_version: string | null;
   dead_letter_reason: DeadLetterReason | null;
+  /** How many of `attempts` came before the step's last replay: the attempt cap counts only the rest (#37). */
+  attempts_before_replay: Generated<number>;
+  /** When the step was last replayed; KFA details fetched before then are fetched again (#10). */
+  replayed_at: Timestamp | null;
   /** The values a completed step sent (#10); null until it completes. Read through `cases/pins.ts`. */
   pins: ColumnType<unknown, string | null, string | null>;
   updated_at: Timestamp;
@@ -141,6 +147,32 @@ export interface LocationMappingTable {
   updated_at: Timestamp;
 }
 
+/** One operator replay of a dead-lettered case (#37). */
+export interface ReplayTable {
+  id: Generated<string>;
+  case_id: string;
+  /** The step replayed: the one that was dead-lettered. */
+  seq: number;
+  /** The dead-letter reason the replay cleared. */
+  reason: DeadLetterReason;
+  note: string | null;
+  replayed_at: Timestamp;
+}
+
+/** An operator's abandonment of a case (ADR 0007): its note, and what the case was left as. */
+export interface AbandonmentTable {
+  case_id: string;
+  note: string;
+  abandoned_at: Timestamp;
+  previous_status: 'waiting' | 'dead_lettered';
+  /** What a waiting case waited for; null otherwise. */
+  waiting_for: EventType | null;
+  /** Why a dead-lettered case was dead-lettered; null otherwise. */
+  dead_letter_reason: DeadLetterReason | null;
+  /** The records completed steps left at SATUSEHAT, as JSON. */
+  remote_records_left: ColumnType<unknown, string, never>;
+}
+
 /** Every table, as Kysely sees it. */
 export interface Database {
   case: CaseTable;
@@ -152,6 +184,8 @@ export interface Database {
   rejection: RejectionTable;
   drug_mapping: DrugMappingTable;
   kfa_product: KfaProductTable;
+  replay: ReplayTable;
+  abandonment: AbandonmentTable;
 }
 
 /**

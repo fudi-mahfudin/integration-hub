@@ -6,8 +6,10 @@ import { Redis } from 'ioredis';
 import { sql, type Kysely } from 'kysely';
 import { Agent } from 'undici';
 import type { MigrationResult } from 'kysely/migration';
+import { AdminKey } from './auth/admin-key.js';
 import { SourceSystems } from './auth/source-systems.js';
 import { CasesController } from './cases/cases.controller.js';
+import { createCases } from './cases/cases.js';
 import type { Clock } from './clock.js';
 import type { HubConfig } from './config.js';
 import { createDatabase, type Database } from './db/database.js';
@@ -22,6 +24,7 @@ import { createPostgresIdempotencyStore } from './ingestion/postgres-idempotency
 import { createKfaClient } from './kfa/kfa-client.js';
 import { loadDrugMappingSeed } from './mapping/drug-mappings.js';
 import { loadLocationMappingSeed } from './mapping/location-mappings.js';
+import { MappingsController } from './mapping/mappings.controller.js';
 import { log } from './observability/log.js';
 import { createOutbox } from './outbox/outbox.js';
 import { createCircuitBreaker, type PlatformApi } from './satusehat/circuit-breaker.js';
@@ -35,14 +38,14 @@ import { submitDispense } from './steps/submit-dispense.js';
 import { submitPrescription } from './steps/submit-prescription.js';
 import { updateVisit } from './steps/update-visit.js';
 import { createWorkerLoop } from './worker/worker.js';
-import { DATABASE, INGEST, SOURCE_SYSTEMS } from './tokens.js';
+import { ADMIN_KEY, CASES, CLOCK, DATABASE, INGEST, SOURCE_SYSTEMS } from './tokens.js';
 
 @Module({})
 class HubServiceModule {
   static register(providers: Provider[]): DynamicModule {
     return {
       module: HubServiceModule,
-      controllers: [HealthController, EventsController, CasesController],
+      controllers: [HealthController, EventsController, CasesController, MappingsController],
       providers: [...providers, { provide: APP_FILTER, useClass: ProblemFilter }],
     };
   }
@@ -86,11 +89,15 @@ export async function createHub(config: HubConfig, runtime: HubRuntime): Promise
       ? createNaiveRedisIdempotencyStore({ db, redis, retentionHours: config.idempotencyRetentionHours })
       : createPostgresIdempotencyStore({ db, clock, retentionHours: config.idempotencyRetentionHours });
   const ingest = createIngest({ store, db, clock });
+  const sources = new SourceSystems(config.sources);
 
   const app = await NestFactory.create<NestFastifyApplication>(
     HubServiceModule.register([
       { provide: DATABASE, useValue: db },
-      { provide: SOURCE_SYSTEMS, useValue: new SourceSystems(config.sources) },
+      { provide: SOURCE_SYSTEMS, useValue: sources },
+      { provide: ADMIN_KEY, useValue: new AdminKey(config.adminApiKey, sources) },
+      { provide: CLOCK, useValue: clock },
+      { provide: CASES, useValue: createCases({ db, clock, stalledAfterMs: config.stalledAfterMs }) },
       { provide: INGEST, useValue: ingest },
     ]),
     new FastifyAdapter(),
