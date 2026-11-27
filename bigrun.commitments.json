@@ -27,11 +27,17 @@
       "$comment": "Seeded, fixed shares of visits; the rest is happy path. Out of order = one event sent before its predecessor. Fallback person lookup = mother's NIK or name+birthDate+gender.",
       "outOfOrder": 0.1,
       "substitution": 0.1,
-      "fallbackPersonLookup": 0.1
+      "fallbackPersonLookup": 0.1,
+      "outOfOrderHoldSeconds": 2
     },
     "faults": {
       "$comment": "One PUT /__mock/faults with bigRun.seed. Weights are percent of every call in the group. Token endpoint excluded; http_400/http_401 never injected.",
       "excludes": ["token"],
+      "params": {
+        "$comment": "Retry-After values the throttling faults carry, and how long a timeout fault holds a request before dropping it: past the 2s call timeout of mockProfile, so the hub times out first.",
+        "retryAfterSeconds": 1,
+        "timeoutHoldSeconds": 3
+      },
       "reads": {
         "match": "GET and search on FHIR, and every KFA call",
         "totalPercent": 30,
@@ -64,6 +70,10 @@
     "mockProfile": {
       "rateLimitRps": { "fhir": 100, "kfa": 50 },
       "callTimeoutSeconds": 2
+    },
+    "tracing": {
+      "$comment": "Share of traces sampled (TRACE_SAMPLE_RATIO), so Jaeger's in-memory store stays bounded.",
+      "sampleRatio": 0.05
     },
     "arrival": {
       "mode": "open-loop",
