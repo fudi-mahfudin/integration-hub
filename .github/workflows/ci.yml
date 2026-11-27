@@ -37,3 +37,29 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm boundaries
       - run: pnpm test
+
+  # The big-run harness at 200 visits (#45): the committed ratios, fault weights and
+  # deadlines against the whole compose stack, so the harness can't rot. Never
+  # published as the big run: its output goes to results/bigrun-unofficial/.
+  bigrun-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm bigrun --ci
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bigrun-ci
+          path: results/bigrun-unofficial/
+          if-no-files-found: ignore
+      - if: always()
+        run: docker compose --profile app logs --no-color --tail 200 hub worker-1 worker-2 mock
+      - if: always()
+        run: docker compose --profile app down -v

@@ -275,19 +275,43 @@ describe('fault rules', () => {
     expect(logged).toMatchObject({ fault: 'hang', effect: 'none', response: { status: null } });
   });
 
-  it('logs a timed-out request once its hold ends, even when the client gave up first', async () => {
-    await mock.client.setFaults({ seed: 1, rules: [{ id: 'hang', match: { method: 'POST' }, kind: 'timeout', params: { ms: 200 }, firstN: 1 }] });
+  it('ends a timed-out request when its client gives up, so a retry right after does not overlap it', async () => {
+    await mock.client.setFaults({ seed: 1, rules: [{ id: 'hang', match: { method: 'POST' }, kind: 'timeout', params: { ms: 2_000 }, firstN: 1 }] });
+    const post = (signal?: AbortSignal) =>
+      fetch(new URL('fhir-r4/v1/Encounter', mock.baseUrl), {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(encounter('V-gave-up')),
+        ...(signal ? { signal } : {}),
+      });
 
+    const gaveUp = await post(AbortSignal.timeout(50)).catch((err: unknown) => err);
+    expect(gaveUp).toBeInstanceOf(DOMException);
+    await vi.waitFor(async () => expect(await mock.client.log({ visitKey: 'V-gave-up' })).toHaveLength(1), { timeout: 1_000 });
+    const [abandoned] = await mock.client.log({ visitKey: 'V-gave-up' });
+    expect(abandoned).toMatchObject({ fault: 'hang', effect: 'none', response: { status: null } });
+    expect(Date.parse(abandoned?.respondedAt ?? '') - Date.parse(abandoned?.receivedAt ?? '')).toBeLessThan(1_000);
+
+    expect((await post()).status).toBe(201);
+    expect((await mock.client.report()).overlap).toEqual([]);
+  });
+
+  it('ends a request applied then held when its client gives up: the effect counts, the hold does not outlast the client', async () => {
+    await mock.client.setFaults({
+      seed: 1,
+      rules: [{ id: 'lost-answer', match: { method: 'POST' }, kind: 'timeout_after_apply', params: { ms: 2_000 }, firstN: 1 }],
+    });
     const gaveUp = await fetch(new URL('fhir-r4/v1/Encounter', mock.baseUrl), {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(encounter('V-gave-up')),
+      body: JSON.stringify(encounter('V-lost-gave-up')),
       signal: AbortSignal.timeout(50),
     }).catch((err: unknown) => err);
-
     expect(gaveUp).toBeInstanceOf(DOMException);
-    await vi.waitFor(async () => expect(await mock.client.log({ visitKey: 'V-gave-up' })).toHaveLength(1), { timeout: 2_000 });
-    expect(await (await search('V-gave-up')).json()).toMatchObject({ total: 0 });
+    await vi.waitFor(async () => expect(await mock.client.log({ visitKey: 'V-lost-gave-up' })).toHaveLength(1), { timeout: 1_000 });
+    const [logged] = await mock.client.log({ visitKey: 'V-lost-gave-up' });
+    expect(logged).toMatchObject({ fault: 'lost-answer', effect: 'created', response: { status: null } });
+    expect(await (await search('V-lost-gave-up')).json()).toMatchObject({ total: 1 });
   });
 
   it('applies a request, then holds it and drops the connection: the record exists though the client saw no answer', async () => {

@@ -11,4 +11,4 @@ export {
   type PlannedVisit,
   type VisitId,
 } from './plan.js';
-export { runBatch, type BatchCase, type BatchResult, type CaseId, type HubTarget, type RunOptions } from './run.js';
+export { runBatch, type BatchCase, type BatchEnding, type BatchResult, type CaseId, type HubTarget, type RunOptions, type SendAnswer } from './run.js';

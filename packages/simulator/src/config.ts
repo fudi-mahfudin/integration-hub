@@ -10,8 +10,10 @@ export interface SimulatorConfig {
   batch: BatchOptions;
   /** How often an unfinished case is read. */
   pollIntervalMs: number;
-  /** How long the cases may take to complete after the last original send. */
-  completionTimeoutMs: number;
+  /** Give up once no step has completed for this long. */
+  noProgressTimeoutMs: number;
+  /** How long the batch may take in all, from its first send. */
+  deadlineMs: number;
 }
 
 type Env = Record<string, string | undefined>;
@@ -41,7 +43,8 @@ const VARIABLES = {
   SIM_DUPLICATE_DELAY_MIN_MS: [ms, '500'],
   SIM_DUPLICATE_DELAY_MAX_MS: [ms, '10000'],
   SIM_POLL_INTERVAL_MS: [z.coerce.number().int().min(10), '1000'],
-  SIM_COMPLETION_TIMEOUT_MS: [ms, '300000'],
+  SIM_NO_PROGRESS_TIMEOUT_MS: [ms, '120000'],
+  SIM_DEADLINE_MS: [ms, '600000'],
 } as const;
 
 type Variable = keyof typeof VARIABLES;
@@ -83,6 +86,7 @@ export function loadConfig(env: Env, now: Date): SimulatorConfig {
       duplicates: { perEvent: read('SIM_DUPLICATES_PER_EVENT'), ...timing, delayedWindowMs: delayWindow },
     },
     pollIntervalMs: read('SIM_POLL_INTERVAL_MS'),
-    completionTimeoutMs: read('SIM_COMPLETION_TIMEOUT_MS'),
+    noProgressTimeoutMs: read('SIM_NO_PROGRESS_TIMEOUT_MS'),
+    deadlineMs: read('SIM_DEADLINE_MS'),
   };
 }

@@ -11,7 +11,7 @@ pnpm --filter @integration-hub/simulator start
 It exits 0 when every check held, and 1 after printing each failed check. Its checks:
 
 - Every original send gets `202`. Every duplicate gets `202` with `Idempotent-Replayed: true` and the original's body. Of a concurrent pair, exactly one is fresh.
-- Every case completes within `SIM_COMPLETION_TIMEOUT_MS` of the last original send. A `dead_lettered` or `abandoned` case fails the batch.
+- Every case completes within `SIM_DEADLINE_MS` of the first send, and some step completes at least every `SIM_NO_PROGRESS_TIMEOUT_MS`. A `dead_lettered` or `abandoned` case fails the batch.
 
 ## What a batch holds
 
@@ -42,7 +42,8 @@ Original sends follow an open loop at a fixed arrival rate: they don't slow down
 | `SIM_DUPLICATES_PER_EVENT` | `0.25` | Share of events (0-1) that get one duplicate |
 | `SIM_DUPLICATES_CONCURRENT` / `_DELAYED` / `_LATE` | `0.5` / `0.3` / `0.2` | How the duplicates are timed; must sum to 1 |
 | `SIM_DUPLICATE_DELAY_MIN_MS` / `_MAX_MS` | `500` / `10000` | The window of a delayed duplicate after the original's `202` |
-| `SIM_POLL_INTERVAL_MS` | `1000` | How often an unfinished case is read |
-| `SIM_COMPLETION_TIMEOUT_MS` | `300000` | How long the cases may take to complete after the last original send |
+| `SIM_POLL_INTERVAL_MS` | `1000` | How often the batch's cases are read (through the case list, a page of 500 at a time) |
+| `SIM_NO_PROGRESS_TIMEOUT_MS` | `120000` | Give up once no step of the batch has completed for this long |
+| `SIM_DEADLINE_MS` | `600000` | How long the batch may take in all, from its first send |
 
 The shares and duplicate timings default to the big run's ratios (`bigrun.commitments.json`).

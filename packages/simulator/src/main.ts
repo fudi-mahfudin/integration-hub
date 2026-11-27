@@ -25,7 +25,8 @@ log('info', 'batch planned', {
 
 const result = await runBatch(plan, config.hub, {
   pollIntervalMs: config.pollIntervalMs,
-  completionTimeoutMs: config.completionTimeoutMs,
+  noProgressTimeoutMs: config.noProgressTimeoutMs,
+  deadlineMs: config.deadlineMs,
   report: (line) => log('info', line),
 });
 for (const problem of result.problems) log('error', problem);

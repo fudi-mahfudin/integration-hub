@@ -23,9 +23,10 @@ export interface Hold {
 
 /**
  * Requests the mock keeps waiting: for a fixed time (a latency or timeout
- * fault), or parked by a hold until a test releases it. A request whose
- * client has gone stays waiting, and is applied when its wait ends, as a
- * request that reached the platform would be. Reset and close drop
+ * fault), or parked by a hold until a test releases it. A delayed or parked
+ * request whose client has gone stays waiting, and is applied when its wait
+ * ends, as a request that reached the platform would be (the server ends a
+ * timeout fault's wait early instead: see `waitUnlessClientGone`). Reset and close drop
  * every one of them, so none outlives the state it was received against.
  */
 export class Parking {
