@@ -24,7 +24,8 @@ export interface SpawnedWorker {
 export async function spawnWorker(env: Record<string, string>): Promise<SpawnedWorker> {
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/worker-main.ts'], {
     cwd: HUB_DIR,
-    env: { ...process.env, ...env },
+    // A random metrics port, so workers spawned side by side never collide.
+    env: { ...process.env, WORKER_PORT: '0', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';

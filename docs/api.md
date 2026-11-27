@@ -4,7 +4,7 @@ The HTTP API the hub service offers to source systems. Domain terms are in [GLOS
 
 ## Authentication
 
-Every request carries `Authorization: Bearer <api key>`. Each source system has one static API key. The source system's identity, and the SATUSEHAT organization it belongs to, come from the key, never from the request body. A missing, malformed or unknown key is [`401 UNAUTHENTICATED`](#unauthenticated).
+Every request under `/v1/` carries `Authorization: Bearer <api key>` ([`/metrics`](#get-metrics) and `/livez` take none). Each source system has one static API key. The source system's identity, and the SATUSEHAT organization it belongs to, come from the key, never from the request body. A missing, malformed or unknown key is [`401 UNAUTHENTICATED`](#unauthenticated).
 
 The operator has one more static key, the **admin API key** (`HUB_ADMIN_API_KEY`; there is no user model, ADR 0001). Only it may call the operator endpoints ([replay](#post-v1casesidreplay), [abandon](#post-v1casesidabandon), [mapping administration](#put-v1adminmappingsdrugslocationslocalcode), [reconciliation](#post-v1adminreconciliationruns)); a source system's key there is [`403 FORBIDDEN`](#forbidden). On the read endpoints ([case list](#get-v1cases), [case](#get-v1casesid), [dead-letter summary](#get-v1dead-letterssummary)) it sees every source system's cases, and a source system's key only that source system's own.
 
@@ -440,6 +440,10 @@ Admin API key only. One run and a page of its findings, in the order it found th
 ## `GET /v1/admin/reconciliation/runs`
 
 Admin API key only. The latest runs, newest first, without their findings: `{ "runs": [ … ] }`. `limit` is 1-100; default 20.
+
+## `GET /metrics`
+
+No API key. Prometheus metrics in its text format, for the Prometheus in `compose.yaml`; each worker serves the same path on `WORKER_PORT` with its own work metrics. Every label value comes from a closed set (event types, HTTP statuses, problem codes, step names, outcomes, dead-letter reasons, platform APIs), never a case or visit id, a person's identifier, a remote id, a code or a URL path. The hub service alone shows the gauges read from the database at each scrape: `cases{status}`, `cases_stalled`, `cases_dead_lettered_oldest_age_seconds`, `outbox_lag_seconds{step}`, `outbox_claimable_steps{step}`, `reconciliation_divergences{class}` and `reconciliation_last_completed_timestamp_seconds` (absent until a run has completed). The full catalogue is in [#15](https://github.com/fudi-mahfudin/integration-hub/issues/15), [#17](https://github.com/fudi-mahfudin/integration-hub/issues/17) and [#41](https://github.com/fudi-mahfudin/integration-hub/issues/41).
 
 ## Errors
 

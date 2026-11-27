@@ -72,8 +72,13 @@ export interface SatusehatConfig {
 export interface HubConfig {
   /** Interface the HTTP server binds to. */
   host: string;
-  /** TCP port the HTTP server listens on; `0` picks a free port. */
+  /** TCP port the hub service's HTTP server listens on; `0` picks a free port. */
   port: number;
+  /**
+   * TCP port a worker serves `/metrics` on (`WORKER_PORT`, default 3002); `0`
+   * picks a free port. Two workers on one host each need their own.
+   */
+  workerPort: number;
   /** Postgres connection URL (`postgres://` or `postgresql://`). */
   databaseUrl: string;
   /** Redis connection URL (`redis://` or `rediss://`). */
@@ -168,7 +173,8 @@ export function loadConfig(env: Env): HubConfig {
   const sources = env.HUB_SOURCES === undefined ? DEV_SOURCES : parseSources(env.HUB_SOURCES);
   return {
     host: parseHost(env.HOST ?? '0.0.0.0'),
-    port: parsePort(env.PORT ?? '3000'),
+    port: parsePort('PORT', env.PORT ?? '3000'),
+    workerPort: parsePort('WORKER_PORT', env.WORKER_PORT ?? '3002'),
     databaseUrl: parseUrl('DATABASE_URL', env.DATABASE_URL ?? 'postgres://hub:hub@localhost:5432/hub', [
       'postgres:',
       'postgresql:',
@@ -225,10 +231,10 @@ function parseHost(raw: string): string {
   return raw;
 }
 
-function parsePort(raw: string): number {
+function parsePort(name: string, raw: string): number {
   const port = Number(raw);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    throw new Error(`PORT must be an integer 0-65535, got "${raw}"`);
+    throw new Error(`${name} must be an integer 0-65535, got "${raw}"`);
   }
   return port;
 }

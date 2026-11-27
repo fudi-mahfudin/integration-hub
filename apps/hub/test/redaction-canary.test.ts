@@ -5,6 +5,7 @@ import { bootHub, type BootedHub } from './support/boot-hub.js';
 import { bootWorker, type BootedWorker } from './support/boot-worker.js';
 import { postEvent, waitForCase } from './support/events.js';
 import { createFreshDatabase, type FreshDatabase } from './support/fresh-database.js';
+import { scrapeMetrics, type Sample } from './support/metrics.js';
 import {
   bootMock,
   world,
@@ -36,7 +37,7 @@ const lineSchema = z
   .loose();
 type Line = z.infer<typeof lineSchema>;
 
-describe('logs: structured, tied to their case, and free of personal data', () => {
+describe('logs and metrics: structured, tied to their case, and free of personal data', () => {
   const written: string[] = [];
   const logs = { write: (line: string) => void written.push(line) };
   let mock: BootedMock;
@@ -46,6 +47,8 @@ describe('logs: structured, tied to their case, and free of personal data', () =
   const visitIds: string[] = [];
   const caseIds: Record<'completed' | 'searchEchoed' | 'createEchoed', string> = { completed: '', searchEchoed: '', createEchoed: '' };
   let lines: Line[] = [];
+  /** Both processes' `/metrics` samples after the scenario. */
+  let scraped: Sample[][] = [];
   let closed = false;
 
   const send = (body: unknown, options: { idempotencyKey?: string; apiKey?: string | null } = {}) =>
@@ -100,6 +103,8 @@ describe('logs: structured, tied to their case, and free of personal data', () =
     });
     caseIds.createEchoed = await deadLetteredVisit(2);
 
+    scraped = await Promise.all([hub.baseUrl, worker.baseUrl].map(scrapeMetrics));
+
     // Closed here, so every line either process writes is captured before the assertions read them.
     closed = true;
     await worker.close();
@@ -123,6 +128,15 @@ describe('logs: structured, tied to their case, and free of personal data', () =
       expect(line).not.toMatch(/\d{16}/);
       expect(line).not.toContain('"visitId"');
     }
+  });
+
+  it('no metric label of either process holds a canary value, a 16-digit run, or a visit id (#41)', () => {
+    const [hubSamples = [], workerSamples = []] = scraped;
+    expect(hubSamples.some((m) => m.name === 'ingest_request_duration_seconds_count')).toBe(true);
+    expect(workerSamples.some((m) => m.name === 'upstream_request_duration_seconds_count')).toBe(true);
+    const labelValues = [...hubSamples, ...workerSamples].flatMap((m) => Object.values(m.labels)).join('\n');
+    for (const canary of [...CANARIES, ...visitIds]) expect(labelValues.includes(canary), `a metric label holds "${canary}"`).toBe(false);
+    expect(labelValues).not.toMatch(/\d{16}/);
   });
 
   it('each service logs as itself, and case-scoped lines carry the case id', () => {

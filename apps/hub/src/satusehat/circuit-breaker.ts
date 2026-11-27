@@ -1,5 +1,6 @@
 import type { Clock } from '../clock.js';
 import type { Log } from '../observability/log.js';
+import type { BreakerState, WorkerMetrics } from '../observability/metrics.js';
 import { CircuitOpen } from './errors.js';
 
 /** The SATUSEHAT APIs the hub calls: FHIR, KFA v2 and the token endpoint, each with its own breaker (#13). */
@@ -26,11 +27,19 @@ export interface CircuitBreaker {
   admit(): (healthy: boolean) => void;
   /** Whether it refuses calls now: a worker claims nothing while any breaker is open. */
   isOpen(): boolean;
+  /** Its state now, for the `circuit_breaker_state` gauge: half-open once `openMs` has passed, until its probe ends. */
+  state(): BreakerState;
 }
 
 /** Builds one platform API's breaker. Only the composition root (and its tests) call this. */
-export function createCircuitBreaker(deps: { api: PlatformApi; clock: Clock; openMs: number; log: Log }): CircuitBreaker {
-  const { api, clock, openMs, log } = deps;
+export function createCircuitBreaker(deps: {
+  api: PlatformApi;
+  clock: Clock;
+  openMs: number;
+  log: Log;
+  metrics: Pick<WorkerMetrics, 'breakerOpened'>;
+}): CircuitBreaker {
+  const { api, clock, openMs, log, metrics } = deps;
   const now = () => clock().getTime();
   let recent: { atMs: number; healthy: boolean }[] = [];
   let openUntilMs: number | null = null;
@@ -41,6 +50,7 @@ export function createCircuitBreaker(deps: { api: PlatformApi; clock: Clock; ope
   function open(reason: string): void {
     openUntilMs = now() + openMs;
     recent = [];
+    metrics.breakerOpened(api);
     log('warn', `circuit breaker opened: ${reason}`, { api, openUntil: new Date(openUntilMs).toISOString() });
   }
 
@@ -69,5 +79,6 @@ export function createCircuitBreaker(deps: { api: PlatformApi; clock: Clock; ope
       };
     },
     isOpen: () => openUntilMs !== null && (!halfOpen() || probeOut),
+    state: () => (openUntilMs === null ? 'closed' : halfOpen() ? 'half_open' : 'open'),
   };
 }

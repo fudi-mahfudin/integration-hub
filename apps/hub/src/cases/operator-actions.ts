@@ -56,16 +56,19 @@ export function replayCase(db: Kysely<Database>, caseId: string, note: string | 
   });
 }
 
+/** The statuses a case may be abandoned from (ADR 0007). */
+export type AbandonableStatus = 'waiting' | 'dead_lettered';
+
 /**
  * Abandons a waiting or dead-lettered case (ADR 0007), in one transaction
  * holding the case row lock: every step not completed becomes `abandoned`,
  * and the case `abandoned`, for good. Nothing is sent to SATUSEHAT. The
  * abandonment records the note, the status the case had, what it waited for
  * or why it was dead-lettered, and the records its completed steps left at
- * SATUSEHAT.
+ * SATUSEHAT. Resolves to the status the case had.
  * @throws Problem `NOT_FOUND`; `CASE_NOT_ABANDONABLE` (409) for a case in any other status.
  */
-export function abandonCase(db: Kysely<Database>, caseId: string, note: string, now: Date): Promise<void> {
+export function abandonCase(db: Kysely<Database>, caseId: string, note: string, now: Date): Promise<AbandonableStatus> {
   return db.transaction().execute(async (trx) => {
     const kase = await lockCase(trx, caseId);
     if (kase.status !== 'waiting' && kase.status !== 'dead_lettered') throw new Problem('CASE_NOT_ABANDONABLE', []);
@@ -105,5 +108,6 @@ export function abandonCase(db: Kysely<Database>, caseId: string, note: string, 
         remote_records_left: JSON.stringify(remoteRecordsLeft),
       })
       .execute();
+    return kase.status;
   });
 }

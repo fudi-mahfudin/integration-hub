@@ -22,6 +22,9 @@ export const COMPLETED_RUN_STATUSES = ['completed', 'completed_with_errors'] as 
  */
 export type ReconciliationCheckOutcome = 'clean' | 'divergent' | 'skipped' | 'unchecked';
 
+/** Every divergence class, for code that must cover them all (the `reconciliation_divergences` gauge). */
+export const DIVERGENCE_CLASSES = ['REMOTE_MISSING', 'REMOTE_UNEXPECTED', 'REMOTE_DUPLICATE', 'REMOTE_ID_MISMATCH', 'FIELD_MISMATCH'] as const;
+
 /**
  * The kinds of divergence (#39). `REMOTE_MISSING`: a completed step's record
  * is not found. `REMOTE_UNEXPECTED`: a record is found for a step that is not
@@ -30,7 +33,7 @@ export type ReconciliationCheckOutcome = 'clean' | 'divergent' | 'skipped' | 'un
  * step stored. `FIELD_MISMATCH`: the stored record holds another value in a
  * compared field.
  */
-export type DivergenceClass = 'REMOTE_MISSING' | 'REMOTE_UNEXPECTED' | 'REMOTE_DUPLICATE' | 'REMOTE_ID_MISMATCH' | 'FIELD_MISMATCH';
+export type DivergenceClass = (typeof DIVERGENCE_CLASSES)[number];
 
 /** Fields that hold a person's IHS number: a finding says only that they differ, never their values. */
 const IHS_FIELDS = new Set(['subject', 'participant.individual', 'requester', 'performer.actor']);

@@ -1,6 +1,7 @@
 import type { Kysely } from 'kysely';
 import type { Clock } from '../clock.js';
 import type { Database } from '../db/database.js';
+import type { HubMetrics } from '../observability/metrics.js';
 import { abandonCase, replayCase } from './operator-actions.js';
 import type { CaseScope } from './case-summary.js';
 import { summariseDeadLetters, type DeadLetterGroup } from './dead-letter-summary.js';
@@ -22,8 +23,8 @@ export interface Cases {
 }
 
 /** Builds the cases module over the hub database. Only the composition root calls this. */
-export function createCases(deps: { db: Kysely<Database>; clock: Clock; stalledAfterMs: number }): Cases {
-  const { db, clock, stalledAfterMs } = deps;
+export function createCases(deps: { db: Kysely<Database>; clock: Clock; stalledAfterMs: number; metrics: Pick<HubMetrics, 'caseAbandoned'> }): Cases {
+  const { db, clock, stalledAfterMs, metrics } = deps;
   const read = (scope: CaseScope, caseId: string) => readCase(db, scope, caseId, { now: clock(), stalledAfterMs });
   const readActedOn = async (caseId: string) => {
     const view = await read('operator', caseId);
@@ -39,7 +40,7 @@ export function createCases(deps: { db: Kysely<Database>; clock: Clock; stalledA
       return readActedOn(caseId);
     },
     async abandon(caseId, note) {
-      await abandonCase(db, caseId, note, clock());
+      metrics.caseAbandoned(await abandonCase(db, caseId, note, clock()));
       return readActedOn(caseId);
     },
   };

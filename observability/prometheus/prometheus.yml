@@ -1,0 +1,17 @@
+# Scrapes the hub service and the workers every 5s (#41). They run on the
+# host (see the README), so Prometheus reaches them through host.docker.internal.
+# No alert rules and no Alertmanager (#15): the stalled flag and the
+# dead-letter screen are the operator's signals.
+global:
+  scrape_interval: 5s
+  scrape_timeout: 4s
+
+scrape_configs:
+  # Serves the database-derived gauges as well as its own ingest metrics.
+  - job_name: hub
+    static_configs:
+      - targets: ["host.docker.internal:3000"]
+  # One target per worker process (WORKER_PROCESSES=2): WORKER_PORT 3002 and 3003.
+  - job_name: worker
+    static_configs:
+      - targets: ["host.docker.internal:3002", "host.docker.internal:3003"]

@@ -13,3 +13,5 @@ export const CASES = Symbol('CASES');
 export const RECONCILIATION = Symbol('RECONCILIATION');
 /** The hub service's log (#40). */
 export const LOG = Symbol('LOG');
+/** The process's metrics: `HubMetrics` in the hub service (#41). */
+export const METRICS = Symbol('METRICS');

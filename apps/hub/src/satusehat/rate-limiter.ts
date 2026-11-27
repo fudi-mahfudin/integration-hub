@@ -1,6 +1,7 @@
 import type { Redis } from 'ioredis';
 import type { Clock } from '../clock.js';
 import type { Log } from '../observability/log.js';
+import type { LimiterMode, WorkerMetrics } from '../observability/metrics.js';
 import type { PlatformApi } from './circuit-breaker.js';
 
 /** The platform APIs the hub rate-limits itself on (#13); the token endpoint has its own backoff instead. */
@@ -75,8 +76,9 @@ export function createRateLimiter(deps: {
   /** How many worker processes share the rate: a process alone without Redis takes this share of it. */
   workerProcesses: number;
   log: Log;
+  metrics: Pick<WorkerMetrics, 'limiterWaited'>;
 }): RateLimiter {
-  const { redis, clock, urls, rps, workerProcesses, log } = deps;
+  const { redis, clock, urls, rps, workerProcesses, log, metrics } = deps;
   const now = () => clock().getTime();
   const shared = { fhir: bucketOf(rps.fhir), kfa: bucketOf(rps.kfa) };
   const own = { fhir: bucketOf(rps.fhir / workerProcesses), kfa: bucketOf(rps.kfa / workerProcesses) };
@@ -104,22 +106,24 @@ export function createRateLimiter(deps: {
     log('info', 'the shared rate limit is reachable in Redis again');
   }
 
-  async function reserve(api: RateLimitedApi): Promise<number> {
+  /** Reserves one call: how long to wait for it, and which bucket it came from. */
+  async function reserve(api: RateLimitedApi): Promise<{ waitMs: number; mode: LimiterMode }> {
     const at = now();
     const { intervalMs, burst } = shared[api];
     try {
-      const wait = Number(await redis.eval(RESERVE, 1, key(api), at, intervalMs, burst));
+      const waitMs = Number(await redis.eval(RESERVE, 1, key(api), at, intervalMs, burst));
       recovered();
-      return wait;
+      return { waitMs, mode: 'redis' };
     } catch (err) {
       fellBack(err);
-      return reserveOwn(api, at);
+      return { waitMs: reserveOwn(api, at), mode: 'local_fallback' };
     }
   }
 
   return {
     async acquire(api) {
-      const waitMs = await reserve(api);
+      const { waitMs, mode } = await reserve(api);
+      metrics.limiterWaited(api, mode, waitMs / 1000);
       if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
     },
     async holdOff(api, until) {

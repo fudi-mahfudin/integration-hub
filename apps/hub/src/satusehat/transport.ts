@@ -1,5 +1,6 @@
 import { fetch, type Dispatcher } from 'undici';
 import type { Clock } from '../clock.js';
+import { stopwatch, type PlatformOperation, type PlatformStatusClass, type WorkerMetrics } from '../observability/metrics.js';
 import type { CircuitBreaker } from './circuit-breaker.js';
 import type { RateLimitedApi, RateLimiter } from './rate-limiter.js';
 import { AttemptBudgetExceeded, SatusehatNetworkError, SatusehatTimeoutError } from './errors.js';
@@ -97,6 +98,32 @@ export function isTransientStatus(status: number): boolean {
   return status >= 500 || status === 408 || status === 429;
 }
 
+/** The class of an answer's status for the upstream metric (#15): 429 apart from the other 4xx; anything below 400 counts as `2xx`. */
+export function statusClassOf(status: number): PlatformStatusClass {
+  if (status === 429) return '429';
+  if (status >= 500) return '5xx';
+  if (status >= 400) return '4xx';
+  return '2xx';
+}
+
+/** The class of a call that got no answer: `timeout` (the call or connect timeout) or `network`; null for any other error. */
+function noAnswerClassOf(err: unknown): PlatformStatusClass | null {
+  if (err instanceof SatusehatTimeoutError) return 'timeout';
+  if (err instanceof SatusehatNetworkError) return 'network';
+  return null;
+}
+
+/** Whether undici failed a fetch because connecting outlasted the pool's connect timeout: its own error, not the abort signal's. */
+export function isConnectTimeout(err: unknown): boolean {
+  return err instanceof Error && err.cause instanceof Error && 'code' in err.cause && err.cause.code === 'UND_ERR_CONNECT_TIMEOUT';
+}
+
+/** What kind of call a request is: every FHIR read is a search (the hub reads by business identifier), every KFA v2 call a lookup. */
+function operationOf(request: SatusehatRequest): PlatformOperation {
+  if (request.api === 'kfa') return 'lookup';
+  return request.method === 'GET' ? 'search' : request.method === 'POST' ? 'create' : 'update';
+}
+
 /** Builds the transport over one process's tokens and connection pool. Only the composition root calls this. */
 export function createSatusehatTransport(deps: {
   tokens: AccessTokens;
@@ -111,8 +138,9 @@ export function createSatusehatTransport(deps: {
   clock: Clock;
   /** Draws from [0, 1), for the read retries' jitter. */
   random: () => number;
+  metrics: Pick<WorkerMetrics, 'platformRequest'>;
 }): SatusehatTransport {
-  const { tokens, breakers, limiter, dispatcher, callTimeoutMs, connectTimeoutMs, clock, random } = deps;
+  const { tokens, breakers, limiter, dispatcher, callTimeoutMs, connectTimeoutMs, clock, random, metrics } = deps;
 
   function checkBudget(calls: AttemptCalls, request: SatusehatRequest): void {
     const remainingMs = calls.budgetEndsAt.getTime() - clock().getTime();
@@ -128,13 +156,19 @@ export function createSatusehatTransport(deps: {
     await limiter.acquire(request.api);
     checkBudget(calls, request);
     const report = breakers[request.api].admit();
+    const elapsed = stopwatch();
+    const measured = (statusClass: PlatformStatusClass | null) => {
+      if (statusClass !== null) metrics.platformRequest(request.api, operationOf(request), statusClass, elapsed());
+    };
     let answer: SatusehatAnswer;
     try {
       answer = await exchangeOnce(request, token);
     } catch (err) {
       report(false);
+      measured(noAnswerClassOf(err));
       throw err;
     }
+    measured(statusClassOf(answer.status));
     report(answer.status < 500);
     if (answer.status === 429) await limiter.holdOff(request.api, answer.retryAfter);
     return answer;
@@ -155,8 +189,7 @@ export function createSatusehatTransport(deps: {
       return { status: res.status, text: await res.text(), retryAfter: parseRetryAfter(res.headers.get('retry-after'), clock()) };
     } catch (err) {
       if (signal.aborted) throw new SatusehatTimeoutError(method, url, callTimeoutMs, { cause: err });
-      // undici fails a connect that outlasts the pool's connect timeout with its own error, not through the signal.
-      if (err instanceof Error && err.cause instanceof Error && 'code' in err.cause && err.cause.code === 'UND_ERR_CONNECT_TIMEOUT') {
+      if (isConnectTimeout(err)) {
         throw new SatusehatTimeoutError(method, url, connectTimeoutMs, { cause: err });
       }
       throw new SatusehatNetworkError(method, url, { cause: err });
