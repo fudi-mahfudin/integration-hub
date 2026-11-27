@@ -14,6 +14,7 @@ import { readSteps, writeCaseStatus } from '../cases/case-status.js';
 import type { Clock } from '../clock.js';
 import type { AttemptOutcome, Database } from '../db/database.js';
 import type { WorkerMetrics } from '../observability/metrics.js';
+import type { Traceparent } from '../observability/tracing.js';
 import type { AttemptFacts, FinalOutcome } from '../steps/step-outcome.js';
 import type { ReadRetry } from '../satusehat/transport.js';
 import { nextAttemptAt, type RetryPolicy } from './retry-policy.js';
@@ -39,6 +40,8 @@ export interface ClaimedStep {
   /** The case's organization, from its source system's registration (#10). */
   organizationId: OrganizationId;
   visitId: VisitId;
+  /** The traceparent of the ingest span that accepted the step's event (#42): the attempt joins its trace. Null when it was not traced. */
+  traceparent: Traceparent | null;
 }
 
 /** An attempt that ended transiently: how, what it saw, and the answer's `Retry-After`, if any. */
@@ -235,7 +238,8 @@ export function createOutbox(deps: {
            and c.id = s.case_id
         returning s.case_id as "caseId", s.seq, s.name, s.attempts as attempt, s.attempts - s.attempts_before_replay as "capAttempt",
                   s.replayed_at as "replayedAt", s.lease_token as "leaseToken",
-                  c.source_system_id as "sourceSystemId", c.organization_id as "organizationId", c.visit_id as "visitId"
+                  c.source_system_id as "sourceSystemId", c.organization_id as "organizationId", c.visit_id as "visitId",
+                  (select e.traceparent from source_event e where e.case_id = s.case_id and e.type = s.event_type) as traceparent
       `.execute(trx);
       const [taken] = rows;
       if (!taken) throw new Error(`invariant broken: step ${caseId}/${row.seq}, locked for the claim, was not updated`);

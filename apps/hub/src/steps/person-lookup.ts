@@ -1,6 +1,7 @@
 import type { DeadLetterReason } from '../cases/case-model.js';
 import type { PatientFacts, PractitionerFacts } from '../ingestion/event-schema.js';
 import type { IhsNumber, NameBirthDateGender, SatusehatClient } from '../satusehat/client.js';
+import { inSpan } from '../observability/tracing.js';
 import type { AttemptFacts, LookupMethod } from './step-outcome.js';
 
 /** Who a step looks up. */
@@ -64,7 +65,18 @@ export function lookUpPractitioner(
  * any search is not found. Both dead-letter the step permanently: the same
  * data would find the same records on a retry.
  */
-async function lookUp(person: LookedUpPerson, searches: readonly PersonSearch[], attempt: AttemptFacts): Promise<PersonLookup> {
+function lookUp(person: LookedUpPerson, searches: readonly PersonSearch[], attempt: AttemptFacts): Promise<PersonLookup> {
+  // One `ihs.lookup` span per person (#42): the searches it ran are its children.
+  return inSpan('ihs.lookup', { person }, async (span) => {
+    const found = await runLookUp(person, searches, attempt);
+    span.setAttribute('lookup.result', 'found' in found ? 'found' : found.deadLettered);
+    const method = attempt.lookupMethods[person];
+    if ('found' in found && method !== undefined) span.setAttribute('lookup.method', method);
+    return found;
+  });
+}
+
+async function runLookUp(person: LookedUpPerson, searches: readonly PersonSearch[], attempt: AttemptFacts): Promise<PersonLookup> {
   const reason = person === 'patient' ? ({ notFound: 'PATIENT_NOT_FOUND', ambiguous: 'PATIENT_AMBIGUOUS' } as const)
     : ({ notFound: 'PRACTITIONER_NOT_FOUND', ambiguous: 'PRACTITIONER_AMBIGUOUS' } as const);
   for (const search of searches) {

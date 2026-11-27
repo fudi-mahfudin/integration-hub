@@ -6,6 +6,7 @@ import type { Clock } from '../clock.js';
 import type { Database } from '../db/database.js';
 import type { Log } from '../observability/log.js';
 import { stopwatch, type RunMetricOutcome, type WorkerMetrics } from '../observability/metrics.js';
+import { inCaseTrace, inSpan } from '../observability/tracing.js';
 import type { RecordAtSatusehat, SatusehatClient } from '../satusehat/client.js';
 import type { AttemptCalls } from '../satusehat/transport.js';
 import { compareResource, type Divergence, type ExpectedRecord, type ReconciliationCheckOutcome } from './model.js';
@@ -182,8 +183,18 @@ export function createReconciler(deps: {
     return 'failed';
   }
 
-  /** Checks one case and records how the check ended, with what it found. */
-  async function checkCase(session: Kysely<Database>, runId: string, caseId: CaseId): Promise<ReconciliationCheckOutcome> {
+  /** Checks one case and records how the check ended, with what it found. Each check is its own trace (#42), carrying the case id. */
+  function checkCase(session: Kysely<Database>, runId: string, caseId: CaseId): Promise<ReconciliationCheckOutcome> {
+    return inCaseTrace(null, caseId, () =>
+      inSpan('reconciliation.check', { 'reconciliation.run_id': runId }, async (span) => {
+        const outcome = await runCheck(session, runId, caseId);
+        span.setAttribute('outcome', outcome);
+        return outcome;
+      }),
+    );
+  }
+
+  async function runCheck(session: Kysely<Database>, runId: string, caseId: CaseId): Promise<ReconciliationCheckOutcome> {
     const record = (outcome: ReconciliationCheckOutcome, findings: Finding[]) => recordCheck(session, runId, caseId, outcome, findings);
     const atRest = await readCaseAtRest(session, caseId);
     // A case that is moving again since the run listed it is not at rest.

@@ -22,7 +22,7 @@ export interface SpawnedWorker {
  * test can crash a worker for real (#5): a SIGKILL leaves no chance to clean up.
  */
 export async function spawnWorker(env: Record<string, string>): Promise<SpawnedWorker> {
-  const child = spawn(process.execPath, ['--import', 'tsx', 'src/worker-main.ts'], {
+  const child = spawn(process.execPath, ['--import', 'tsx', '--import', './src/instrumentation.ts', 'src/worker-main.ts'], {
     cwd: HUB_DIR,
     // A random metrics port, so workers spawned side by side never collide.
     env: { ...process.env, WORKER_PORT: '0', ...env },

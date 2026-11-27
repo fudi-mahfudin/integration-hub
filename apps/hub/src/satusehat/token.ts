@@ -2,6 +2,7 @@ import { fetch, type Dispatcher } from 'undici';
 import { z } from 'zod';
 import type { Clock } from '../clock.js';
 import { stopwatch, type WorkerMetrics } from '../observability/metrics.js';
+import { inSpan } from '../observability/tracing.js';
 import type { SatusehatConfig } from '../config.js';
 import { SatusehatRequestError, SatusehatResponseError, TokenUnavailable } from './errors.js';
 import type { CircuitBreaker } from './circuit-breaker.js';
@@ -65,7 +66,10 @@ export function createAccessTokens(deps: {
   const valid = (at: number) => (cached && at < cached.expiresAtMs ? cached.token : undefined);
   const mayFetch = (at: number) => lastFetchedAtMs === undefined || at - lastFetchedAtMs >= config.tokenMinIntervalMs;
 
-  async function request(): Promise<string> {
+  /** One token request, under an `auth.token` span (#42). */
+  const request = () => inSpan('auth.token', {}, requestToken);
+
+  async function requestToken(): Promise<string> {
     const url = new URL('accesstoken?grant_type=client_credentials', config.authUrl);
     const requestedAtMs = now();
     const elapsed = stopwatch();

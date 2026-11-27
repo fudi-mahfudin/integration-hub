@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 import { z } from 'zod';
+import { startTracing, type Tracing } from '../src/observability/tracing.js';
 import { bootHub, type BootedHub } from './support/boot-hub.js';
 import { bootWorker, type BootedWorker } from './support/boot-worker.js';
 import { postEvent, waitForCase } from './support/events.js';
 import { createFreshDatabase, type FreshDatabase } from './support/fresh-database.js';
 import { scrapeMetrics, type Sample } from './support/metrics.js';
+import { collectingExporter } from './support/traces.js';
 import {
   bootMock,
   world,
@@ -37,8 +40,11 @@ const lineSchema = z
   .loose();
 type Line = z.infer<typeof lineSchema>;
 
-describe('logs and metrics: structured, tied to their case, and free of personal data', () => {
+describe('logs, metrics and traces: structured, tied to their case, and free of personal data', () => {
   const written: string[] = [];
+  const exporter = collectingExporter();
+  let tracing: Tracing;
+  let spans: ReadableSpan[] = [];
   const logs = { write: (line: string) => void written.push(line) };
   let mock: BootedMock;
   let database: FreshDatabase;
@@ -68,6 +74,7 @@ describe('logs and metrics: structured, tied to their case, and free of personal
   }
 
   beforeAll(async () => {
+    tracing = startTracing({ service: 'hub', sampleRatio: 1, exporter });
     mock = await bootMock();
     database = await createFreshDatabase();
     const env = { ...worldEnv(mock.baseUrl, database.url), RETRY_BACKOFF_BASE_MS: '10', RETRY_BACKOFF_CAP_MS: '50' };
@@ -109,6 +116,8 @@ describe('logs and metrics: structured, tied to their case, and free of personal
     closed = true;
     await worker.close();
     await hub.close();
+    await tracing.shutdown();
+    spans = exporter.spans;
     lines = written.map((line) => lineSchema.parse(JSON.parse(line)));
   }, 60_000);
 
@@ -116,6 +125,7 @@ describe('logs and metrics: structured, tied to their case, and free of personal
     if (!closed) {
       await worker?.close();
       await hub?.close();
+      await tracing?.shutdown();
     }
     await database?.drop();
     await mock?.close();
@@ -139,9 +149,28 @@ describe('logs and metrics: structured, tied to their case, and free of personal
     expect(labelValues).not.toMatch(/\d{16}/);
   });
 
+  it('no span name, attribute, event or status message holds a canary value, a 16-digit run, or a visit id (#42)', () => {
+    expect(spans.some((s) => s.name === 'ihs.lookup')).toBe(true);
+    expect(spans.some((s) => s.events.some((e) => e.name === 'exception'))).toBe(true);
+    for (const span of spans) {
+      const exported = JSON.stringify({ name: span.name, attributes: span.attributes, events: span.events, status: span.status, links: span.links });
+      for (const canary of [...CANARIES, ...visitIds]) expect(exported, `span ${span.name} holds "${canary}"`).not.toContain(canary);
+      expect(exported).not.toMatch(/\d{16}/);
+    }
+  });
+
   it('each service logs as itself, and case-scoped lines carry the case id', () => {
     expect(lines).toContainEqual(expect.objectContaining({ service: 'hub', level: 'info', msg: 'source event accepted', caseId: caseIds.completed }));
     expect(lines).toContainEqual(expect.objectContaining({ service: 'worker', msg: 'worker claiming steps' }));
+  });
+
+  it('a line logged in a traced request or attempt carries its trace and span ids (#40, #42)', () => {
+    const traced = { traceId: expect.stringMatching(/^[0-9a-f]{32}$/), spanId: expect.stringMatching(/^[0-9a-f]{16}$/) };
+    const accepted = lines.find((l) => l.msg === 'source event accepted' && l.caseId === caseIds.completed);
+    expect(accepted).toMatchObject(traced);
+    const failed = lines.find((l) => l.service === 'worker' && l.caseId === caseIds.completed && l.level === 'warn');
+    expect(failed).toMatchObject(traced);
+    expect(spans.some((s) => s.spanContext().traceId === failed?.traceId && s.spanContext().spanId === failed?.spanId && s.name === 'step.attempt')).toBe(true);
   });
 
   it('a transient attempt failure is a warn with its step, attempt and code', () => {

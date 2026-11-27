@@ -1,5 +1,8 @@
 import type { StepName } from '../cases/case-model.js';
+import { SpanStatusCode, type Span } from '@opentelemetry/api';
+import type { AttemptOutcome } from '../db/database.js';
 import type { Log } from '../observability/log.js';
+import { failSpan, inCaseTrace, inSpan, recordEndedSpan } from '../observability/tracing.js';
 import type { CircuitBreaker } from '../satusehat/circuit-breaker.js';
 import type { ClaimedStep, Outbox } from '../outbox/outbox.js';
 import { SatusehatRequestError } from '../satusehat/errors.js';
@@ -9,6 +12,13 @@ import { classifyFailure } from './failure-class.js';
 
 /** Logged when a claim that lost its lease reaches an outcome. */
 const OUTCOME_DISCARDED = 'the lease was lost before the outcome was stored; the outcome is discarded';
+
+/**
+ * How an attempt ended, on its `step.attempt` span (#42): its outcome in the
+ * attempt log, `lease_lost` when the lease was lost before the outcome was
+ * stored, or `unrecorded` when nothing was stored (no runner, or storing failed).
+ */
+type AttemptSpanOutcome = Exclude<AttemptOutcome, 'discarded' | 'lease_expired'> | 'lease_lost' | 'unrecorded';
 
 /** Carries out one attempt at a step it holds the lease on; its SATUSEHAT calls share `calls`. */
 export type StepRunner = (step: ClaimedStep, calls: AttemptCalls) => Promise<StepOutcome>;
@@ -28,6 +38,10 @@ export interface Worker {
  * a transient one sends it to `retry_wait` (or, on its last allowed attempt,
  * dead-letters it `RETRIES_EXHAUSTED`). While any of `breakers` is open, it
  * claims nothing (#13), so a down platform consumes no attempts.
+ *
+ * Each claim is traced (#42) in the trace of the ingest span that accepted
+ * the step's event: a `step.claim` span, then a `step.attempt` span over the
+ * attempt, both children of that ingest span. A poll that claims nothing makes no span.
  */
 export function createWorkerLoop(deps: {
   outbox: Outbox;
@@ -53,12 +67,23 @@ export function createWorkerLoop(deps: {
       };
     });
 
-  async function attempt(step: ClaimedStep): Promise<void> {
+  /** Traces a claim, then carries out its attempt under a `step.attempt` span. */
+  function claimed(step: ClaimedStep, claimStartedAt: Date): Promise<void> {
+    const attributes = { step: step.name, attempt: step.attempt };
+    return inCaseTrace(step.traceparent, step.caseId, async () => {
+      recordEndedSpan('step.claim', attributes, claimStartedAt);
+      await inSpan('step.attempt', attributes, async (span) => {
+        span.setAttribute('outcome', await attempt(step, span));
+      });
+    });
+  }
+
+  async function attempt(step: ClaimedStep, span: Span): Promise<AttemptSpanOutcome> {
     const fields = { caseId: step.caseId, step: step.name, attempt: step.attempt };
     const runner = runners[step.name];
     if (!runner) {
       log('error', 'no runner for a claimed step; it stays in flight until its lease expires', fields);
-      return;
+      return 'unrecorded';
     }
     const calls: AttemptCalls = { budgetEndsAt: new Date(step.startedAt.getTime() + attemptBudgetMs), readRetries: [] };
     try {
@@ -79,14 +104,20 @@ export function createWorkerLoop(deps: {
           refreshed: { step: storedBy, remote: now },
         });
         if (stored === 'lease_lost') log('warn', 'the lease was lost before the refresh was stored; nothing is stored', fields);
-        return;
+        return stored === 'lease_lost' ? 'lease_lost' : 'failed';
       }
       if (!(await outbox.storeOutcome(step, outcome, calls.readRetries))) {
         log('warn', OUTCOME_DISCARDED, fields);
-      } else if ('deadLettered' in outcome) {
-        log('error', 'step dead-lettered', { ...fields, errorCode: outcome.deadLettered });
+        return 'lease_lost';
       }
+      if ('deadLettered' in outcome) {
+        log('error', 'step dead-lettered', { ...fields, errorCode: outcome.deadLettered });
+        span.setStatus({ code: SpanStatusCode.ERROR, message: outcome.deadLettered });
+        return 'dead_lettered';
+      }
+      return 'completed';
     } catch (err) {
+      failSpan(span, err);
       const failure = classifyFailure(err);
       const facts = failedAttemptFacts(err);
       try {
@@ -94,8 +125,9 @@ export function createWorkerLoop(deps: {
           log('error', 'attempt failed permanently; the step is dead-lettered', { ...fields, errorCode: failure.permanent, error: err });
           if (!(await outbox.storeOutcome(step, { deadLettered: failure.permanent, attempt: facts }, calls.readRetries))) {
             log('warn', OUTCOME_DISCARDED, fields);
+            return 'lease_lost';
           }
-          return;
+          return 'dead_lettered';
         }
         const stored = await outbox.storeTransient(step, { outcome: failure.transient, facts, readRetries: calls.readRetries, retryAfter: failure.retryAfter, refreshed: null });
         const message = {
@@ -105,9 +137,11 @@ export function createWorkerLoop(deps: {
         }[stored];
         const errorCode = stored === 'exhausted' ? 'RETRIES_EXHAUSTED' : failure.transient;
         log(stored === 'exhausted' ? 'error' : 'warn', message, { ...fields, errorCode, error: err });
+        return stored === 'lease_lost' ? 'lease_lost' : failure.transient;
       } catch (storeErr) {
         // The step stays in flight; its lease expires and another claim takes it over as `lease_expired`.
         log('error', 'storing the failed attempt failed; the step is retried once its lease expires', { ...fields, error: storeErr, attemptError: err });
+        return 'unrecorded';
       }
     }
   }
@@ -119,13 +153,15 @@ export function createWorkerLoop(deps: {
         await idle();
         continue;
       }
+      // The wall clock, as every span is timed: when the claim span started.
+      const claimStartedAt = new Date();
       try {
         step = await outbox.claim();
       } catch (err) {
         // The next poll claims again; nothing was taken.
         log('error', 'claiming a step failed', { error: err });
       }
-      if (step) await attempt(step);
+      if (step) await claimed(step, claimStartedAt);
       else if (running) await idle();
     }
   }

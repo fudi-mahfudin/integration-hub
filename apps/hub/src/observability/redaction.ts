@@ -1,5 +1,9 @@
-// The one redaction module (#15, #40): everything a log line carries passes
-// through `redact` centrally, in the logger; call sites never redact.
+// The one redaction module (#15, #40, #42): everything a log line carries
+// passes through `redact` centrally, in the logger, and every span through
+// `redactingSpanExporter`, in front of the trace exporter; call sites never redact.
+
+import type { Attributes, AttributeValue } from '@opentelemetry/api';
+import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace';
 
 /** A key as the key lists compare it: lower case, letters and digits only. */
 function normalizeKey(key: string): string {
@@ -77,4 +81,64 @@ export function redact(value: unknown): unknown {
     );
   }
   return value;
+}
+
+/** Span attributes that hold a URL or request target: kept without the query, which may carry a NIK or a name (#15). */
+const URL_ATTRIBUTES = new Set(['url.full', 'http.url', 'http.target']);
+
+/** Span attributes that hold nothing but a query string, dropped whole. */
+const QUERY_ATTRIBUTES = new Set(['url.query']);
+
+/** `attributes` fit for export: queries cut off URLs, then redacted as a log line's fields are. */
+function redactAttributes(attributes: Attributes): Attributes {
+  const withoutQueries = Object.fromEntries(
+    Object.entries(attributes)
+      .filter(([key]) => !QUERY_ATTRIBUTES.has(key))
+      .map(([key, value]): [string, AttributeValue | undefined] => [key, URL_ATTRIBUTES.has(key) && typeof value === 'string' ? value.split('?')[0] : value]),
+  );
+  // `redact` takes and returns `unknown`; a record of attribute values in gives one out (strings scrubbed, keys kept or replaced by REDACTED).
+  return redact(withoutQueries) as Attributes;
+}
+
+/** A copy of `span` fit for export: its name, attributes, events, links and status message redacted; its identity, parentage and timing kept. */
+function redactSpan(span: ReadableSpan): ReadableSpan {
+  return {
+    name: scrub(span.name),
+    kind: span.kind,
+    spanContext: () => span.spanContext(),
+    ...(span.parentSpanContext === undefined ? {} : { parentSpanContext: span.parentSpanContext }),
+    startTime: span.startTime,
+    endTime: span.endTime,
+    status: span.status.message === undefined ? span.status : { ...span.status, message: scrub(span.status.message) },
+    attributes: redactAttributes(span.attributes),
+    links: span.links.map((link) => ({ ...link, ...(link.attributes === undefined ? {} : { attributes: redactAttributes(link.attributes) }) })),
+    events: span.events.map((event) => ({
+      ...event,
+      name: scrub(event.name),
+      ...(event.attributes === undefined ? {} : { attributes: redactAttributes(event.attributes) }),
+    })),
+    duration: span.duration,
+    ended: span.ended,
+    resource: span.resource,
+    instrumentationScope: span.instrumentationScope,
+    droppedAttributesCount: span.droppedAttributesCount,
+    droppedEventsCount: span.droppedEventsCount,
+    droppedLinksCount: span.droppedLinksCount,
+  };
+}
+
+/**
+ * Wraps the trace exporter (#15): every span is redacted before `exporter`
+ * sees it. Span names, attribute values, event names and attributes (exception
+ * messages and stack traces included) and status messages are scrubbed; values
+ * under the key list are replaced; URLs lose their query string.
+ */
+export function redactingSpanExporter(exporter: SpanExporter): SpanExporter {
+  return {
+    export: (spans, resultCallback) => exporter.export(spans.map(redactSpan), resultCallback),
+    shutdown: () => exporter.shutdown(),
+    forceFlush: async () => {
+      await exporter.forceFlush?.();
+    },
+  };
 }

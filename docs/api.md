@@ -17,6 +17,7 @@ Sends one source event.
 | Header | Rules |
 |---|---|
 | `Authorization` | `Bearer <api key>` |
+| `traceparent` | Optional. A W3C trace context: the request's spans join the caller's trace, sampled or not as it decides. Without it, the hub starts a trace. |
 | `Idempotency-Key` | Required. An opaque string of 1-255 characters; it doesn't have to be a UUID. Missing: [`400 IDEMPOTENCY_KEY_MISSING`](#idempotency_key_missing). Empty or longer than 255: [`400 IDEMPOTENCY_KEY_INVALID`](#idempotency_key_invalid). |
 
 ### Order of checks

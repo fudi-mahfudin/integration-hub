@@ -77,7 +77,7 @@ To run the hub service itself:
 
 ```sh
 pnpm build
-node apps/hub/dist/main.js     # serves http://localhost:3000
+pnpm --filter @integration-hub/hub start # serves http://localhost:3000
 ```
 
 Then send a source event as the development source system (its API key, `dev-source-key`, is public and for local runs only; production sets `HUB_SOURCES`):
@@ -95,8 +95,8 @@ The API is described in [docs/api.md](docs/api.md).
 To deliver accepted visits to SATUSEHAT, also run the mock SATUSEHAT and the worker process (each in its own terminal, after `pnpm build`). The worker's defaults point at the mock on port 3001 with its public development credentials:
 
 ```sh
-node packages/mock-satusehat/dist/main.js   # mock SATUSEHAT on http://localhost:3001
-node apps/hub/dist/worker-main.js           # claims steps from the Postgres outbox
+node packages/mock-satusehat/dist/main.js         # mock SATUSEHAT on http://localhost:3001
+pnpm --filter @integration-hub/hub start:worker   # claims steps from the Postgres outbox
 ```
 
 Each worker serves its metrics on `http://localhost:3002/metrics` (`WORKER_PORT`; a second worker on the same host needs another, e.g. `WORKER_PORT=3003`), and the hub service on `http://localhost:3000/metrics`. To see them in Grafana:
@@ -105,7 +105,11 @@ Each worker serves its metrics on `http://localhost:3002/metrics` (`WORKER_PORT`
 pnpm obs:up   # start Prometheus (http://localhost:9090) and Grafana (http://localhost:3300), wait until healthy
 ```
 
+Both start scripts preload `dist/instrumentation.js` (`node --import`), which instruments pg, ioredis and the HTTP server and client for traces (ADR 0008).
+
 Prometheus scrapes the hub service on port 3000 and workers on 3002 and 3003 every 5s, through `host.docker.internal`. Grafana opens on the **Hub overview** dashboard (is ingest healthy, and where are the cases?); **Worker & outbox** (is work flowing?) and **Upstreams & cache** (is SATUSEHAT the problem?) are beside it in the *Integration Hub* folder. The dashboards are provisioned read-only from `observability/grafana/dashboards/*.json`: change the JSON, not the UI. There are no alert rules.
+
+`pnpm obs:up` also starts Jaeger (http://localhost:16686), where the hub service and the workers export traces over OTLP (`TRACE_EXPORT_URL`, default `http://localhost:4318/v1/traces`). A visit spans up to four traces, one per source event: each starts at its `POST /v1/events` and its `ingest.accept`, and the attempts of that event's step follow as children, with their SATUSEHAT, KFA, IHS-number and token calls, pg queries and Redis commands under them. Search by the tag `case.id=<case id>` to see all of a case's traces. Every span is redacted before export, like a log line. Sampling is parent-based, at `TRACE_SAMPLE_RATIO` of the traces that start in the hub (default 1; the big run uses 0.05). Jaeger keeps traces in memory, so a restart loses them. Without Jaeger running, the spans are dropped.
 
 The worker loads the mapping seeds at boot: `apps/hub/seed/location-mappings.json` (the simulator's location codes mapped to the world dataset's locations) and `apps/hub/seed/drug-mappings.json` (its local drug codes mapped to the world's KFA codes, plus two entries noted as deliberately wrong for the KFA failure paths). Loading them again changes nothing. KFA details are fetched from KFA v2 the first time a code is used and stored.
 
@@ -119,7 +123,7 @@ To run the mock SATUSEHAT on its own (it needs no Postgres or Redis), see [packa
 
 `pnpm deps:down` stops the containers and deletes their data.
 
-Defaults match `compose.yaml`, so no `.env` is needed. If ports 5432 or 6379 are taken, start compose with `POSTGRES_PORT`/`REDIS_PORT` (and `PROMETHEUS_PORT`/`GRAFANA_PORT` for 9090 and 3300) and point the hub and tests at them with `DATABASE_URL`/`REDIS_URL` (see `.env.example`).
+Defaults match `compose.yaml`, so no `.env` is needed. If ports 5432 or 6379 are taken, start compose with `POSTGRES_PORT`/`REDIS_PORT` (and `PROMETHEUS_PORT`/`GRAFANA_PORT`/`JAEGER_UI_PORT`/`JAEGER_OTLP_PORT` for 9090, 3300, 16686 and 4318) and point the hub and tests at them with `DATABASE_URL`/`REDIS_URL` (see `.env.example`).
 
 The hub never migrates itself: always run `pnpm migrate` before starting it. The test suite runs the same migrations in its global setup.
 
@@ -132,7 +136,7 @@ The hub never migrates itself: always run `pnpm migrate` before starting it. The
 | `packages/mock-satusehat` | The mock SATUSEHAT: a stateful fake platform with its own validator (ADR 0006) and the `/__mock/*` inspection and control API; never deployed publicly |
 | `docs/api.md` | The hub's API contract |
 | `compose.yaml` | Local infrastructure; only components from the closed list |
-| `observability` | Prometheus scrape config and the Grafana data source and dashboards, provisioned from committed JSON |
+| `observability` | Prometheus scrape config and the Grafana data source and dashboards, provisioned from committed JSON (Jaeger needs no config) |
 | `.github/workflows/ci.yml` | CI: typecheck, the import-boundary check (`pnpm boundaries`), and the same `pnpm test` against Postgres and Redis service containers |
 
 Later: `packages/simulator`, `apps/dashboard`.
