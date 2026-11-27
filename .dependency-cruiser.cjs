@@ -11,6 +11,15 @@ module.exports = {
       from: { path: '^packages/mock-satusehat/' },
       to: { path: ['^apps/hub/', 'node_modules/@integration-hub/hub/'] },
     },
+    {
+      name: 'simulator-is-independent-of-the-hub',
+      comment:
+        'The source simulator stands in for an external source system (ADR 0001): it talks to the hub only over HTTP, ' +
+        'so it must not import any hub module.',
+      severity: 'error',
+      from: { path: '^packages/simulator/' },
+      to: { path: ['^apps/hub/', 'node_modules/@integration-hub/hub/'] },
+    },
   ],
   options: {
     doNotFollow: { path: 'node_modules' },

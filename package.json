@@ -9,7 +9,9 @@
   "scripts": {
     "deps:up": "docker compose up -d --wait postgres redis",
     "obs:up": "docker compose up -d --wait prometheus grafana jaeger",
-    "app:up": "docker compose --profile app up -d --build --wait hub worker-1 worker-2",
+    "app:up": "docker compose --profile app up -d --build --wait mock hub worker-1 worker-2",
+    "stack:up": "docker compose --profile app --profile simulator build && docker compose --profile app up -d --wait postgres redis prometheus grafana jaeger mock hub worker-1 worker-2 && docker compose --profile app --profile simulator run --rm simulator",
+    "stack:down": "docker compose --profile app --profile simulator down -v",
     "deps:down": "docker compose down -v",
     "migrate": "pnpm --filter @integration-hub/hub migrate",
     "build": "pnpm -r --if-present build",

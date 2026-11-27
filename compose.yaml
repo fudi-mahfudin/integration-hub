@@ -21,10 +21,10 @@ x-hub-env: &hub-env
 
 x-worker-env: &worker-env
   <<: *hub-env
-  # The mock SATUSEHAT runs on the host (see the README).
-  SATUSEHAT_AUTH_URL: http://host.docker.internal:3001/oauth2/v1/
-  SATUSEHAT_FHIR_URL: http://host.docker.internal:3001/fhir-r4/v1/
-  SATUSEHAT_KFA_URL: http://host.docker.internal:3001/kfa-v2/
+  # The mock SATUSEHAT service below (#44).
+  SATUSEHAT_AUTH_URL: http://mock:3001/oauth2/v1/
+  SATUSEHAT_FHIR_URL: http://mock:3001/fhir-r4/v1/
+  SATUSEHAT_KFA_URL: http://mock:3001/kfa-v2/
   WORKER_PROCESSES: "2"
 
 services:
@@ -180,3 +180,45 @@ services:
       timeout: 3s
       retries: 30
     stop_grace_period: 80s
+
+  # The mock SATUSEHAT (#44): in memory, so a restart empties it. Never deploy it publicly: `/__mock/*` has no auth.
+  # Its port is published for the inspection API (`/__mock/report`, `/__mock/log`).
+  # Pinned big-run limits (bigrun.commitments.json bigRun.topology.composeLimits).
+  mock:
+    build:
+      context: .
+      dockerfile: packages/mock-satusehat/Dockerfile
+    image: integration-hub/mock-satusehat:local
+    profiles: [app]
+    cpus: 1
+    mem_limit: 512m
+    ports:
+      - "${MOCK_PORT:-3001}:3001"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/__mock/report"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # One-shot (#44): plans one seeded batch from the world dataset, sends it to the hub as the
+  # development source system, waits for every case to complete, then exits (1 if any check failed).
+  # The SIM_* variables shape the batch (packages/simulator/README.md); `pnpm stack:up` runs it.
+  simulator:
+    build:
+      context: .
+      dockerfile: packages/simulator/Dockerfile
+    image: integration-hub/simulator:local
+    profiles: [simulator]
+    environment:
+      HUB_URL: http://hub:3000/
+      SIM_SEED: ${SIM_SEED:-44}
+      SIM_VISITS: ${SIM_VISITS:-20}
+    depends_on:
+      hub:
+        condition: service_healthy
+      worker-1:
+        condition: service_healthy
+      worker-2:
+        condition: service_healthy
+      mock:
+        condition: service_healthy

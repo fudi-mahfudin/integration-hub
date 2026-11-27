@@ -1,0 +1,23 @@
+{
+  "name": "@integration-hub/simulator",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "tsx src/main.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@integration-hub/mock-satusehat": "workspace:*",
+    "tsx": "^4.23.15",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.1"
+  }
+}

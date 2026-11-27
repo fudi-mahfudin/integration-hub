@@ -6,6 +6,7 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps/hub/package.json apps/hub/
 COPY packages/mock-satusehat/package.json packages/mock-satusehat/
+COPY packages/simulator/package.json packages/simulator/
 RUN pnpm install --frozen-lockfile --filter @integration-hub/hub
 COPY apps/hub apps/hub
 RUN pnpm --filter @integration-hub/hub build
@@ -16,6 +17,7 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/hub/package.json apps/hub/
 COPY packages/mock-satusehat/package.json packages/mock-satusehat/
+COPY packages/simulator/package.json packages/simulator/
 RUN pnpm install --frozen-lockfile --prod --filter @integration-hub/hub
 COPY --from=build /repo/apps/hub/dist apps/hub/dist
 COPY apps/hub/seed apps/hub/seed
