@@ -20,6 +20,7 @@
     "demo:naive-race": "pnpm --filter @integration-hub/hub demo:naive-race",
     "bigrun": "pnpm --filter @integration-hub/bigrun bigrun",
     "bigrun:publish": "pnpm --filter @integration-hub/bigrun publish-results",
+    "loadtest": "pnpm --filter @integration-hub/bigrun loadtest",
     "boundaries": "depcruise packages apps --config .dependency-cruiser.cjs --exclude \"(^|/)(node_modules|dist)/\""
   },
   "devDependencies": {

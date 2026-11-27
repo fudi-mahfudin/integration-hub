@@ -59,7 +59,7 @@ The rules:
 
 - **Every official run is published, pass or fail.**
 - A change to the commitments file needs a reason in its commit message. Its full history is public: [history of `bigrun.commitments.json`](https://github.com/fudi-mahfudin/integration-hub/commits/main/bigrun.commitments.json).
-- The big-run harness refuses an official run on a dirty tree or if the file changed since its own commit, and its report records the git SHA, the file's hash and that commit's date.
+- The big-run harness refuses an official run on a dirty tree or if the file changed since its own commit, and its report records the git SHA, the file's hash and that commit's date. The load test follows the same rules.
 
 ## Big run results
 
@@ -77,6 +77,21 @@ No official run yet. `pnpm bigrun --official` runs one, and `pnpm bigrun:publish
 - `pnpm bigrun --set path=value`: overrides a committed value under `bigRun` (e.g. `--set arrival.eventsPerSecond=25`). The report flags every override, and such a run is never official.
 
 Runs that are not official write to `results/bigrun-unofficial/` (not committed). The harness reaches the stack on `localhost` (`BIGRUN_HUB_URL`, `BIGRUN_MOCK_URL`, `BIGRUN_PROMETHEUS_URL`).
+
+## Load test results
+
+<!-- loadtest:start -->
+No official load test yet. `pnpm loadtest --official` runs one and writes its results here.
+<!-- loadtest:end -->
+
+### Running the load test
+
+`pnpm loadtest` measures how fast the hub accepts source events, separately from the big run. It brings the stack up exactly as the big run does, and refuses to run if the stack differs or the mock has faults set. The source simulator then plans an event file from the world dataset: the big run's seed and event mix, a fifth of the requests duplicates (same `Idempotency-Key`, byte-identical body), one request per arrival. k6 (`grafana/k6:2.4.0`, the compose service `k6`, profile `loadtest`) replays the file in order with `constant-arrival-rate`: 200 events/s for a 30s warm-up, then 200 events/s for the 5 min measured phase. The committed thresholds apply only to the measured phase: ingest p95 < 200 ms, p99 < 500 ms and non-2xx < 0.1%, measured on the client side. The run also fails if the measured phase sent fewer requests than its 60,000 arrivals (dropped, or failed before sending), because then it didn't hold the committed rate. It also fails if k6 itself ended abnormally. The harness exits 0 on PASS, 1 on FAIL and 2 if it refuses to start.
+
+- `pnpm loadtest --official`: the committed load test, from a clean tree only. It writes `results/k6/<date>-<shortsha>/` (`report.md`, `report.json`, `k6-config.json`, `k6-summary.json`, and `events.ndjson`, which is not committed), lists the run in [`results/k6/INDEX.md`](results/k6/INDEX.md), and rewrites the section above. Commit them, pass or fail.
+- `pnpm loadtest --set path=value`: overrides a committed value under `loadTest` (e.g. `--set durationSeconds=20`). The report flags every override, and such a run is never official. It writes to `results/k6-unofficial/` (not committed).
+
+The workers keep delivering the load test's cases after k6 ends. Run `pnpm stack:down` before a big run so the two don't share the stack.
 
 ## Quick start
 
@@ -176,9 +191,11 @@ The hub never migrates itself: always run `pnpm migrate` before starting it. At 
 | `packages/mock-satusehat` | The mock SATUSEHAT: a stateful fake platform with its own validator (ADR 0006) and the `/__mock/*` inspection and control API; never deployed publicly |
 | `packages/simulator` | The source simulator: plans seeded batches of fictional visits from the world dataset and sends them to the hub as a source system |
 | `packages/bigrun` | The big-run harness (`pnpm bigrun`): drives the committed big run through the simulator, judges it from the hub's and the mock's side, and writes and publishes its report |
+| `packages/bigrun/k6` | The load test's k6 script; `pnpm loadtest` (same package) builds its options from the commitments and judges its summary |
 | `results/bigrun` | Every official big run's report, and `INDEX.md` |
+| `results/k6` | Every official load test's report, and `INDEX.md` |
 | `docs/api.md` | The hub's API contract |
-| `compose.yaml` | Local infrastructure, and (profile `app`) the mock SATUSEHAT, the hub service, two workers and the one-shot `migrate`, and (profile `simulator`) the one-shot source simulator; only components from the closed list |
+| `compose.yaml` | Local infrastructure, and (profile `app`) the mock SATUSEHAT, the hub service, two workers and the one-shot `migrate`, (profile `simulator`) the one-shot source simulator, and (profile `loadtest`) k6, the load test's one-shot load generator; only components from the closed list |
 | `observability` | Prometheus scrape config and the Grafana data source and dashboards, provisioned from committed JSON (Jaeger needs no config) |
 | `.github/workflows/ci.yml` | CI: typecheck, the import-boundary check (`pnpm boundaries`), and the same `pnpm test` against Postgres and Redis service containers; and the big run at 200 visits (`pnpm bigrun --ci`) against the compose stack |
 

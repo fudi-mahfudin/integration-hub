@@ -204,6 +204,10 @@ _Avoid_: Load generator (that is k6, for the load test), client
 A seeded set of fictional visits drawn from the world dataset that the source simulator plans and sends: the four source events of each, with fixed shares of substitutions, fallback patient lookups, events sent out of order and duplicate ingests. The same seed and settings plan the same batch; a run id in its visit numbers and idempotency keys keeps runs apart.
 _Avoid_: Batch alone (a dispense's batch is its lot and expiry), load, scenario run
 
+**Event file**:
+A simulated batch written as the requests a load generator replays in order: every original send and every duplicate ingest, each with its idempotency key and exact body. A duplicate is placed by its timing, because a replay at a fixed rate can't wait on the hub. A late duplicate is therefore placed after its visit's last send, not after the case completed.
+_Avoid_: Fixture, payload file, dataset (the world dataset is what it is drawn from)
+
 **Contract check**:
 A manual comparison of how the real SATUSEHAT sandbox and the mock SATUSEHAT answer the same requests, by shape only (status, headers, fields and their types), never by value. It is how a change in the real platform is noticed.
 _Avoid_: Drift check (drift is avoided for divergence), integration test
