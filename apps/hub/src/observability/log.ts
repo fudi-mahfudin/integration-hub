@@ -68,7 +68,8 @@ export function createLog(service: Service, destination: LogDestination): Log {
       formatters: { level: (label) => ({ level: label }) },
       mixin: () => {
         const context = requestContext.getStore();
-        // Redacted like every other field, though its values come from config and closed sets.
+        // Redacted like every other field, though its values come from config and closed sets;
+        // `redact` returns `unknown`, and a record in gives a record out.
         const fields = context === undefined ? {} : (redact({ ...context }) as Record<string, unknown>);
         return { ...fields, ...traceFields() };
       },

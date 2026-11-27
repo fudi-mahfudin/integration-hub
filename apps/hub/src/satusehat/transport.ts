@@ -71,8 +71,9 @@ export interface SatusehatTransport {
    * none is sent while its platform API's breaker is open: `CircuitOpen`. Each
    * send waits its turn under the platform API's rate limit, and a 429 holds its calls off.
    * Throws `SatusehatTimeoutError` or `SatusehatNetworkError` for the last
-   * failed try, or resolves to the last answer, whatever its status. Each try
-   * is its own span (#42): `satusehat.search|create|update` or `kfa.lookup`.
+   * failed try, or resolves to the last answer, whatever its status. Each send
+   * is its own span (#42), `satusehat.search|create|update` or `kfa.lookup`,
+   * its `read_retry` 0 for the first and the read retry's number after it.
    */
   send(calls: AttemptCalls, request: SatusehatRequest): Promise<SatusehatAnswer>;
 }
@@ -222,7 +223,7 @@ export function createSatusehatTransport(deps: {
       for (let n = 1; ; n++) {
         let retry: ReadRetry;
         try {
-          const answer = await inSpan(spanNameOf(request), { 'http.request.method': request.method, 'url.path': request.url.pathname, try: n }, async (span) => {
+          const answer = await inSpan(spanNameOf(request), { 'http.request.method': request.method, 'url.path': request.url.pathname, read_retry: n - 1 }, async (span) => {
             const answered = await tryOnce(calls, request);
             span.setAttribute('http.response.status_code', answered.status);
             if (answered.status >= 400) span.setStatus({ code: SpanStatusCode.ERROR, message: `answered ${answered.status}` });

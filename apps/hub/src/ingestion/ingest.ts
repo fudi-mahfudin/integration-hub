@@ -46,9 +46,9 @@ export function createIngest(deps: {
     const result = await inSpan('ingest.accept', { 'event.type': event.type }, async (span) => {
       const traceparent = activeTraceparent();
       const recorded = await store.record(source.id, key, bodyFingerprint, (trx) =>
-        recordEvent(trx, source, event, clock(), traceparent).then((r) => {
-          caseId = r.caseId;
-          return accepted(event, r);
+        recordEvent(trx, source, event, clock(), traceparent).then((recordedEvent) => {
+          caseId = recordedEvent.caseId;
+          return accepted(event, recordedEvent);
         }),
       );
       if (caseId !== undefined && 'accepted' in recorded) span.setAttribute('case.id', caseId);

@@ -46,7 +46,8 @@ describe('traces: one visit followed from event arrival to each SATUSEHAT call (
     tracing = startTracing({ service: 'hub', sampleRatio: 1, exporter });
     mock = await bootMock();
     database = await createFreshDatabase();
-    const env = { ...worldEnv(mock.baseUrl, database.url), RETRY_BACKOFF_BASE_MS: '10', RETRY_BACKOFF_CAP_MS: '50' };
+    // The live sandbox's rate limit (FHIR 5 rps, a burst of 5), so the visit's later calls wait their turn.
+    const env = { ...worldEnv(mock.baseUrl, database.url), RETRY_BACKOFF_BASE_MS: '10', RETRY_BACKOFF_CAP_MS: '50', SATUSEHAT_PROFILE: 'live-sandbox' };
     hub = await bootHub(env);
     worker = await bootWorker(env);
 
@@ -126,10 +127,14 @@ describe('traces: one visit followed from event arrival to each SATUSEHAT call (
     expect(under('submit_prescription', 'kfa.lookup').length).toBeGreaterThan(0);
     expect(under('submit_prescription', 'satusehat.create')).toHaveLength(1);
     expect(under('update_visit', 'satusehat.update')).toHaveLength(1);
+    // A call that waited for the rate limit; one that didn't makes no span.
+    const waits = spans.filter((s) => s.name === 'rate_limiter.wait' && attemptOf(s) !== undefined);
+    expect(waits.length).toBeGreaterThan(0);
+    for (const wait of waits) expect(wait.attributes).toMatchObject({ api: 'fhir', mode: 'redis', 'wait.ms': expect.any(Number) });
 
-    // The Patient search that answered 500 was tried again in-process: each try its own span.
+    // The Patient search that answered 500 was sent again in-process: each read retry its own span.
     const patientSearches = under('create_visit', 'satusehat.search').filter((s) => String(s.attributes['url.path']).endsWith('/Patient'));
-    expect(patientSearches.map((s) => s.attributes.try)).toEqual([1, 2, 1]);
+    expect(patientSearches.map((s) => s.attributes.read_retry)).toEqual([0, 1, 0]);
     expect(patientSearches[0]?.attributes['http.response.status_code']).toBe(500);
   });
 

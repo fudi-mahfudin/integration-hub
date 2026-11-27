@@ -24,6 +24,11 @@ import { redactingSpanExporter } from './redaction.js';
 // (ADR 0008): one tracer provider per process, started by the entry point,
 // so the spans the auto-instrumentation makes and the hub's own reach the
 // same exporter. Code makes spans through the helpers below.
+//
+// `case.id`: every span under a case's context (`inCaseTrace`: an attempt, a
+// reconciliation check) gets it; at ingest, the case is only known once its
+// transaction has recorded the event, so only the server and `ingest.accept`
+// spans of an accepted event carry it, not the queries before it.
 
 /**
  * The W3C `traceparent` of the ingest span that accepted a source event,

@@ -16,7 +16,7 @@ const OUTCOME_DISCARDED = 'the lease was lost before the outcome was stored; the
 /**
  * How an attempt ended, on its `step.attempt` span (#42): its outcome in the
  * attempt log, `lease_lost` when the lease was lost before the outcome was
- * stored, or `unrecorded` when nothing could be stored.
+ * stored, or `unrecorded` when nothing was stored (no runner, or storing failed).
  */
 type AttemptSpanOutcome = Exclude<AttemptOutcome, 'discarded' | 'lease_expired'> | 'lease_lost' | 'unrecorded';
 
