@@ -170,11 +170,12 @@ describe('logs, metrics and traces: structured, tied to their case, and free of 
   it('no Redis key or value holds a canary NIK; no value holds a 16-digit run (#47)', () => {
     const { keys, values } = redisContents;
     expect(keys.some((key) => key.startsWith('ihs:practitioner:'))).toBe(true);
-    for (const entry of [...keys, ...values]) {
-      for (const nik of CANARY_NIKS) expect(entry, `Redis holds "${nik}"`).not.toContain(nik);
-    }
+    // One assertion over the leaks found, not one `expect` per entry and NIK:
+    // thousands of each make millions of `expect` calls and time the test out.
+    const leaks = [...keys, ...values].flatMap((entry) => CANARY_NIKS.filter((nik) => entry.includes(nik)).map((nik) => `Redis holds "${nik}" in "${entry}"`));
+    expect(leaks).toEqual([]);
     // Not keys: an HMAC's hex digest may hold 16 decimal digits in a row by chance.
-    for (const value of values) expect(value).not.toMatch(/\d{16}/);
+    expect(values.filter((value) => /\d{16}/.test(value))).toEqual([]);
   });
 
   it('each service logs as itself, and case-scoped lines carry the case id', () => {
