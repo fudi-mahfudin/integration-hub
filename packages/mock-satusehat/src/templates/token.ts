@@ -15,6 +15,7 @@ export interface TokenResponseBody {
 
 /** 200 from the token endpoint. Only the fields the hub reads are kept. */
 export const tokenIssued = defineTemplate(
+  'tokenIssued',
   {
     tag: 'satusehat-docs',
     note: 'Akses Token page sample response, reduced to the fields the hub reads, values fake',
@@ -36,6 +37,7 @@ export const tokenIssued = defineTemplate(
 
 /** 401 from the token endpoint for wrong or missing client credentials. */
 export const tokenRejected = defineTemplate(
+  'tokenRejected',
   {
     tag: 'satusehat-docs',
     note: 'Akses Token page: 4xx bodies are an OperationOutcome with issue.details.text',
@@ -50,6 +52,7 @@ export const tokenRejected = defineTemplate(
 
 /** 429 from the token endpoint during the throttle window after a failed token request. */
 export const tokenThrottled = defineTemplate(
+  'tokenThrottled',
   {
     tag: 'satusehat-docs',
     note: 'Akses Token page documents the rate-limit message after a failed attempt',

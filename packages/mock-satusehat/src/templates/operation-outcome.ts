@@ -26,6 +26,7 @@ export interface Violation {
 
 /** 400 for a payload the mock's validator rejects: one issue per violation. */
 export const payloadRejected = defineTemplate(
+  'payloadRejected',
   {
     tag: 'fhir-spec',
     note: 'FHIR R4 OperationOutcome; rejection codes in issue.details.coding are ours (#9)',
@@ -46,6 +47,7 @@ export const payloadRejected = defineTemplate(
 
 /** 400 for a search parameter the mock doesn't implement: reaching the mock with one is a hub bug. */
 export const unsupportedSearch = defineTemplate(
+  'unsupportedSearch',
   { tag: 'assumed', note: 'FHIR R4 OperationOutcome; the real platform may ignore unknown parameters instead' },
   (resourceType: string, parameters: readonly string[]): fhir4.OperationOutcome => ({
     resourceType: 'OperationOutcome',
@@ -63,6 +65,7 @@ export const unsupportedSearch = defineTemplate(
 
 /** 401 for a FHIR call without a valid (unexpired, unrevoked) access token. */
 export const unauthorized = defineTemplate(
+  'unauthorized',
   { tag: 'assumed', note: 'FHIR R4 OperationOutcome; the real 401 body for a bad token is unverified' },
   (): fhir4.OperationOutcome => ({
     resourceType: 'OperationOutcome',
@@ -72,6 +75,7 @@ export const unauthorized = defineTemplate(
 
 /** 404 for a path the mock does not serve. */
 export const notFound = defineTemplate(
+  'notFound',
   { tag: 'fhir-spec', note: 'FHIR R4 RESTful API: unknown resource or path gives 404 with an OperationOutcome' },
   (path: string): fhir4.OperationOutcome => ({
     resourceType: 'OperationOutcome',
@@ -81,6 +85,7 @@ export const notFound = defineTemplate(
 
 /** 500, 503 or 429 that a fault rule injects in place of the platform's answer. */
 export const injectedFailure = defineTemplate(
+  'injectedFailure',
   { tag: 'assumed', note: 'FHIR R4 OperationOutcome; the real 5xx and 429 bodies are unverified and may come from a gateway' },
   (status: 500 | 503 | 429, ruleId: string): fhir4.OperationOutcome => ({
     resourceType: 'OperationOutcome',
@@ -100,6 +105,7 @@ export const injectedFailure = defineTemplate(
  * is what the hub's canary test proves never reaches a log line (#40).
  */
 export const echoingRejection = defineTemplate(
+  'echoingRejection',
   { tag: 'assumed', note: 'FHIR R4 OperationOutcome; whether the real platform echoes requests in diagnostics is unverified' },
   (ruleId: string, url: string, body: string): fhir4.OperationOutcome => ({
     resourceType: 'OperationOutcome',

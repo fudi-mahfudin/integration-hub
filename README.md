@@ -127,6 +127,15 @@ Every official Cache run: [results/cache/INDEX.md](results/cache/INDEX.md).
 
 It deletes the local Postgres and Redis data, like `pnpm stack:down`.
 
+## Contract check
+
+The Contract check (`pnpm contract:check`, #48) sends the same fixed requests to the real SATUSEHAT sandbox and to an in-process mock SATUSEHAT, and diffs their answers by shape, never by value. It is how a change in the real platform is noticed. Run it by hand before closing each milestone and after a SATUSEHAT portal version bump. It refuses to run when `CI` is set.
+
+1. **Set up once.** Have the sandbox credential `/wizard` walk you through the portal (Sandbox > Kode Akses API). It writes the git-ignored `.env.live` (see `.env.live.example`), creates our sandbox Location with one POST, and records its id, the official dummy NIKs and a KFA 93 product in the git-ignored `live-seed.json` (see `live-seed.example.json`). Credentials come from the environment only.
+2. **Run** `pnpm contract:check`. In order, it sends: a token request; a KFA v2 product lookup; Patient, prescriber and pharmacist searches by NIK; a Location search; an Encounter create, its search and its PUT; a MedicationRequest create and its search; a MedicationDispense create (identifiers unique to the run, `CONTRACT-<runId>`); a deliberately invalid payload (400); a bogus token (401); and a random id (404). A request that needs an answer one side didn't give is skipped. It never provokes 429, 5xx or the token throttle.
+3. **Read the report.** A request **fails** when the status, the media type, `Retry-After`, a value type, `resourceType`, an OperationOutcome issue severity/code, or a key the hub reads differs. It **warns** on a key or a `Location`/`ETag` header only the sandbox sends that the hub doesn't read. Ordering and keys only the mock has are **info**. Exit code: 0 pass, 1 fail, 3 inconclusive (a side gave no answer), 2 refused.
+4. **Commit the tag change.** Each template whose every request passed is re-tagged `sandbox-observed` with the check date in `packages/mock-satusehat/src/templates/sandbox-observed.ts`; a template that failed loses its tag. Commit that file. Raw answers go to the git-ignored `.recordings/contract/<runId>/` and are never committed or shared; only `report.md`, which holds no values, may be shared.
+
 ## Quick start
 
 You need Node 24 (see `.nvmrc`), pnpm 11, and Docker.
@@ -229,6 +238,7 @@ The hub never migrates itself: always run `pnpm migrate` before starting it. At 
 | `packages/bigrun` | The big-run harness (`pnpm bigrun`): drives the committed big run through the simulator, judges it from the hub's and the mock's side, and writes and publishes its report |
 | `packages/bigrun/k6` | The load test's k6 script; `pnpm loadtest` (same package) builds its options from the commitments and judges its summary |
 | `packages/bigrun/src/cacherun` | The Cache run (`pnpm cacherun`, same package): runs the arms, measures them, and judges each IHS-number cache against the bar |
+| `packages/contract-check` | The Contract check (`pnpm contract:check`): the fixed requests, the shape diff, and the re-tagging of passed templates; local-only |
 | `results/bigrun` | Every official big run's report, and `INDEX.md` |
 | `results/k6` | Every official load test's report, and `INDEX.md` |
 | `results/cache` | Every official Cache run's report, and `INDEX.md` |

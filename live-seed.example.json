@@ -1,0 +1,7 @@
+{
+  "locationId": "<id of our Location, created by the wizard>",
+  "patientNik": "<NIK of an official dummy patient>",
+  "practitionerNik": "<NIK of an official dummy practitioner who is not a pharmacist>",
+  "pharmacistNik": "<NIK of the official dummy pharmacist>",
+  "kfaProductCode": "<a KFA 93 product code with a dose form>"
+}

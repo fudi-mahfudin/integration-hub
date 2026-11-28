@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     "./client": "./src/client.ts",
+    "./contract": "./src/contract.ts",
     "./server": "./src/composition-root.ts",
     "./world": "./src/world/world.ts"
   },
