@@ -9,7 +9,7 @@ import type { Target } from './target.js';
 /**
  * What became of one probe: `pass` (no fail finding), `fail`, `skipped`
  * (it needed an answer one side did not give) or `error` (a side gave no
- * answer at all: the sandbox is unavailable, which is no mismatch).
+ * answer at all, e.g. the sandbox is unavailable: no mismatch, but nothing checked).
  */
 export type ProbeOutcome = 'pass' | 'fail' | 'skipped' | 'error';
 
@@ -70,7 +70,7 @@ export async function runContractCheck(deps: ContractCheckDeps): Promise<Contrac
   const runDir = join(deps.recordingsDir, runId);
   await mkdir(runDir, { recursive: true });
 
-  const run = { visitId: `CONTRACT-${runId}`, prescriptionId: `CONTRACT-${runId}`, itemId: '1' };
+  const run = { visitId: `CONTRACT-${runId}`, prescriptionId: `CONTRACT-${runId}`, itemId: `CONTRACT-${runId}-1` };
   const sides = {
     sandbox: { target: deps.sandbox, run, now, learned: {} } satisfies ProbeContext,
     mock: { target: deps.mock, run, now, learned: {} } satisfies ProbeContext,

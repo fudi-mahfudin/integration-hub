@@ -34,7 +34,7 @@ const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
  * wizard). Throws naming the bad variable.
  */
 export function loadContractCheckConfig(env: Env): ContractCheckConfig {
-  if (env.CI !== undefined && env.CI !== '') throw new ContractCheckRefused('the contract check is local-only and refuses to run when CI is set');
+  if (env.CI !== undefined) throw new ContractCheckRefused('the contract check is local-only and refuses to run when CI is set');
   return {
     authUrl: baseUrl(env, 'SATUSEHAT_AUTH_URL'),
     fhirUrl: baseUrl(env, 'SATUSEHAT_FHIR_URL'),
@@ -42,7 +42,7 @@ export function loadContractCheckConfig(env: Env): ContractCheckConfig {
     clientId: required(env, 'SATUSEHAT_CLIENT_ID'),
     clientSecret: required(env, 'SATUSEHAT_CLIENT_SECRET'),
     organizationId: required(env, 'SATUSEHAT_ORGANIZATION_ID'),
-    liveSeedPath: env.CONTRACT_LIVE_SEED ?? `${REPO_ROOT}live-seed.json`,
+    liveSeedPath: `${REPO_ROOT}live-seed.json`,
     recordingsDir: env.CONTRACT_RECORDINGS_DIR ?? `${REPO_ROOT}.recordings/contract`,
   };
 }
@@ -60,8 +60,8 @@ function baseUrl(env: Env, name: string): URL {
   let url: URL;
   try {
     url = new URL(raw);
-  } catch {
-    throw new ContractCheckRefused(`${name} must be an absolute http(s) URL, got "${raw}"`);
+  } catch (err) {
+    throw new ContractCheckRefused(`${name} must be an absolute http(s) URL, got "${raw}"`, { cause: err });
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new ContractCheckRefused(`${name} must be an http(s) URL, got "${raw}"`);
   if (!url.pathname.endsWith('/')) url.pathname += '/';

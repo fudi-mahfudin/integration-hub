@@ -1,7 +1,7 @@
 // `pnpm contract:check` (#48): the composition root of the contract check.
 // Reads the sandbox's settings from the environment (`.env.live`), boots a
 // mock SATUSEHAT in-process, runs the check and prints the value-free report.
-// Exits 0 on pass, 1 on fail, 3 when inconclusive, 2 when it refused to run.
+// Exits 0 on pass, 1 on fail, 3 when inconclusive, 2 when it refused to run, 4 when it crashed.
 import { SANDBOX_OBSERVED_PATH } from '@integration-hub/mock-satusehat/contract';
 import { createMockSatusehat } from '@integration-hub/mock-satusehat/server';
 import { DEFAULT_WORLD_PATH, loadWorld } from '@integration-hub/mock-satusehat/world';

@@ -224,7 +224,7 @@ export const PROBES: readonly Probe[] = [
   {
     name: 'encounter-search',
     templates: ['searchBundle', 'storedEncounter'],
-    hubReads: [...SEARCH_READS, 'entry[].resource.status', 'entry[].resource.subject.reference', 'entry[].resource.participant[].individual.reference', 'entry[].resource.location[].location.reference'],
+    hubReads: [...SEARCH_READS, 'entry[].resource.meta.versionId', 'entry[].resource.status', 'entry[].resource.subject.reference', 'entry[].resource.participant[].individual.reference', 'entry[].resource.location[].location.reference'],
     expectedStatus: 200,
     request: (ctx) => (needs(ctx, 'encounterId') ? fhirGet(ctx, 'Encounter', { identifier: `${encounterSystem(ctx.target.organizationId)}|${ctx.run.visitId}` }) : undefined),
   },
@@ -296,6 +296,7 @@ export const PROBES: readonly Probe[] = [
     templates: ['searchBundle', 'storedMedicationRequest'],
     hubReads: [
       ...SEARCH_READS,
+      'entry[].resource.meta.versionId',
       'entry[].resource.status',
       'entry[].resource.subject.reference',
       'entry[].resource.requester.reference',
@@ -337,7 +338,7 @@ export const PROBES: readonly Probe[] = [
   {
     name: 'invalid-payload',
     templates: ['payloadRejected'],
-    hubReads: ['resourceType', 'issue[].code'],
+    hubReads: ['resourceType', 'issue[].code', 'issue[].details.coding[].code'],
     expectedStatus: 400,
     // An Encounter with none of its mandatory fields: rejected before anything is stored.
     request: (ctx) => fhirSend(ctx, 'POST', 'Encounter', { resourceType: 'Encounter' }),
