@@ -1,7 +1,7 @@
 import type { DeadLetterReason } from '../cases/case-model.js';
 import type { Nik, PatientFacts, PractitionerFacts } from '../ingestion/event-schema.js';
 import type { ClaimedStep } from '../outbox/outbox.js';
-import type { CacheName, IhsNumberCache, LookupSource } from '../ihs-cache/ihs-number-cache.js';
+import type { IhsNumberCache, LookupSource } from '../ihs-cache/ihs-number-cache.js';
 import type { IhsNumber, NameBirthDateGender, SatusehatClient } from '../satusehat/client.js';
 import { inSpan } from '../observability/tracing.js';
 import type { AttemptFacts, LookupMethod } from './step-outcome.js';
@@ -35,12 +35,12 @@ interface PersonSearch {
   run(): Promise<{ found: IhsNumber[]; source: LookupSource }>;
 }
 
-/** A practitioner's exact NIK search, through `cache` (#47): the only search that is cached. */
-function byNik(deps: PersonLookupDeps, cache: CacheName, nik: Nik, search: () => Promise<IhsNumber[]>, attempt: AttemptFacts): PersonSearch {
+/** A practitioner's exact NIK search, through the IHS-number cache (#47): the only search that is cached. */
+function byNik(deps: PersonLookupDeps, nik: Nik, search: () => Promise<IhsNumber[]>, attempt: AttemptFacts): PersonSearch {
   return {
     method: 'nik',
     run: async () => {
-      const { found, source, key } = await deps.ihsCache.findByNik(cache, nik, search, { bypass: deps.replayed });
+      const { found, source, key } = await deps.ihsCache.findByNik(nik, search, { bypass: deps.replayed });
       if (key !== null) attempt.cacheKeys.push(key);
       return { found, source };
     },
@@ -87,7 +87,7 @@ export function lookUpPatient(deps: PersonLookupDeps, patient: PatientFacts, att
  * A practitioner's, requester's or pharmacist's IHS number, looked up on this
  * attempt by NIK, then by name + birthDate + gender, as far as the event
  * supplies them (#32). Only the NIK search goes through the
- * `ihs_practitioner` cache (#47). See `lookUp` for how results decide.
+ * IHS-number cache (#47). See `lookUp` for how results decide.
  */
 export function lookUpPractitioner(
   deps: PersonLookupDeps,
@@ -98,7 +98,7 @@ export function lookUpPractitioner(
   const { satusehat } = deps;
   const { nik } = practitioner;
   const searches: PersonSearch[] = [];
-  if (nik !== undefined) searches.push(byNik(deps, 'ihs_practitioner', nik, () => satusehat.findPractitionersByNik(nik), attempt));
+  if (nik !== undefined) searches.push(byNik(deps, nik, () => satusehat.findPractitionersByNik(nik), attempt));
   const nameBirthDateGender = nameBirthDateGenderOf(practitioner);
   if (nameBirthDateGender) searches.push(remoteSearch('name_birth_date_gender', () => satusehat.findPractitionersByNameBirthDateGender(nameBirthDateGender)));
   return lookUp(person, searches, attempt);

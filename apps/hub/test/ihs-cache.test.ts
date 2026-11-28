@@ -1,4 +1,3 @@
-import { createHmac, randomUUID } from 'node:crypto';
 import { loadConfig } from '../src/config.js';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { bootHub, type BootedHub } from './support/boot-hub.js';
@@ -6,7 +5,6 @@ import { bootWorker, type BootedWorker } from './support/boot-worker.js';
 import { adminRequest, postEvent, waitForCase, type CaseView } from './support/events.js';
 import { createFreshDatabase, type FreshDatabase } from './support/fresh-database.js';
 import { scrapeMetrics, valueOf } from './support/metrics.js';
-import { readRedis } from './support/redis-contents.js';
 import { startTcpProxy, type TcpProxy } from './support/tcp-proxy.js';
 import { bootMock, world, WORLD_SOURCE_API_KEY, worldEnv, worldVisitStarted, type BootedMock } from './support/satusehat.js';
 
@@ -38,13 +36,11 @@ describe('IHS-number cache: IHS numbers found by exact NIK lookup are cached (#4
   let database: FreshDatabase;
   let hub: BootedHub;
   let worker: BootedWorker;
-  let pepper: string;
 
   beforeAll(async () => {
     mock = await bootMock();
     database = await createFreshDatabase();
-    pepper = randomUUID();
-    const env = { ...worldEnv(mock.baseUrl, database.url), IHS_CACHE_PEPPER: pepper, RETRY_BACKOFF_BASE_MS: '10', RETRY_BACKOFF_CAP_MS: '50' };
+    const env = { ...worldEnv(mock.baseUrl, database.url), RETRY_BACKOFF_BASE_MS: '10', RETRY_BACKOFF_CAP_MS: '50' };
     hub = await bootHub(env);
     worker = await bootWorker(env);
   });
@@ -120,18 +116,13 @@ describe('IHS-number cache: IHS numbers found by exact NIK lookup are cached (#4
     expect(await searchesFor(mock, 'Patient')).toBe(before + 1);
   });
 
-  it('no patient entry is ever written, and no patient cache is counted', async () => {
+  it('no patient cache is ever asked: the only cache counted is the practitioner one', async () => {
     const p = patient(19);
-    const pr = practitioner(19);
-    await startVisit({ patient: { nik: p.nik, mrn: 'MRN-19' }, practitioner: { nik: pr.nik } });
+    await startVisit({ patient: { nik: p.nik, mrn: 'MRN-19' } });
 
-    // This suite's own keys: Redis may still hold another run's entries.
-    const keyOf = (prefix: string, nik: string) => `ihs:${prefix}:${createHmac('sha256', pepper).update(nik).digest('hex')}`;
-    const { keys } = await readRedis(loadConfig(process.env).redisUrl);
     const samples = await scrapeMetrics(worker.baseUrl);
 
-    expect(keys).toContain(keyOf('practitioner', pr.nik));
-    expect(keys).not.toContain(keyOf('patient', p.nik));
+    expect(samples.some((m) => m.name === 'cache_requests_total' && m.labels.cache === 'ihs_practitioner')).toBe(true);
     expect(samples.filter((m) => m.name === 'cache_requests_total' && m.labels.cache === 'ihs_patient')).toEqual([]);
   });
 
@@ -208,8 +199,13 @@ describe('IHS_CACHES: the caches on (#47)', () => {
 
   it('is the practitioner cache by default, and none turns it off', () => {
     const { IHS_CACHES: _, ...unset } = env('');
-    expect(loadConfig(unset).ihsCache.caches).toEqual(['ihs_practitioner']);
-    expect(loadConfig(env('none')).ihsCache.caches).toEqual([]);
+    expect(loadConfig(unset).ihsCache.enabled).toBe(true);
+    expect(loadConfig(env('ihs_practitioner')).ihsCache.enabled).toBe(true);
+    expect(loadConfig(env('none')).ihsCache.enabled).toBe(false);
+  });
+
+  it('refuses anything else, naming the variable', () => {
+    expect(() => loadConfig(env('ihs_practitioner,ihs_practitioner'))).toThrow('IHS_CACHES must be "ihs_practitioner" or "none"');
   });
 
   it('refuses ihs_patient, naming why it was removed', () => {

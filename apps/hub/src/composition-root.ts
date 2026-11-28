@@ -290,7 +290,7 @@ export async function createWorker(config: HubConfig, runtime: HubRuntime): Prom
     metrics,
   });
   // Fails open (#47): a Redis that is down or slow is a miss, so the worker runs without it.
-  const ihsCache = createIhsNumberCache({ redis, pepper: config.ihsCache.pepper, enabled: config.ihsCache.caches, log, metrics });
+  const ihsCache = createIhsNumberCache({ redis, pepper: config.ihsCache.pepper, enabled: config.ihsCache.enabled, log, metrics });
   const clientsFor = (calls: AttemptCalls) => ({
     satusehat: createSatusehatClient({ config: config.satusehat, transport, calls }),
     kfa: createKfaClient({ config: config.satusehat, transport, calls }),

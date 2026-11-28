@@ -17,6 +17,15 @@ const IHS_CACHES_OF: Record<ArmName, string> = {
   'ihs_patient + ihs_practitioner': 'ihs_patient,ihs_practitioner',
 };
 
+/**
+ * The caches a Cache run removed from the hub (#47), each with the run whose
+ * result removed it and the commit it was measured at: the hub now refuses
+ * an `IHS_CACHES` naming one, so an arm needing it can only run there.
+ */
+const REMOVED_CACHES: Readonly<Record<string, { removedBy: string; measuredAt: string }>> = {
+  ihs_patient: { removedBy: 'results/cache/2026-11-28-d0550b0', measuredAt: 'd0550b0' },
+};
+
 const share = z.number().min(0).max(1);
 
 const cacheRunSchema = z.object({
@@ -42,6 +51,27 @@ export type CacheRunCommitments = z.infer<typeof cacheRunSchema>;
 export interface ScheduledRun {
   arm: ArmName;
   ihsCaches: string;
+}
+
+/**
+ * Why `schedule` can't run against this hub: one reason per arm that needs a
+ * removed cache, so the harness refuses before its first run instead of
+ * failing at that arm's.
+ */
+export function removedCacheRefusals(schedule: readonly ScheduledRun[]): string[] {
+  const refusals = new Map<ArmName, string>();
+  for (const { arm, ihsCaches } of schedule) {
+    for (const cache of ihsCaches.split(',')) {
+      const removed = REMOVED_CACHES[cache];
+      if (removed && !refusals.has(arm)) {
+        refusals.set(
+          arm,
+          `the arm "${arm}" needs ${cache}, which the hub no longer has: it missed the bar in ${removed.removedBy}. The committed Cache run reruns only at ${removed.measuredAt}.`,
+        );
+      }
+    }
+  }
+  return [...refusals.values()];
 }
 
 /** What one Cache run is run with. */

@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { judgeCaches } from './cacherun/judge.js';
 import { cacheRequestsOf, measureRun, type RunMeasurement } from './cacherun/measure.js';
 import { readmeWithCacheRun, renderCacheRunReport, updateCacheIndex, type CacheRunReport } from './cacherun/report.js';
-import { loadCacheRunSettings, type CacheRunSettings, type ScheduledRun } from './cacherun/settings.js';
+import { loadCacheRunSettings, removedCacheRefusals, type CacheRunSettings, type ScheduledRun } from './cacherun/settings.js';
 import { batchOptions } from './batch-options.js';
 import { WRITES } from './fault-rules.js';
 import { harnessEnv } from './harness-env.js';
@@ -48,6 +48,8 @@ try {
   throw err;
 }
 const { bigRun, cacheRun, schedule, kind, overrides } = settings;
+const removed = removedCacheRefusals(schedule);
+if (removed.length > 0) refuse(removed);
 log('cache run settings', { kind, runs: schedule.length, visitsPerRun: bigRun.events.visits, overrides });
 
 const git = await readGitFacts(repoRoot);

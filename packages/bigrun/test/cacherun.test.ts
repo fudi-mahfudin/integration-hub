@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { judgeCaches, type ArmRun } from '../src/cacherun/judge.js';
 import { cacheRequestsOf } from '../src/cacherun/measure.js';
-import { loadCacheRunSettings } from '../src/cacherun/settings.js';
+import { loadCacheRunSettings, removedCacheRefusals } from '../src/cacherun/settings.js';
 import { SettingsError } from '../src/settings.js';
 
 const committed: unknown = JSON.parse(readFileSync(new URL('../../../bigrun.commitments.json', import.meta.url), 'utf8'));
@@ -26,6 +26,15 @@ describe('loadCacheRunSettings', () => {
       'ihs_patient + ihs_practitioner',
     ]);
     expect(settings.schedule.slice(0, 3).map((run) => run.ihsCaches)).toEqual(['none', 'ihs_practitioner', 'ihs_patient,ihs_practitioner']);
+  });
+
+  it('refuses, before any run, a schedule with an arm whose cache the hub no longer has, naming the run that removed it', () => {
+    const { schedule } = loadCacheRunSettings(committed, ['--ci', '--set', 'runsPerArm=1']);
+
+    expect(removedCacheRefusals(schedule)).toEqual([
+      'the arm "ihs_patient + ihs_practitioner" needs ihs_patient, which the hub no longer has: it missed the bar in results/cache/2026-11-28-d0550b0. The committed Cache run reruns only at d0550b0.',
+    ]);
+    expect(removedCacheRefusals(schedule.filter((run) => run.arm !== 'ihs_patient + ihs_practitioner'))).toEqual([]);
   });
 
   it('scales the big run to the CI visits with --ci, and takes --set overrides under cacheRun; neither is official', () => {

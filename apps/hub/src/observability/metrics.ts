@@ -2,7 +2,7 @@ import { Counter, Gauge, Histogram, Registry } from 'prom-client';
 import type { CaseStatus, DeadLetterReason, EventType, StepName } from '../cases/case-model.js';
 import { CASE_STATUSES, STEPS } from '../cases/case-model.js';
 import type { ProblemCode } from '../http/problem.js';
-import type { CacheName, CacheResult } from '../ihs-cache/ihs-number-cache.js';
+import { IHS_CACHE, type CacheResult } from '../ihs-cache/ihs-number-cache.js';
 import type { AbandonableStatus } from '../cases/operator-actions.js';
 import { DIVERGENCE_CLASSES, type DivergenceClass, type ENDED_RUN_STATUSES, type ReconciliationCheckOutcome } from '../reconciliation/model.js';
 import type { RunTrigger } from '../reconciliation/runs.js';
@@ -104,7 +104,7 @@ export interface WorkerMetrics extends MetricsExposition {
   /** A call to `upstream` waited `seconds` (often 0) for its turn under the rate limit. */
   limiterWaited(upstream: RateLimitedApi, mode: LimiterMode, seconds: number): void;
   /** One request to an IHS-number cache (#20, #47). */
-  cacheRequest(cache: CacheName, result: CacheResult): void;
+  cacheRequest(result: CacheResult): void;
   /** One reconciliation run this worker executed, ended `outcome` after `seconds`. */
   reconciliationRun(trigger: RunTrigger, outcome: RunMetricOutcome, seconds: number): void;
   /** One reconciliation check of a case; a `clean` check counts as `result="ok"` (#17). */
@@ -228,7 +228,7 @@ export function createWorkerMetrics(deps: { breakerStates: () => Record<Platform
     platformRequest: (api, operation, statusClass, seconds) => upstream.observe({ upstream: api, operation, status_class: statusClass }, seconds),
     breakerOpened: (api) => breakerOpens.inc({ upstream: api }),
     limiterWaited: (api, mode, seconds) => limiterWait.observe({ upstream: api, mode }, seconds),
-    cacheRequest: (name, result) => cache.inc({ cache: name, result }),
+    cacheRequest: (result) => cache.inc({ cache: IHS_CACHE, result }),
     reconciliationRun(trigger, outcome, seconds) {
       runs.inc({ trigger, outcome });
       runDuration.observe(seconds);

@@ -6,17 +6,16 @@ import type { Log } from '../observability/log.js';
 import type { IhsNumber } from '../satusehat/client.js';
 
 /**
- * The IHS-number caches (#20, #47): practitioners' IHS numbers found by exact
- * NIK lookup. A patient cache was measured too and removed: it missed the
- * Cache run bar (results/cache/2026-11-28-d0550b0).
+ * The IHS-number cache (#20, #47): practitioners' IHS numbers found by exact
+ * NIK lookup, named so in `IHS_CACHES` and in `cache_requests_total`.
  */
-export const IHS_CACHES = ['ihs_practitioner'] as const;
+export const IHS_CACHE = 'ihs_practitioner';
 
-/** A cache the Cache run removed, and the run that removed it: `IHS_CACHES` naming one is refused. */
-export const REMOVED_IHS_CACHES: Readonly<Record<string, string>> = { ihs_patient: 'results/cache/2026-11-28-d0550b0' };
-
-/** One of the IHS-number caches. */
-export type CacheName = (typeof IHS_CACHES)[number];
+/**
+ * The patient cache, measured alongside it and removed: it missed the Cache
+ * run bar. `IHS_CACHES` naming it is refused, pointing at the result.
+ */
+export const REMOVED_IHS_CACHE = { name: 'ihs_patient', removedBy: 'results/cache/2026-11-28-d0550b0' } as const;
 
 /** Where an attempt took a looked-up IHS number from (#47): the cache, or a search at SATUSEHAT. */
 export type LookupSource = 'cache' | 'remote';
@@ -46,7 +45,7 @@ export interface CachedLookup {
  */
 export interface IhsNumberCache {
   /**
-   * Finds the people with `nik` in `cache`, through the cache: a hit answers
+   * Finds the practitioners with `nik`, through the cache: a hit answers
    * without `search`; a miss runs it, and caches the one IHS number found.
    * With `bypass` (a replayed step re-resolves everything), the cache is not
    * read, and the one IHS number found overwrites the entry. Nothing else is
@@ -54,7 +53,7 @@ export interface IhsNumberCache {
    * than 50ms, is a miss; a failed write is ignored. Only exact NIK lookups
    * come through here: the fallbacks are never cached.
    */
-  findByNik(cache: CacheName, nik: Nik, search: () => Promise<IhsNumber[]>, options: { bypass: boolean }): Promise<CachedLookup>;
+  findByNik(nik: Nik, search: () => Promise<IhsNumber[]>, options: { bypass: boolean }): Promise<CachedLookup>;
   /** Deletes these entries (after a permanent rejection of the write that used them); a Redis failure is ignored. */
   forget(keys: readonly IhsCacheKey[]): Promise<void>;
 }
@@ -73,22 +72,22 @@ class CacheTimeout extends Error {
 }
 
 /**
- * The cache in Redis, with only the caches in `enabled` on (the Cache run's
- * arms, #47); a lookup in a cache that is off always searches. Only the
+ * The cache in Redis, on unless `enabled` is false (the Cache run's "no
+ * cache" arm, #47); with it off, a lookup always searches. Only the
  * composition root calls this.
  */
 export function createIhsNumberCache(deps: {
   redis: Redis;
   /** The secret the NIK is keyed with (`IHS_CACHE_PEPPER`). */
   pepper: string;
-  enabled: readonly CacheName[];
+  enabled: boolean;
   log: Log;
-  metrics: { cacheRequest(cache: CacheName, result: CacheResult): void };
+  metrics: { cacheRequest(result: CacheResult): void };
 }): IhsNumberCache {
   const { redis, pepper, enabled, log, metrics } = deps;
-  const keyOf = (cache: CacheName, nik: Nik) =>
+  const keyOf = (nik: Nik) =>
     // Brands the key this function alone builds.
-    `ihs:${cache.replace(/^ihs_/, '')}:${createHmac('sha256', pepper).update(nik).digest('hex')}` as IhsCacheKey;
+    `ihs:practitioner:${createHmac('sha256', pepper).update(nik).digest('hex')}` as IhsCacheKey;
 
   async function write(key: IhsCacheKey, ihsNumber: IhsNumber): Promise<void> {
     try {
@@ -110,19 +109,19 @@ export function createIhsNumberCache(deps: {
   }
 
   return {
-    async findByNik(cache, nik, search, { bypass }) {
-      if (!enabled.includes(cache)) return { found: await search(), source: 'remote', key: null };
-      const key = keyOf(cache, nik);
+    async findByNik(nik, search, { bypass }) {
+      if (!enabled) return { found: await search(), source: 'remote', key: null };
+      const key = keyOf(nik);
       if (bypass) {
-        metrics.cacheRequest(cache, 'bypass');
+        metrics.cacheRequest('bypass');
       } else {
         try {
           const cached = await timed(redis.get(key));
-          metrics.cacheRequest(cache, cached === null ? 'miss' : 'hit');
+          metrics.cacheRequest(cached === null ? 'miss' : 'hit');
           // Written only by `write`, from an IHS number a search found.
           if (cached !== null) return { found: [cached as IhsNumber], source: 'cache', key };
         } catch (err) {
-          metrics.cacheRequest(cache, 'error');
+          metrics.cacheRequest('error');
           // Safe: a cache that can't answer is a miss, and the search below answers instead.
           log('warn', 'reading the IHS-number cache failed; the IHS number is searched for', { error: err });
         }

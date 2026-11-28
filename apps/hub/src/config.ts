@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { IHS_CACHES, REMOVED_IHS_CACHES, type CacheName } from './ihs-cache/ihs-number-cache.js';
+import { IHS_CACHE, REMOVED_IHS_CACHE } from './ihs-cache/ihs-number-cache.js';
 import type { RetryPolicy } from './outbox/retry-policy.js';
 
 /** One registered source system and its static API key (#25). */
@@ -147,13 +147,13 @@ export interface HubConfig {
   ihsCache: IhsCacheConfig;
 }
 
-/** The IHS-number cache (#47): which caches are on, and the secret their keys are made with. */
+/** The IHS-number cache (#47): whether it is on, and the secret its keys are made with. */
 export interface IhsCacheConfig {
   /**
-   * The caches on (`IHS_CACHES`: `ihs_practitioner`, the default, or `none`).
-   * Only the Cache run turns it off, to measure it. A removed cache is refused.
+   * Whether the cache is on (`IHS_CACHES`: `ihs_practitioner`, the default, or
+   * `none`). Only the Cache run turns it off, to measure it. The removed patient cache is refused.
    */
-  caches: CacheName[];
+  enabled: boolean;
   /**
    * The HMAC pepper of the cache keys (`IHS_CACHE_PEPPER`), so a key can't be
    * brute-forced back to its NIK. The default is public: production must set its own.
@@ -270,7 +270,7 @@ export function loadConfig(env: Env): HubConfig {
       exportUrl: new URL(parseUrl('TRACE_EXPORT_URL', env.TRACE_EXPORT_URL ?? 'http://localhost:4318/v1/traces', ['http:', 'https:'])),
     },
     ihsCache: {
-      caches: parseCaches(env.IHS_CACHES ?? IHS_CACHES.join(',')),
+      enabled: parseCaches(env.IHS_CACHES ?? IHS_CACHE),
       pepper: parseNonEmpty('IHS_CACHE_PEPPER', env.IHS_CACHE_PEPPER ?? DEV_IHS_CACHE_PEPPER),
     },
   };
@@ -334,16 +334,14 @@ function parseAdminApiKey(raw: string, sources: readonly SourceSystemConfig[]): 
   return raw;
 }
 
-function parseCaches(raw: string): CacheName[] {
-  if (raw === 'none') return [];
+function parseCaches(raw: string): boolean {
   const names = raw.split(',').map((name) => name.trim());
-  const removed = names.find((name) => Object.hasOwn(REMOVED_IHS_CACHES, name));
-  if (removed !== undefined) throw new Error(`IHS_CACHES: ${removed} was removed: it missed the Cache run bar (${REMOVED_IHS_CACHES[removed]})`);
-  const caches = names.filter((name): name is CacheName => (IHS_CACHES as readonly string[]).includes(name));
-  if (caches.length !== names.length || new Set(caches).size !== caches.length) {
-    throw new Error(`IHS_CACHES must be "none" or a comma-separated list of distinct ${IHS_CACHES.join(', ')}, got "${raw}"`);
+  if (names.includes(REMOVED_IHS_CACHE.name)) {
+    throw new Error(`IHS_CACHES: ${REMOVED_IHS_CACHE.name} was removed: it missed the Cache run bar (${REMOVED_IHS_CACHE.removedBy})`);
   }
-  return caches;
+  if (raw === IHS_CACHE) return true;
+  if (raw === 'none') return false;
+  throw new Error(`IHS_CACHES must be "${IHS_CACHE}" or "none", got "${raw}"`);
 }
 
 function parseStore(raw: string): IdempotencyStoreKind {
