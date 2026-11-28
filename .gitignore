@@ -15,3 +15,6 @@ results/bigrun/*/mock-log.ndjson.gz
 # Load test output that is never committed (#46): runs that are not official, and event files (the seed and run id plan them again)
 results/k6-unofficial/
 results/k6/*/events.ndjson
+
+# Cache run output that is never committed (#47): runs that are not official
+results/cache-unofficial/

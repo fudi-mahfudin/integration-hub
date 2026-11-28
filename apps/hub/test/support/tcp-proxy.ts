@@ -6,6 +6,8 @@ export interface TcpProxy {
   url: string;
   /** Stops listening and cuts every open connection: the proxy's port then refuses connections. */
   cut(): Promise<void>;
+  /** Holds every answer from the dependency `ms` before passing it on (0, the default, passes it at once). */
+  slowDown(ms: number): void;
 }
 
 /**
@@ -15,6 +17,7 @@ export interface TcpProxy {
 export async function startTcpProxy(url: string, port = 0): Promise<TcpProxy> {
   const target = new URL(url);
   const sockets = new Set<Socket>();
+  let answerDelayMs = 0;
   const track = (socket: Socket) => {
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
@@ -26,7 +29,10 @@ export async function startTcpProxy(url: string, port = 0): Promise<TcpProxy> {
     track(client);
     track(upstream);
     client.pipe(upstream);
-    upstream.pipe(client);
+    upstream.on('data', (chunk: Buffer) => {
+      if (answerDelayMs === 0) client.write(chunk);
+      else setTimeout(() => client.writable && client.write(chunk), answerDelayMs);
+    });
     client.on('close', () => upstream.destroy());
     upstream.on('close', () => client.destroy());
   });
@@ -38,6 +44,9 @@ export async function startTcpProxy(url: string, port = 0): Promise<TcpProxy> {
   proxied.port = String(address.port);
   return {
     url: proxied.toString(),
+    slowDown(ms) {
+      answerDelayMs = ms;
+    },
     cut: () =>
       new Promise<void>((resolve) => {
         for (const socket of sockets) socket.destroy();

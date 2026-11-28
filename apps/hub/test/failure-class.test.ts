@@ -7,12 +7,12 @@ import {
   SatusehatTimeoutError,
   TokenUnavailable,
 } from '../src/satusehat/errors.js';
-import { AttemptFailed } from '../src/steps/step-outcome.js';
+import { AttemptFailed, newAttemptFacts } from '../src/steps/step-outcome.js';
 import { classifyFailure } from '../src/worker/failure-class.js';
 
 const url = new URL('https://satusehat.test/fhir-r4/v1/Encounter');
 const answered = (status: number, retryAfter: Date | null = null) => new SatusehatRequestError('POST', url, status, '{}', retryAfter);
-const facts = { httpStatus: null, valuesUsed: {}, lookupMethods: {}, violations: [] };
+const facts = newAttemptFacts();
 
 describe('failure classification (#13)', () => {
   it.each([500, 502, 503, 504, 408, 429, 401])('a %i answer is transient', (status) => {

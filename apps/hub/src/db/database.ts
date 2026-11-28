@@ -82,6 +82,8 @@ export interface AttemptTable {
   http_status: number | null;
   values_used: ColumnType<unknown, string, never>;
   lookup_methods: ColumnType<unknown, string, never>;
+  /** Where each looked-up IHS number came from, as JSON `{ [person]: 'cache' | 'remote' }` (#47); `{}` when none was. */
+  lookup_sources: ColumnType<unknown, string | undefined, never>;
   violations: ColumnType<unknown, string, never>;
   /** The attempt's read retries, as JSON `ReadRetry[]`: sub-entries, not attempts (#13). */
   read_retries: ColumnType<unknown, string, never>;

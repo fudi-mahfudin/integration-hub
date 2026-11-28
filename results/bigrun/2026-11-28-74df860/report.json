@@ -1,0 +1,329 @@
+{
+  "dir": "2026-11-28-74df860",
+  "kind": "official",
+  "verdict": "PASS",
+  "runId": "MX048293",
+  "startedAt": "2026-11-28T07:55:21.938Z",
+  "endedAt": "2026-11-28T08:50:39.096Z",
+  "ending": "completed",
+  "provenance": {
+    "gitSha": "74df8601142232573c46c03938e7db6a63c50f4c",
+    "uncommitted": [],
+    "commitmentsSha256": "913abb09e781f29f26832984e73cb7945a08e5abe84f29807361f2feddc88e44",
+    "commitmentsCommit": {
+      "sha": "7fef1f200a1494e7ffba07e05dda3bdcc5bcf7d9",
+      "date": "2026-11-27T18:33:32+07:00"
+    }
+  },
+  "overrides": [],
+  "faultSeed": 20261125,
+  "events": {
+    "visits": 2000,
+    "total": 10000
+  },
+  "invariants": [
+    {
+      "name": "every send answered as expected",
+      "expected": 10000,
+      "actual": 10000,
+      "pass": true
+    },
+    {
+      "name": "every simulator check held",
+      "expected": 0,
+      "actual": 0,
+      "pass": true
+    },
+    {
+      "name": "the batch drained",
+      "expected": "completed",
+      "actual": "completed",
+      "pass": true
+    },
+    {
+      "name": "steps claimable, in flight or in retry_wait",
+      "expected": 0,
+      "actual": 0,
+      "pass": true
+    },
+    {
+      "name": "completed cases",
+      "expected": 2000,
+      "actual": 2000,
+      "pass": true
+    },
+    {
+      "name": "waiting cases",
+      "expected": 0,
+      "actual": 0,
+      "pass": true
+    },
+    {
+      "name": "dead-lettered cases",
+      "expected": 0,
+      "actual": 0,
+      "pass": true
+    },
+    {
+      "name": "abandoned cases",
+      "expected": 0,
+      "actual": 0,
+      "pass": true
+    },
+    {
+      "name": "completed steps",
+      "expected": 8000,
+      "actual": 8000,
+      "pass": true
+    },
+    {
+      "name": "visits with their four effects in order at the mock",
+      "expected": 2000,
+      "actual": 2000,
+      "pass": true
+    },
+    {
+      "name": "mock report: duplicate submissions",
+      "expected": 0,
+      "actual": 0,
+      "pass": true
+    },
+    {
+      "name": "mock report: out-of-order effects",
+      "expected": 0,
+      "actual": 0,
+      "pass": true
+    },
+    {
+      "name": "mock report: overlapping requests",
+      "expected": 0,
+      "actual": 0,
+      "pass": true
+    }
+  ],
+  "unfinishedCases": [],
+  "unreadableCases": [],
+  "mockReadError": null,
+  "mockSideMismatches": [],
+  "simulatorProblems": [],
+  "measurements": {
+    "throughput": {
+      "acceptedEventsPerSecond": 57.24246021618456,
+      "completedStepsPerSecond": 2.4117001261223887
+    },
+    "ingestLatencyMs": {
+      "count": 10000,
+      "p50": 7.2907499999855645,
+      "p95": 11.882416999986162,
+      "p99": 15.254792000021553,
+      "max": 56.29475000000093
+    },
+    "endToEndSeconds": {
+      "count": 2000,
+      "p50": 2774.412,
+      "p95": 3195.773,
+      "p99": 3233.963,
+      "max": 3279.866
+    },
+    "attemptsPerStep": {
+      "create_visit": {
+        "max": 6,
+        "p99": 4,
+        "mean": 1.446,
+        "histogram": {
+          "1": 1327,
+          "2": 505,
+          "3": 127,
+          "4": 32,
+          "5": 8,
+          "6": 1
+        }
+      },
+      "submit_prescription": {
+        "max": 5,
+        "p99": 3,
+        "mean": 1.3845,
+        "histogram": {
+          "1": 1358,
+          "2": 535,
+          "3": 90,
+          "4": 14,
+          "5": 3
+        }
+      },
+      "submit_dispense": {
+        "max": 5,
+        "p99": 4,
+        "mean": 1.4095,
+        "histogram": {
+          "1": 1330,
+          "2": 544,
+          "3": 105,
+          "4": 19,
+          "5": 2
+        }
+      },
+      "update_visit": {
+        "max": 5,
+        "p99": 4,
+        "mean": 1.3915,
+        "histogram": {
+          "1": 1384,
+          "2": 484,
+          "3": 105,
+          "4": 19,
+          "5": 8
+        }
+      }
+    },
+    "faults": {
+      "reads": {
+        "calls": 19488,
+        "faulted": 5801,
+        "rate": 0.29767036124794743,
+        "byKind": {
+          "connection_reset": 1170,
+          "http_503": 1089,
+          "timeout": 1178,
+          "http_429": 1188,
+          "http_500": 1176
+        }
+      },
+      "writes": {
+        "calls": 9572,
+        "faulted": 2878,
+        "rate": 0.3006686167989971,
+        "byKind": {
+          "http_503": 394,
+          "http_500_after_apply": 635,
+          "http_500": 399,
+          "http_429": 390,
+          "timeout": 196,
+          "timeout_after_apply": 671,
+          "connection_reset": 193
+        }
+      }
+    },
+    "platformApiCalls": {
+      "token": {
+        "2xx": 4
+      },
+      "fhir": {
+        "cut": 3408,
+        "2xx": 20381,
+        "5xx": 3693,
+        "4xx": 1578
+      }
+    },
+    "durationsSeconds": {
+      "send": 167.7076765,
+      "drain": 3149.454317791,
+      "total": 3317.161994291
+    }
+  },
+  "prometheus": {
+    "windowSeconds": 3317.158,
+    "completedStepsPerSecond": 2.4125139062897474,
+    "ingestServerMs": {
+      "p50": 3.3065591254499402,
+      "p95": 9.038518052057093,
+      "p99": 9.871515533165406
+    },
+    "outboxLagSeconds": {
+      "max": 747.157,
+      "p95": 722.6137
+    },
+    "breakerOpens": {
+      "fhir": 21
+    },
+    "limiterWaitP95Seconds": 0.017728603373364987,
+    "errors": []
+  },
+  "reconciliation": {
+    "runId": "6af0ad4e-652e-488a-816e-e64a0eba16cb",
+    "status": "completed_with_errors",
+    "counts": {
+      "cases": 2000,
+      "clean": 412,
+      "divergent": 0,
+      "skipped": 0,
+      "unchecked": 1588
+    }
+  },
+  "environment": {
+    "cpuModel": "Apple M1 Pro",
+    "cores": 10,
+    "ramGiB": 32,
+    "os": "Darwin 27.2.0 (arm64)",
+    "node": "v24.22.3",
+    "docker": "29.7.2",
+    "compose": "5.5.0",
+    "dockerCpus": 10,
+    "dockerRamGiB": 7.7,
+    "workerProcesses": 2,
+    "containerLimits": [
+      {
+        "service": "hub",
+        "cpus": 1,
+        "memoryBytes": 536870912
+      },
+      {
+        "service": "jaeger",
+        "cpus": 1,
+        "memoryBytes": 1073741824
+      },
+      {
+        "service": "mock",
+        "cpus": 1,
+        "memoryBytes": 536870912
+      },
+      {
+        "service": "postgres",
+        "cpus": 2,
+        "memoryBytes": 1073741824
+      },
+      {
+        "service": "prometheus",
+        "cpus": 0.5,
+        "memoryBytes": 536870912
+      },
+      {
+        "service": "redis",
+        "cpus": 0.5,
+        "memoryBytes": 268435456
+      },
+      {
+        "service": "worker-1",
+        "cpus": 1,
+        "memoryBytes": 536870912
+      },
+      {
+        "service": "worker-2",
+        "cpus": 1,
+        "memoryBytes": 536870912
+      }
+    ]
+  },
+  "mockLog": {
+    "file": "mock-log.ndjson.gz",
+    "releaseTag": "bigrun-2026-11-28-74df860"
+  },
+  "summary": {
+    "dir": "2026-11-28-74df860",
+    "kind": "official",
+    "verdict": "PASS",
+    "gitSha": "74df8601142232573c46c03938e7db6a63c50f4c",
+    "startedAt": "2026-11-28T07:55:21.938Z",
+    "headline": {
+      "events": 10000,
+      "completedCases": 2000,
+      "totalSeconds": 3317.161994291,
+      "acceptedEventsPerSecond": 57.24246021618456,
+      "ingestP95Ms": 11.882416999986162,
+      "endToEndP95Seconds": 3195.773,
+      "realizedReadFaultRate": 0.29767036124794743,
+      "realizedWriteFaultRate": 0.3006686167989971
+    },
+    "environment": "Apple M1 Pro, 10 cores, 32 GiB RAM, Darwin 27.2.0 (arm64), Docker 29.7.2, Node v24.22.3"
+  }
+}

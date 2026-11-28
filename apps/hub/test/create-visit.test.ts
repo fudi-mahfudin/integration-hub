@@ -97,6 +97,8 @@ describe('create visit: an accepted visit.started becomes an Encounter at the mo
         httpStatus: 201,
         valuesUsed: sent,
         lookupMethods: { patient: 'nik', practitioner: 'nik' },
+        // Whether each came from the IHS-number cache is ihs-cache.test.ts's concern (#47).
+        lookupSources: expect.any(Object),
         violations: [],
         readRetries: [],
       },
@@ -208,7 +210,8 @@ describe('create visit: an accepted visit.started becomes an Encounter at the mo
 
   it('logs an attempt that fails without an outcome with what it had resolved, and sends the step to retry_wait', async () => {
     // The practitioner search answers 503 on all three tries, after the patient was found: the attempt ends
-    // without an outcome. Its Retry-After keeps the step waiting while the test reads it.
+    // without an outcome. Its Retry-After keeps the step waiting while the test reads it. The practitioner
+    // is one no other test of this file looks up, so the IHS-number cache can't answer for them (#47).
     await mock.client.setFaults({
       seed: 32,
       rules: [
@@ -221,7 +224,9 @@ describe('create visit: an accepted visit.started becomes an Encounter at the mo
         },
       ],
     });
-    const event = worldVisitStarted();
+    const uncached = world.practitioners.filter((p) => p.role === 'physician').at(-1);
+    if (!uncached) throw new Error('the world dataset needs a physician');
+    const event = worldVisitStarted({ practitioner: { nik: uncached.nik } });
 
     const view = await waitForCase(hub.baseUrl, (await send(event)).headers.get('location'), (v) => (v.steps[0]?.attemptLog.length ?? 0) > 0, {
       apiKey: WORLD_SOURCE_API_KEY,

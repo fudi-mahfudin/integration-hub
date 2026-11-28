@@ -1,0 +1,362 @@
+[
+  {
+    "run": 1,
+    "arm": "no cache",
+    "ihsCaches": "none",
+    "runId": "MWZRO0RGC1",
+    "verdict": "PASS",
+    "failedInvariants": [],
+    "completedCases": 2000,
+    "upstreamReads": 16018,
+    "upstreamReadsPerCompletedCase": 8.009,
+    "cacheRequests": {
+      "ihs_patient": {
+        "hit": 0,
+        "miss": 0,
+        "bypass": 0,
+        "error": 0
+      },
+      "ihs_practitioner": {
+        "hit": 0,
+        "miss": 0,
+        "bypass": 0,
+        "error": 0
+      }
+    },
+    "hitRatio": {
+      "ihs_patient": null,
+      "ihs_practitioner": null
+    },
+    "endToEndSeconds": {
+      "p50": 2218.157,
+      "p95": 2362.135
+    },
+    "endToEndP95Seconds": 2362.135,
+    "attemptSeconds": {
+      "p50": 0.629,
+      "p95": 0.789
+    },
+    "drainSeconds": 2370.282841834,
+    "totalSeconds": 2537.9929376249997
+  },
+  {
+    "run": 2,
+    "arm": "ihs_practitioner only",
+    "ihsCaches": "ihs_practitioner",
+    "runId": "MWZT6S46C2",
+    "verdict": "PASS",
+    "failedInvariants": [],
+    "completedCases": 2000,
+    "upstreamReads": 10048,
+    "upstreamReadsPerCompletedCase": 5.024,
+    "cacheRequests": {
+      "ihs_patient": {
+        "hit": 0,
+        "miss": 0,
+        "bypass": 0,
+        "error": 0
+      },
+      "ihs_practitioner": {
+        "hit": 5970,
+        "miss": 30,
+        "bypass": 0,
+        "error": 0
+      }
+    },
+    "hitRatio": {
+      "ihs_patient": null,
+      "ihs_practitioner": 0.995
+    },
+    "endToEndSeconds": {
+      "p50": 1754.139,
+      "p95": 1898.462
+    },
+    "endToEndP95Seconds": 1898.462,
+    "attemptSeconds": {
+      "p50": 0.477,
+      "p95": 0.632
+    },
+    "drainSeconds": 1908.7625713749999,
+    "totalSeconds": 2076.468752833
+  },
+  {
+    "run": 3,
+    "arm": "ihs_patient + ihs_practitioner",
+    "ihsCaches": "ihs_patient,ihs_practitioner",
+    "runId": "MWZUFTOXC3",
+    "verdict": "PASS",
+    "failedInvariants": [],
+    "completedCases": 2000,
+    "upstreamReads": 9081,
+    "upstreamReadsPerCompletedCase": 4.5405,
+    "cacheRequests": {
+      "ihs_patient": {
+        "hit": 967,
+        "miss": 833,
+        "bypass": 0,
+        "error": 0
+      },
+      "ihs_practitioner": {
+        "hit": 5970,
+        "miss": 30,
+        "bypass": 0,
+        "error": 0
+      }
+    },
+    "hitRatio": {
+      "ihs_patient": 0.5372222222222223,
+      "ihs_practitioner": 0.995
+    },
+    "endToEndSeconds": {
+      "p50": 1677.627,
+      "p95": 1822.429
+    },
+    "endToEndP95Seconds": 1822.429,
+    "attemptSeconds": {
+      "p50": 0.475,
+      "p95": 0.627
+    },
+    "drainSeconds": 1833.2370840830001,
+    "totalSeconds": 2000.9442117910003
+  },
+  {
+    "run": 4,
+    "arm": "no cache",
+    "ihsCaches": "none",
+    "runId": "MWZVNDD7C4",
+    "verdict": "PASS",
+    "failedInvariants": [],
+    "completedCases": 2000,
+    "upstreamReads": 16018,
+    "upstreamReadsPerCompletedCase": 8.009,
+    "cacheRequests": {
+      "ihs_patient": {
+        "hit": 0,
+        "miss": 0,
+        "bypass": 0,
+        "error": 0
+      },
+      "ihs_practitioner": {
+        "hit": 0,
+        "miss": 0,
+        "bypass": 0,
+        "error": 0
+      }
+    },
+    "hitRatio": {
+      "ihs_patient": null,
+      "ihs_practitioner": null
+    },
+    "endToEndSeconds": {
+      "p50": 2229.808,
+      "p95": 2376.52
+    },
+    "endToEndP95Seconds": 2376.52,
+    "attemptSeconds": {
+      "p50": 0.634,
+      "p95": 0.79
+    },
+    "drainSeconds": 2386.8639542080005,
+    "totalSeconds": 2554.572412541001
+  },
+  {
+    "run": 5,
+    "arm": "ihs_practitioner only",
+    "ihsCaches": "ihs_practitioner",
+    "runId": "MWZX6UF0C5",
+    "verdict": "PASS",
+    "failedInvariants": [],
+    "completedCases": 2000,
+    "upstreamReads": 10048,
+    "upstreamReadsPerCompletedCase": 5.024,
+    "cacheRequests": {
+      "ihs_patient": {
+        "hit": 0,
+        "miss": 0,
+        "bypass": 0,
+        "error": 0
+      },
+      "ihs_practitioner": {
+        "hit": 5970,
+        "miss": 30,
+        "bypass": 0,
+        "error": 0
+      }
+    },
+    "hitRatio": {
+      "ihs_patient": null,
+      "ihs_practitioner": 0.995
+    },
+    "endToEndSeconds": {
+      "p50": 1765.241,
+      "p95": 1911.168
+    },
+    "endToEndP95Seconds": 1911.168,
+    "attemptSeconds": {
+      "p50": 0.48,
+      "p95": 0.637
+    },
+    "drainSeconds": 1921.0984882500004,
+    "totalSeconds": 2088.8159739999996
+  },
+  {
+    "run": 6,
+    "arm": "ihs_patient + ihs_practitioner",
+    "ihsCaches": "ihs_patient,ihs_practitioner",
+    "runId": "MWZYGBQVC6",
+    "verdict": "PASS",
+    "failedInvariants": [],
+    "completedCases": 2000,
+    "upstreamReads": 9081,
+    "upstreamReadsPerCompletedCase": 4.5405,
+    "cacheRequests": {
+      "ihs_patient": {
+        "hit": 967,
+        "miss": 833,
+        "bypass": 0,
+        "error": 0
+      },
+      "ihs_practitioner": {
+        "hit": 5970,
+        "miss": 30,
+        "bypass": 0,
+        "error": 0
+      }
+    },
+    "hitRatio": {
+      "ihs_patient": 0.5372222222222223,
+      "ihs_practitioner": 0.995
+    },
+    "endToEndSeconds": {
+      "p50": 1685.221,
+      "p95": 1831.109
+    },
+    "endToEndP95Seconds": 1831.109,
+    "attemptSeconds": {
+      "p50": 0.477,
+      "p95": 0.627
+    },
+    "drainSeconds": 1839.673669166999,
+    "totalSeconds": 2007.375461207999
+  },
+  {
+    "run": 7,
+    "arm": "no cache",
+    "ihsCaches": "none",
+    "runId": "MWZZNXPAC7",
+    "verdict": "PASS",
+    "failedInvariants": [],
+    "completedCases": 2000,
+    "upstreamReads": 16018,
+    "upstreamReadsPerCompletedCase": 8.009,
+    "cacheRequests": {
+      "ihs_patient": {
+        "hit": 0,
+        "miss": 0,
+        "bypass": 0,
+        "error": 0
+      },
+      "ihs_practitioner": {
+        "hit": 0,
+        "miss": 0,
+        "bypass": 0,
+        "error": 0
+      }
+    },
+    "hitRatio": {
+      "ihs_patient": null,
+      "ihs_practitioner": null
+    },
+    "endToEndSeconds": {
+      "p50": 2226.179,
+      "p95": 2372.803
+    },
+    "endToEndP95Seconds": 2372.803,
+    "attemptSeconds": {
+      "p50": 0.631,
+      "p95": 0.791
+    },
+    "drainSeconds": 2382.788903167,
+    "totalSeconds": 2550.4932976249997
+  },
+  {
+    "run": 8,
+    "arm": "ihs_practitioner only",
+    "ihsCaches": "ihs_practitioner",
+    "runId": "MX0179A3C8",
+    "verdict": "PASS",
+    "failedInvariants": [],
+    "completedCases": 2000,
+    "upstreamReads": 10048,
+    "upstreamReadsPerCompletedCase": 5.024,
+    "cacheRequests": {
+      "ihs_patient": {
+        "hit": 0,
+        "miss": 0,
+        "bypass": 0,
+        "error": 0
+      },
+      "ihs_practitioner": {
+        "hit": 5970,
+        "miss": 30,
+        "bypass": 0,
+        "error": 0
+      }
+    },
+    "hitRatio": {
+      "ihs_patient": null,
+      "ihs_practitioner": 0.995
+    },
+    "endToEndSeconds": {
+      "p50": 1759.068,
+      "p95": 1904.967
+    },
+    "endToEndP95Seconds": 1904.967,
+    "attemptSeconds": {
+      "p50": 0.48,
+      "p95": 0.633
+    },
+    "drainSeconds": 1915.3732719579991,
+    "totalSeconds": 2083.090853207998
+  },
+  {
+    "run": 9,
+    "arm": "ihs_patient + ihs_practitioner",
+    "ihsCaches": "ihs_patient,ihs_practitioner",
+    "runId": "MX02GHOSC9",
+    "verdict": "PASS",
+    "failedInvariants": [],
+    "completedCases": 2000,
+    "upstreamReads": 9081,
+    "upstreamReadsPerCompletedCase": 4.5405,
+    "cacheRequests": {
+      "ihs_patient": {
+        "hit": 967,
+        "miss": 833,
+        "bypass": 0,
+        "error": 0
+      },
+      "ihs_practitioner": {
+        "hit": 5970,
+        "miss": 30,
+        "bypass": 0,
+        "error": 0
+      }
+    },
+    "hitRatio": {
+      "ihs_patient": 0.5372222222222223,
+      "ihs_practitioner": 0.995
+    },
+    "endToEndSeconds": {
+      "p50": 1679.706,
+      "p95": 1825.118
+    },
+    "endToEndP95Seconds": 1825.118,
+    "attemptSeconds": {
+      "p50": 0.476,
+      "p95": 0.627
+    },
+    "drainSeconds": 1838.2395486249998,
+    "totalSeconds": 2005.9429005000034
+  }
+]

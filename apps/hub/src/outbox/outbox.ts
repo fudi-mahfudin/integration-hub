@@ -145,6 +145,7 @@ export function createOutbox(deps: {
         http_status: row.facts.httpStatus,
         values_used: JSON.stringify(row.facts.valuesUsed),
         lookup_methods: JSON.stringify(row.facts.lookupMethods),
+        lookup_sources: JSON.stringify(row.facts.lookupSources),
         violations: JSON.stringify(row.facts.violations),
         read_retries: JSON.stringify(row.readRetries),
       });

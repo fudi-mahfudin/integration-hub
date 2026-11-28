@@ -4,11 +4,12 @@
 // writes the report. Exits 0 on PASS, 1 on FAIL, 2 when it refuses to run.
 import { MockSatusehatClient, type LogEntry, type MockReport } from '@integration-hub/mock-satusehat/client';
 import { DEFAULT_WORLD_PATH, loadWorld } from '@integration-hub/mock-satusehat/world';
-import { planBatch, runBatch, type BatchOptions, type Plan } from '@integration-hub/simulator';
+import { planBatch, runBatch, type Plan } from '@integration-hub/simulator';
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
+import { batchOptions } from './batch-options.js';
 import { faultRulesFor } from './fault-rules.js';
 import { harnessEnv } from './harness-env.js';
 import { readCaseViews } from './hub-cases.js';
@@ -144,26 +145,6 @@ if (kind === 'official') {
 for (const check of judgement.invariants.filter((c) => !c.pass)) log(`FAIL ${check.name}: expected ${check.expected}, got ${check.actual}`);
 log(`big run ${judgement.verdict}`, { report: `${dir.path}/report.md` });
 process.exitCode = judgement.verdict === 'PASS' ? 0 : 1;
-
-/** The simulator's batch for the committed run. */
-function batchOptions(b: BigRunCommitments, id: string): BatchOptions {
-  return {
-    seed: b.seed,
-    runId: id,
-    visits: b.events.visits,
-    eventsPerSecond: b.arrival.eventsPerSecond,
-    outOfOrder: { share: b.eventMix.outOfOrder, delayMs: b.eventMix.outOfOrderHoldSeconds * 1000 },
-    substitutionShare: b.eventMix.substitution,
-    fallbackLookupShare: b.eventMix.fallbackPersonLookup,
-    duplicates: {
-      perEvent: b.events.duplicates / b.events.uniqueEvents,
-      concurrent: b.duplicateTiming.concurrent,
-      delayed: b.duplicateTiming.delayed,
-      late: b.duplicateTiming.late,
-      delayedWindowMs: { min: b.duplicateTiming.delayedWindowSeconds.min * 1000, max: b.duplicateTiming.delayedWindowSeconds.max * 1000 },
-    },
-  };
-}
 
 /** Refuses a plan whose counts are not the committed ones, before anything is sent. */
 function checkPlan(planned: Plan, b: BigRunCommitments): void {

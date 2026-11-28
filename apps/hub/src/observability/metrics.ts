@@ -2,6 +2,7 @@ import { Counter, Gauge, Histogram, Registry } from 'prom-client';
 import type { CaseStatus, DeadLetterReason, EventType, StepName } from '../cases/case-model.js';
 import { CASE_STATUSES, STEPS } from '../cases/case-model.js';
 import type { ProblemCode } from '../http/problem.js';
+import { IHS_CACHE, type CacheResult } from '../ihs-cache/ihs-number-cache.js';
 import type { AbandonableStatus } from '../cases/operator-actions.js';
 import { DIVERGENCE_CLASSES, type DivergenceClass, type ENDED_RUN_STATUSES, type ReconciliationCheckOutcome } from '../reconciliation/model.js';
 import type { RunTrigger } from '../reconciliation/runs.js';
@@ -79,12 +80,6 @@ export type BreakerState = 'closed' | 'half_open' | 'open';
 /** Which bucket a rate limiter wait came from: the shared one in Redis, or the process's own while Redis is unreachable. */
 export type LimiterMode = 'redis' | 'local_fallback';
 
-/** The caches of #20: IHS numbers found by exact NIK lookup, one per kind of person. */
-export type CacheName = 'ihs_patient' | 'ihs_practitioner';
-
-/** The result of one cache request (#20): `bypass` is a replay, which reads past the cache; `error` a Redis failure or timeout, treated as a miss. */
-export type CacheResult = 'hit' | 'miss' | 'bypass' | 'error';
-
 /** How a reconciliation run ended: one of the ended run statuses. */
 export type RunMetricOutcome = (typeof ENDED_RUN_STATUSES)[number];
 
@@ -108,8 +103,8 @@ export interface WorkerMetrics extends MetricsExposition {
   breakerOpened(upstream: PlatformApi): void;
   /** A call to `upstream` waited `seconds` (often 0) for its turn under the rate limit. */
   limiterWaited(upstream: RateLimitedApi, mode: LimiterMode, seconds: number): void;
-  /** One request to a cache (#20); the caches land with #47. */
-  cacheRequest(cache: CacheName, result: CacheResult): void;
+  /** One request to an IHS-number cache (#20, #47). */
+  cacheRequest(result: CacheResult): void;
   /** One reconciliation run this worker executed, ended `outcome` after `seconds`. */
   reconciliationRun(trigger: RunTrigger, outcome: RunMetricOutcome, seconds: number): void;
   /** One reconciliation check of a case; a `clean` check counts as `result="ok"` (#17). */
@@ -233,7 +228,7 @@ export function createWorkerMetrics(deps: { breakerStates: () => Record<Platform
     platformRequest: (api, operation, statusClass, seconds) => upstream.observe({ upstream: api, operation, status_class: statusClass }, seconds),
     breakerOpened: (api) => breakerOpens.inc({ upstream: api }),
     limiterWaited: (api, mode, seconds) => limiterWait.observe({ upstream: api, mode }, seconds),
-    cacheRequest: (name, result) => cache.inc({ cache: name, result }),
+    cacheRequest: (result) => cache.inc({ cache: IHS_CACHE, result }),
     reconciliationRun(trigger, outcome, seconds) {
       runs.inc({ trigger, outcome });
       runDuration.observe(seconds);

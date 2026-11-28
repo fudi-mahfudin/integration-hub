@@ -4,6 +4,7 @@ import { kfaProductPins, type SubmitPrescriptionPins } from '../cases/pins.js';
 import type { Clock } from '../clock.js';
 import type { Database } from '../db/database.js';
 import { readPrescriptionWritten } from '../ingestion/event-schema.js';
+import type { IhsNumberCache } from '../ihs-cache/ihs-number-cache.js';
 import type { KfaClient } from '../kfa/kfa-client.js';
 import { resolveKfaDetails } from '../kfa/kfa-products.js';
 import { findKfaCode } from '../mapping/drug-mappings.js';
@@ -12,8 +13,8 @@ import type { SatusehatClient } from '../satusehat/client.js';
 import { prescriptionMedicationRequestResource } from '../satusehat/resources.js';
 import { validateStepPayload, type MissingMapping } from '../validation/validation.js';
 import { readCompletedCreateVisit } from './completed-steps.js';
-import { lookUpPractitioner } from './person-lookup.js';
-import { AttemptFailed, rejected, type AttemptFacts, type StepOutcome } from './step-outcome.js';
+import { lookUpPractitioner, personLookupDeps } from './person-lookup.js';
+import { AttemptFailed, newAttemptFacts, rejected, type AttemptFacts, type StepOutcome } from './step-outcome.js';
 
 /** What submit prescription reads and calls. */
 export interface SubmitPrescriptionDeps {
@@ -21,6 +22,8 @@ export interface SubmitPrescriptionDeps {
   satusehat: SatusehatClient;
   kfa: KfaClient;
   clock: Clock;
+  /** The IHS-number cache in front of the NIK search (#47). */
+  ihsCache: IhsNumberCache;
 }
 
 type PrescriptionAttempt = AttemptFacts & { valuesUsed: Partial<SubmitPrescriptionPins> };
@@ -39,7 +42,7 @@ type PrescriptionAttempt = AttemptFacts & { valuesUsed: Partial<SubmitPrescripti
  * requester's IHS number.
  */
 export async function submitPrescription(deps: SubmitPrescriptionDeps, step: ClaimedStep): Promise<StepOutcome> {
-  const attempt: PrescriptionAttempt = { httpStatus: null, valuesUsed: {}, lookupMethods: {}, violations: [] };
+  const attempt: PrescriptionAttempt = newAttemptFacts();
   try {
     return await attemptSubmitPrescription(deps, step, attempt);
   } catch (err) {
@@ -48,7 +51,8 @@ export async function submitPrescription(deps: SubmitPrescriptionDeps, step: Cla
 }
 
 async function attemptSubmitPrescription(deps: SubmitPrescriptionDeps, step: ClaimedStep, attempt: PrescriptionAttempt): Promise<StepOutcome> {
-  const { db, satusehat, kfa, clock } = deps;
+  const { db, satusehat, kfa, clock, ihsCache } = deps;
+  const lookups = personLookupDeps({ satusehat, ihsCache }, step);
   const { envelope } = await db
     .selectFrom('source_event')
     .select('envelope')
@@ -82,7 +86,7 @@ async function attemptSubmitPrescription(deps: SubmitPrescriptionDeps, step: Cla
   const { product } = medication;
   Object.assign(attempt.valuesUsed, kfaProductPins(product));
 
-  const requesterLookup = await lookUpPractitioner(satusehat, 'requester', prescription.requester, attempt);
+  const requesterLookup = await lookUpPractitioner(lookups, 'requester', prescription.requester, attempt);
   if ('deadLettered' in requesterLookup) return deadLettered(requesterLookup.deadLettered);
   const requester = requesterLookup.found;
   attempt.valuesUsed.requesterIhsNumber = requester;

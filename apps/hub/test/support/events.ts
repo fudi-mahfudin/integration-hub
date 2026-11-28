@@ -174,6 +174,7 @@ export const caseViewSchema = z.object({
           httpStatus: z.number().int().nullable(),
           valuesUsed: z.record(z.string(), z.unknown()),
           lookupMethods: z.record(z.string(), z.string()),
+          lookupSources: z.record(z.string(), z.enum(['cache', 'remote'])),
           violations: z.array(z.object({ code: z.string(), path: z.string().nullable(), message: z.string() })),
           readRetries: z.array(
             z.object({ call: z.string(), try: z.number().int(), failure: z.string(), httpStatus: z.number().int().nullable() }),
