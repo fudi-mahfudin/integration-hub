@@ -30,8 +30,8 @@ x-worker-env: &worker-env
   WORKER_PROCESSES: "2"
   # `0` turns scheduled reconciliation off, as the big run does (`pnpm bigrun` sets it).
   RECONCILIATION_INTERVAL_MS: ${RECONCILIATION_INTERVAL_MS:-900000}
-  # The IHS-number caches on (#47): both by default; `pnpm cacherun` sets each arm's.
-  IHS_CACHES: ${IHS_CACHES:-ihs_patient,ihs_practitioner}
+  # The IHS-number cache on (#47): ihs_practitioner by default; `pnpm cacherun` sets each arm's.
+  IHS_CACHES: ${IHS_CACHES:-ihs_practitioner}
 
 services:
   postgres:

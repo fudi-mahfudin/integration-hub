@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { IHS_CACHES, type CacheName } from './ihs-cache/ihs-number-cache.js';
+import { IHS_CACHES, REMOVED_IHS_CACHES, type CacheName } from './ihs-cache/ihs-number-cache.js';
 import type { RetryPolicy } from './outbox/retry-policy.js';
 
 /** One registered source system and its static API key (#25). */
@@ -150,8 +150,8 @@ export interface HubConfig {
 /** The IHS-number cache (#47): which caches are on, and the secret their keys are made with. */
 export interface IhsCacheConfig {
   /**
-   * The caches on (`IHS_CACHES`, comma-separated, default both; `none` turns
-   * both off). Only the Cache run turns one off, to measure it.
+   * The caches on (`IHS_CACHES`: `ihs_practitioner`, the default, or `none`).
+   * Only the Cache run turns it off, to measure it. A removed cache is refused.
    */
   caches: CacheName[];
   /**
@@ -337,6 +337,8 @@ function parseAdminApiKey(raw: string, sources: readonly SourceSystemConfig[]): 
 function parseCaches(raw: string): CacheName[] {
   if (raw === 'none') return [];
   const names = raw.split(',').map((name) => name.trim());
+  const removed = names.find((name) => Object.hasOwn(REMOVED_IHS_CACHES, name));
+  if (removed !== undefined) throw new Error(`IHS_CACHES: ${removed} was removed: it missed the Cache run bar (${REMOVED_IHS_CACHES[removed]})`);
   const caches = names.filter((name): name is CacheName => (IHS_CACHES as readonly string[]).includes(name));
   if (caches.length !== names.length || new Set(caches).size !== caches.length) {
     throw new Error(`IHS_CACHES must be "none" or a comma-separated list of distinct ${IHS_CACHES.join(', ')}, got "${raw}"`);

@@ -5,8 +5,15 @@ import type { Nik } from '../ingestion/event-schema.js';
 import type { Log } from '../observability/log.js';
 import type { IhsNumber } from '../satusehat/client.js';
 
-/** The IHS-number caches (#20, #47): IHS numbers found by exact NIK lookup, one cache per kind of person. */
-export const IHS_CACHES = ['ihs_patient', 'ihs_practitioner'] as const;
+/**
+ * The IHS-number caches (#20, #47): practitioners' IHS numbers found by exact
+ * NIK lookup. A patient cache was measured too and removed: it missed the
+ * Cache run bar (results/cache/2026-11-28-d0550b0).
+ */
+export const IHS_CACHES = ['ihs_practitioner'] as const;
+
+/** A cache the Cache run removed, and the run that removed it: `IHS_CACHES` naming one is refused. */
+export const REMOVED_IHS_CACHES: Readonly<Record<string, string>> = { ihs_patient: 'results/cache/2026-11-28-d0550b0' };
 
 /** One of the IHS-number caches. */
 export type CacheName = (typeof IHS_CACHES)[number];
@@ -15,7 +22,7 @@ export type CacheName = (typeof IHS_CACHES)[number];
 export type LookupSource = 'cache' | 'remote';
 
 /**
- * A cache entry's Redis key, `ihs:{patient|practitioner}:{HMAC-SHA256(NIK, pepper)}`:
+ * A cache entry's Redis key, `ihs:practitioner:{HMAC-SHA256(NIK, pepper)}`:
  * it never holds the NIK itself, and without the pepper a 16-digit NIK can't be brute-forced from it.
  */
 export type IhsCacheKey = Brand<string, 'IhsCacheKey'>;
@@ -81,7 +88,7 @@ export function createIhsNumberCache(deps: {
   const { redis, pepper, enabled, log, metrics } = deps;
   const keyOf = (cache: CacheName, nik: Nik) =>
     // Brands the key this function alone builds.
-    `ihs:${cache === 'ihs_patient' ? 'patient' : 'practitioner'}:${createHmac('sha256', pepper).update(nik).digest('hex')}` as IhsCacheKey;
+    `ihs:${cache.replace(/^ihs_/, '')}:${createHmac('sha256', pepper).update(nik).digest('hex')}` as IhsCacheKey;
 
   async function write(key: IhsCacheKey, ihsNumber: IhsNumber): Promise<void> {
     try {

@@ -169,7 +169,7 @@ describe('logs, metrics and traces: structured, tied to their case, and free of 
 
   it('no Redis key or value holds a canary NIK; no value holds a 16-digit run (#47)', () => {
     const { keys, values } = redisContents;
-    expect(keys.some((key) => key.startsWith('ihs:patient:'))).toBe(true);
+    expect(keys.some((key) => key.startsWith('ihs:practitioner:'))).toBe(true);
     for (const entry of [...keys, ...values]) {
       for (const nik of CANARY_NIKS) expect(entry, `Redis holds "${nik}"`).not.toContain(nik);
     }

@@ -71,7 +71,7 @@ How a person's IHS number was found for an attempt: by NIK, or one of the docume
 _Avoid_: Match type, strategy
 
 **IHS-number cache**:
-Two caches in Redis, `ihs_patient` and `ihs_practitioner`, of IHS numbers found by an exact NIK lookup, kept 24h under a peppered hash of the NIK. A lookup may take its IHS number from the cache instead of searching SATUSEHAT, and the attempt log records which (`cache` or `remote`). It is never load-bearing: Redis down or slow is a miss, a replay searches past it, and a permanent rejection of a write deletes the entries its attempt used.
+A cache in Redis, `ihs_practitioner`, of practitioners' IHS numbers found by an exact NIK lookup, kept 24h under a peppered hash of the NIK. A lookup may take its IHS number from the cache instead of searching SATUSEHAT, and the attempt log records which (`cache` or `remote`). It is never load-bearing: Redis down or slow is a miss, a replay searches past it, and a permanent rejection of a write deletes the entries its attempt used. A patient cache, `ihs_patient`, was measured and removed: it missed the Cache run bar.
 _Avoid_: Pin (a pin is part of the case and never expires), person cache, NIK cache (it holds IHS numbers, never NIKs)
 
 **Lookup source**:

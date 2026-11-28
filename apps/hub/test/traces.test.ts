@@ -133,9 +133,8 @@ describe('traces: one visit followed from event arrival to each SATUSEHAT call (
     for (const wait of waits) expect(wait.attributes).toMatchObject({ api: 'fhir', mode: 'redis', 'wait.ms': expect.any(Number) });
 
     // The Patient search that answered 500 was sent again in-process: each read retry its own span.
-    // The second attempt took the patient from the IHS-number cache, and searched for no one (#47).
     const patientSearches = under('create_visit', 'satusehat.search').filter((s) => String(s.attributes['url.path']).endsWith('/Patient'));
-    expect(patientSearches.map((s) => s.attributes.read_retry)).toEqual([0, 1]);
+    expect(patientSearches.map((s) => s.attributes.read_retry)).toEqual([0, 1, 0]);
     expect(patientSearches[0]?.attributes['http.response.status_code']).toBe(500);
   });
 
