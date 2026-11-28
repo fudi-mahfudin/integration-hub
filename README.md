@@ -96,7 +96,12 @@ The workers keep delivering the load test's cases after k6 ends. Run `pnpm stack
 ## Cache run results
 
 <!-- cacherun:start -->
-No official Cache run yet. `pnpm cacherun --official` runs one and writes its results here.
+Latest official Cache run: [2026-11-28-d0550b0](results/cache/2026-11-28-d0550b0/report.md), 2026-11-28 02:03 UTC, at `d0550b0`.
+
+- `ihs_practitioner`: upstream reads per case 37.3% fewer, e2e p95 19.7% better (spread 14.4 s): clears bars 1 and 2: stays if the official big run passes with it on (bar 3).
+- `ihs_patient`: upstream reads per case 9.6% fewer, e2e p95 4.2% better (spread 12.7 s): misses the bar: removed from the code, this result kept.
+
+Every official Cache run: [results/cache/INDEX.md](results/cache/INDEX.md).
 <!-- cacherun:end -->
 
 ### Running the Cache run
