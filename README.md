@@ -64,7 +64,21 @@ The rules:
 ## Big run results
 
 <!-- bigrun:start -->
-No official run yet. `pnpm bigrun --official` runs one, and `pnpm bigrun:publish` writes its results here.
+Latest official run: **PASS**, [`2026-11-28-74df860`](results/bigrun/2026-11-28-74df860/report.md), started 2026-11-28 07:55 UTC at `74df860`.
+
+| | |
+|---|---|
+| Events sent | 10,000 |
+| Cases completed | 2,000 |
+| Total duration | 55.3 min |
+| Accepted events/s | 57.2 |
+| Ingest p95 (client) | 12 ms |
+| End-to-end per case p95 | 3195.8 s |
+| Realized fault rate, reads / writes | 29.8% / 30.1% |
+
+Environment: Apple M1 Pro, 10 cores, 32 GiB RAM, Darwin 27.2.0 (arm64), Docker 29.7.2, Node v24.22.3.
+
+Every official run: [results/bigrun/INDEX.md](results/bigrun/INDEX.md). The commitments and their history: [history of `bigrun.commitments.json`](https://github.com/fudi-mahfudin/integration-hub/commits/main/bigrun.commitments.json).
 <!-- bigrun:end -->
 
 ### Running the big run
