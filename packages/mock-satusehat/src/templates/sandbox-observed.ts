@@ -3,4 +3,6 @@
 
 /** Template export name → the date (`YYYY-MM-DD`) a contract check last passed it. */
 export const SANDBOX_OBSERVED: Readonly<Record<string, string>> = {
+  kfaLookup: '2026-11-28',
+  tokenIssued: '2026-11-28',
 };
