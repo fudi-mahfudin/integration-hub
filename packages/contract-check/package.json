@@ -1,0 +1,20 @@
+{
+  "name": "@integration-hub/contract-check",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "contract:check": "node --env-file-if-exists=../../.env.live --import tsx src/main.ts"
+  },
+  "dependencies": {
+    "@integration-hub/mock-satusehat": "workspace:*",
+    "tsx": "^4.23.15",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.1"
+  }
+}

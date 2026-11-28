@@ -22,7 +22,8 @@
     "bigrun:publish": "pnpm --filter @integration-hub/bigrun publish-results",
     "loadtest": "pnpm --filter @integration-hub/bigrun loadtest",
     "boundaries": "depcruise packages apps --config .dependency-cruiser.cjs --exclude \"(^|/)(node_modules|dist)/\"",
-    "cacherun": "pnpm --filter @integration-hub/bigrun cacherun"
+    "cacherun": "pnpm --filter @integration-hub/bigrun cacherun",
+    "contract:check": "pnpm --filter @integration-hub/contract-check contract:check"
   },
   "devDependencies": {
     "dependency-cruiser": "^18.9.0"

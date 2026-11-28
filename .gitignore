@@ -5,6 +5,7 @@ coverage/
 .env
 .env.*
 !.env.example
+!.env.live.example
 # Owner's private working notes; never committed
 .scratch/
 
@@ -18,3 +19,7 @@ results/k6/*/events.ndjson
 
 # Cache run output that is never committed (#47): runs that are not official
 results/cache-unofficial/
+
+# Sandbox setup and raw sandbox traffic (#48): local only, never committed (#4, #16)
+live-seed.json
+.recordings/

@@ -29,6 +29,15 @@ module.exports = {
       from: { path: '^packages/bigrun/' },
       to: { path: ['^apps/hub/', 'node_modules/@integration-hub/hub/'] },
     },
+    {
+      name: 'contract-check-is-independent-of-the-hub',
+      comment:
+        'The contract check compares the mock SATUSEHAT with the sandbox (#48); the hub is no party to it, ' +
+        'so it must not import any hub module.',
+      severity: 'error',
+      from: { path: '^packages/contract-check/' },
+      to: { path: ['^apps/hub/', 'node_modules/@integration-hub/hub/'] },
+    },
   ],
   options: {
     doNotFollow: { path: 'node_modules' },

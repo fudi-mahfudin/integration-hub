@@ -19,6 +19,7 @@ export interface KfaLookupBody {
 
 /** A KFA v2 product lookup by code, answered from the world's catalogue. */
 export const kfaLookup = defineTemplate(
+  'kfaLookup',
   {
     tag: 'assumed',
     note: 'KFA v2 product by code; product_template.kfa_code and active_ingredients[].kfa_code are named by the research (#2, #10), the envelope is unverified',

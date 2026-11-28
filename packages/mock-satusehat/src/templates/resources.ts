@@ -10,6 +10,7 @@ export const IHS_SYSTEM = 'https://fhir.kemkes.go.id/id/ihs-number';
 
 /** A world patient as a Patient search hit. */
 export const patientResource = defineTemplate(
+  'patientResource',
   {
     tag: 'satusehat-docs',
     note: 'Patient search hit (by NIK, mother\'s NIK, or name + birthdate + gender), reduced to id, identifiers and the fields the fallbacks compare',
@@ -36,6 +37,7 @@ export const patientResource = defineTemplate(
 
 /** A world practitioner as a Practitioner search hit. */
 export const practitionerResource = defineTemplate(
+  'practitionerResource',
   {
     tag: 'fhir-spec',
     note: 'FHIR R4 Practitioner with the NIK identifier and the IHS number as id',
@@ -57,6 +59,7 @@ export const practitionerResource = defineTemplate(
 
 /** A world location as a Location search hit. */
 export const locationResource = defineTemplate(
+  'locationResource',
   { tag: 'fhir-spec', note: 'FHIR R4 Location with the local code under location/{org}, part of the organization' },
   (location: WorldLocation, organization: WorldOrganization): fhir4.Location => ({
     resourceType: 'Location',
@@ -70,6 +73,7 @@ export const locationResource = defineTemplate(
 
 /** A stored Encounter as the 201 body of its create, the 200 body of its update, and as a search hit. */
 export const storedEncounter = defineTemplate(
+  'storedEncounter',
   {
     tag: 'fhir-spec',
     note: 'FHIR R4 create and update return the stored resource with server-assigned id and meta',
@@ -87,6 +91,7 @@ export const storedEncounter = defineTemplate(
 
 /** A stored MedicationRequest as the 201 body of its create and as a search hit. */
 export const storedMedicationRequest = defineTemplate(
+  'storedMedicationRequest',
   {
     tag: 'fhir-spec',
     note: 'FHIR R4 create returns the stored resource with server-assigned id and meta',
@@ -104,6 +109,7 @@ export const storedMedicationRequest = defineTemplate(
 
 /** A stored MedicationDispense as the 201 body of its create and as a search hit. */
 export const storedMedicationDispense = defineTemplate(
+  'storedMedicationDispense',
   {
     tag: 'fhir-spec',
     note: 'FHIR R4 create returns the stored resource with server-assigned id and meta',
@@ -121,6 +127,7 @@ export const storedMedicationDispense = defineTemplate(
 
 /** A search result Bundle with 0, 1 or more hits. */
 export const searchBundle = defineTemplate(
+  'searchBundle',
   { tag: 'fhir-spec', note: 'FHIR R4 searchset Bundle with total and one entry per hit' },
   (resources: readonly fhir4.FhirResource[]): fhir4.Bundle => ({
     resourceType: 'Bundle',
